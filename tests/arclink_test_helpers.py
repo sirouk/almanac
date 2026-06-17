@@ -41,6 +41,7 @@ def memory_db(control):
 def use_explicit_local_session_hash_env() -> None:
     os.environ["ARCLINK_CONFIG_FILE"] = os.devnull
     os.environ["ARCLINK_BASE_DOMAIN"] = "example.test"
+    os.environ["ARCLINK_OPERATOR_ACTION_AUTH_SECRET"] = "test-operator-action-auth-secret"
     os.environ.pop("ARCLINK_SESSION_HASH_PEPPER", None)
     os.environ.pop("ARCLINK_SESSION_HASH_PEPPER_REQUIRED", None)
 

@@ -1291,11 +1291,43 @@ def _pending_pin_payloads(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return list_pin_upgrade_action_payloads(conn, active_only=True)
 
 
+def _operator_action_authorization(
+    *,
+    actor_id: str,
+    action_kind: str,
+    target: str,
+    command_name: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    from arclink_control import OPERATOR_ACTION_AUTH_KIND_OPERATOR_RAVEN, OPERATOR_ACTION_AUTH_TTL_SECONDS
+
+    clean_target = str(target or "").strip()
+    confirmation_id = _action_idempotency_key(
+        idempotency_key,
+        kind=f"operator-action-{action_kind}",
+        target=clean_target or command_name,
+    )
+    return {
+        "kind": OPERATOR_ACTION_AUTH_KIND_OPERATOR_RAVEN,
+        "actor_id": str(actor_id or "").strip(),
+        "ttl_seconds": OPERATOR_ACTION_AUTH_TTL_SECONDS,
+        "payload": {
+            "source": "operator-raven",
+            "command": command_name,
+            "action_kind": action_kind,
+            "target_hash": hashlib.sha256(clean_target.encode("utf-8")).hexdigest(),
+            "confirmation_id": confirmation_id,
+            "reason": f"Operator Raven confirmed {command_name}",
+        },
+    }
+
+
 def _queue_pin_upgrade_payloads(
     conn: sqlite3.Connection,
     *,
     payloads: Sequence[Mapping[str, Any]],
     actor_id: str,
+    idempotency_key: str = "",
 ) -> tuple[list[dict[str, Any]], int]:
     from arclink_control import request_operator_action
 
@@ -1312,6 +1344,13 @@ def _queue_pin_upgrade_payloads(
             request_source="operator-raven",
             requested_target=token,
             dedupe_by_target=True,
+            authorization=_operator_action_authorization(
+                actor_id=actor_id,
+                action_kind="pin-upgrade",
+                target=token,
+                command_name="pin_upgrade",
+                idempotency_key=idempotency_key,
+            ),
         )
         queued.append(action_row)
         if created:
@@ -1585,6 +1624,13 @@ def _handle_host_upgrade(
             requested_by=actor_id,
             request_source="operator-raven",
             requested_target="",
+            authorization=_operator_action_authorization(
+                actor_id=actor_id,
+                action_kind="upgrade",
+                target="",
+                command_name="upgrade",
+                idempotency_key=idempotency_key,
+            ),
         )
     except Exception as exc:  # noqa: BLE001
         return {"message": f"Could not queue ArcLink upgrade: {exc}"}
@@ -1660,7 +1706,12 @@ def _handle_pin_upgrade(
             ]
         return needs_confirm
     try:
-        queued, created_count = _queue_pin_upgrade_payloads(conn, payloads=[payload], actor_id=actor_id)
+        queued, created_count = _queue_pin_upgrade_payloads(
+            conn,
+            payloads=[payload],
+            actor_id=actor_id,
+            idempotency_key=idempotency_key,
+        )
     except Exception as exc:  # noqa: BLE001
         return {"message": f"Could not queue pinned-component upgrade: {exc}"}
     action_row = queued[0] if queued else {}
@@ -1754,7 +1805,12 @@ def _handle_upgrade_sweep(
     if needs_confirm is not None:
         return needs_confirm
     try:
-        queued, created_count = _queue_pin_upgrade_payloads(conn, payloads=selected, actor_id=actor_id)
+        queued, created_count = _queue_pin_upgrade_payloads(
+            conn,
+            payloads=selected,
+            actor_id=actor_id,
+            idempotency_key=idempotency_key,
+        )
     except Exception as exc:  # noqa: BLE001
         return {"message": f"Could not queue upgrade sweep: {exc}"}
     lines.append("")

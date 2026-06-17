@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import sys
@@ -204,6 +205,28 @@ def seed_pin_upgrade_payload(
             }
         ],
     )
+
+
+def operator_raven_authorization(
+    control,
+    *,
+    actor_id: str,
+    action_kind: str,
+    target: str = "",
+    confirmation_id: str = "test-confirmation",
+) -> dict[str, object]:
+    return {
+        "kind": control.OPERATOR_ACTION_AUTH_KIND_OPERATOR_RAVEN,
+        "actor_id": actor_id,
+        "payload": {
+            "source": "operator-raven",
+            "command": action_kind.replace("-", "_"),
+            "action_kind": action_kind,
+            "target_hash": hashlib.sha256(str(target or "").encode("utf-8")).hexdigest(),
+            "confirmation_id": confirmation_id,
+            "reason": "test confirmed operator action",
+        },
+    }
 
 
 def test_operator_raven_status_is_read_only_and_truthful() -> None:
@@ -787,9 +810,20 @@ def test_operator_raven_host_and_pin_upgrade_queue_operator_actions() -> None:
         applied = raven.dispatch_operator_raven_command(conn, one_tap_command, actor_id="telegram:42")
         expect("queued an ArcLink upgrade" in applied["message"], applied["message"])
         expect(applied["mutation_performed"] is True, str(applied))
-        row = conn.execute("SELECT action_kind, requested_by, status FROM operator_actions ORDER BY id DESC LIMIT 1").fetchone()
+        row = conn.execute(
+            """
+            SELECT action_kind, requested_by, actor_id, authorization_kind, authorization_mac, authorization_expires_at, status
+            FROM operator_actions
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
         expect(row["action_kind"] == "upgrade", dict(row))
         expect(row["requested_by"] == "telegram:42", dict(row))
+        expect(row["actor_id"] == "telegram:42", dict(row))
+        expect(row["authorization_kind"] == "operator-raven-confirmed", dict(row))
+        expect(str(row["authorization_mac"] or "").startswith("sha256="), dict(row))
+        expect(str(row["authorization_expires_at"] or "").strip(), dict(row))
 
         # Replaying the same button nonce fails closed and queues nothing new.
         after_apply = conn.execute("SELECT COUNT(*) AS n FROM operator_actions").fetchone()["n"]
@@ -830,8 +864,18 @@ def test_operator_raven_host_and_pin_upgrade_queue_operator_actions() -> None:
         expect("pinned-component upgrade for hermes" in pin["message"], pin["message"])
         expect(token in pin["message"], pin["message"])
         expect(pin["mutation_performed"] is True, str(pin))
-        pin_row = conn.execute("SELECT action_kind, requested_target FROM operator_actions ORDER BY id DESC LIMIT 1").fetchone()
+        pin_row = conn.execute(
+            """
+            SELECT action_kind, requested_target, actor_id, authorization_kind, authorization_mac
+            FROM operator_actions
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
         expect(pin_row["action_kind"] == "pin-upgrade" and pin_row["requested_target"] == token, dict(pin_row))
+        expect(pin_row["actor_id"] == "telegram:42", dict(pin_row))
+        expect(pin_row["authorization_kind"] == "operator-raven-confirmed", dict(pin_row))
+        expect(str(pin_row["authorization_mac"] or "").startswith("sha256="), dict(pin_row))
 
         # Typed component confirm still works and dedupes against the one-tap queue row.
         typed_pin = raven.dispatch_operator_raven_command(conn, "/pin_upgrade hermes confirm", actor_id="telegram:42")
@@ -856,6 +900,12 @@ def test_operator_actions_queue_source_dedupe_and_claim_guard() -> None:
             action_kind="upgrade",
             requested_by="system:test",
             request_source="system-test",
+            authorization=operator_raven_authorization(
+                control,
+                actor_id="system:test",
+                action_kind="upgrade",
+                confirmation_id="system-test-confirmation",
+            ),
         )
         conn.set_trace_callback(None)
         expect(system_created is True, str(system_row))
@@ -874,6 +924,12 @@ def test_operator_actions_queue_source_dedupe_and_claim_guard() -> None:
             action_kind="upgrade",
             requested_by="telegram:42",
             request_source="operator-raven",
+            authorization=operator_raven_authorization(
+                control,
+                actor_id="telegram:42",
+                action_kind="upgrade",
+                confirmation_id="repeat-confirmation",
+            ),
         )
         expect(repeat_created is False and int(repeat["id"]) != int(system_row["id"]), str(repeat))
 

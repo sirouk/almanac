@@ -839,6 +839,12 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           requested_target TEXT NOT NULL DEFAULT '',
           requested_by TEXT NOT NULL,
           request_source TEXT NOT NULL DEFAULT '',
+          actor_id TEXT NOT NULL DEFAULT '',
+          authorization_kind TEXT NOT NULL DEFAULT '',
+          authorization_payload_json TEXT NOT NULL DEFAULT '',
+          authorization_mac TEXT NOT NULL DEFAULT '',
+          authorized_at TEXT,
+          authorization_expires_at TEXT,
           status TEXT NOT NULL,
           note TEXT NOT NULL DEFAULT '',
           created_at TEXT NOT NULL,
@@ -1937,6 +1943,12 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         ON operator_actions (status, action_kind, created_at)
         """
     )
+    _ensure_column(conn, "operator_actions", "actor_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "operator_actions", "authorization_kind", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "operator_actions", "authorization_payload_json", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "operator_actions", "authorization_mac", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "operator_actions", "authorized_at", "TEXT")
+    _ensure_column(conn, "operator_actions", "authorization_expires_at", "TEXT")
     _ensure_column(conn, "bootstrap_tokens", "activation_request_id", "TEXT")
     _ensure_column(conn, "bootstrap_tokens", "activated_at", "TEXT")
     _ensure_column(conn, "bootstrap_requests", "auto_provision", "INTEGER NOT NULL DEFAULT 0")
@@ -8331,6 +8343,230 @@ def _record_curator_fanout_retry(
     return max_attempts
 
 
+HIGH_AUTHORITY_OPERATOR_ACTION_KINDS = {"upgrade", "pin-upgrade"}
+OPERATOR_ACTION_AUTH_KIND_OPERATOR_RAVEN = "operator-raven-confirmed"
+OPERATOR_ACTION_AUTH_SECRET_ENV = "ARCLINK_OPERATOR_ACTION_AUTH_SECRET"
+OPERATOR_ACTION_AUTH_TTL_SECONDS = 15 * 60
+OPERATOR_ACTION_AUTH_MAX_TTL_SECONDS = 60 * 60
+OPERATOR_ACTION_AUTH_MAC_PREFIX = "sha256="
+
+
+def operator_action_requires_authorization(action_kind: str) -> bool:
+    return str(action_kind or "").strip().lower() in HIGH_AUTHORITY_OPERATOR_ACTION_KINDS
+
+
+def operator_action_auth_secret_path(cfg: Config | None = None) -> Path:
+    effective_cfg = cfg or Config.from_env()
+    return effective_cfg.state_dir / "operator-secrets" / "operator-action-auth-secret"
+
+
+def operator_action_auth_secret(*, create: bool = False) -> str:
+    configured = str(config_env_value(OPERATOR_ACTION_AUTH_SECRET_ENV, "") or "").strip()
+    if configured:
+        return configured
+
+    path = operator_action_auth_secret_path()
+    try:
+        if path.is_file():
+            existing = path.read_text(encoding="utf-8").strip()
+            if existing:
+                return existing
+    except OSError:
+        if not create:
+            return ""
+        raise
+
+    if not create:
+        return ""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    secret_value = secrets.token_urlsafe(48)
+    try:
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        existing = path.read_text(encoding="utf-8").strip()
+        if existing:
+            return existing
+        fd = os.open(str(path), os.O_WRONLY | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(secret_value + "\n")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    return secret_value
+
+
+def _operator_action_auth_payload_json(payload: Mapping[str, Any]) -> str:
+    return json.dumps(dict(payload), sort_keys=True, separators=(",", ":"))
+
+
+def _operator_action_auth_payload_hash(payload_json: str) -> str:
+    return hashlib.sha256(str(payload_json or "").encode("utf-8")).hexdigest()
+
+
+def _operator_action_target_hash(requested_target: str) -> str:
+    return hashlib.sha256(str(requested_target or "").encode("utf-8")).hexdigest()
+
+
+def _operator_action_confirmation_id(payload: Mapping[str, Any]) -> str:
+    for key in ("confirmation_id", "nonce", "confirmation_nonce", "idempotency_key"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _operator_action_auth_mac_message(
+    *,
+    action_kind: str,
+    requested_target: str,
+    actor_id: str,
+    authorization_kind: str,
+    payload_json: str,
+    expires_at: str,
+) -> str:
+    payload = json_loads(str(payload_json or ""), {})
+    confirmation_id = _operator_action_confirmation_id(payload)
+    body = {
+        "v": 1,
+        "action_kind": str(action_kind or "").strip().lower(),
+        "requested_target_hash": _operator_action_target_hash(requested_target),
+        "actor_id": str(actor_id or "").strip(),
+        "authorization_kind": str(authorization_kind or "").strip(),
+        "confirmation_id": confirmation_id,
+        "authorization_payload_hash": _operator_action_auth_payload_hash(payload_json),
+        "expires_at": str(expires_at or "").strip(),
+    }
+    return json.dumps(body, sort_keys=True, separators=(",", ":"))
+
+
+def _operator_action_auth_mac(
+    *,
+    secret: str,
+    action_kind: str,
+    requested_target: str,
+    actor_id: str,
+    authorization_kind: str,
+    payload_json: str,
+    expires_at: str,
+) -> str:
+    message = _operator_action_auth_mac_message(
+        action_kind=action_kind,
+        requested_target=requested_target,
+        actor_id=actor_id,
+        authorization_kind=authorization_kind,
+        payload_json=payload_json,
+        expires_at=expires_at,
+    )
+    digest = hmac.new(secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
+    return OPERATOR_ACTION_AUTH_MAC_PREFIX + digest
+
+
+def _operator_action_auth_ttl_seconds(value: Any) -> int:
+    try:
+        ttl = int(value)
+    except (TypeError, ValueError):
+        ttl = OPERATOR_ACTION_AUTH_TTL_SECONDS
+    return min(OPERATOR_ACTION_AUTH_MAX_TTL_SECONDS, max(1, ttl))
+
+
+def _mint_operator_action_authorization(
+    *,
+    action_kind: str,
+    requested_target: str,
+    authorization: Mapping[str, Any] | None,
+    authorized_at: str,
+) -> dict[str, str | None]:
+    if not isinstance(authorization, Mapping):
+        raise PermissionError(f"{action_kind} operator action requires a signed authorization envelope")
+    authorization_kind = str(authorization.get("kind") or "").strip()
+    if authorization_kind != OPERATOR_ACTION_AUTH_KIND_OPERATOR_RAVEN:
+        raise PermissionError(f"{action_kind} operator action authorization kind is not allowed")
+    actor_id = str(authorization.get("actor_id") or "").strip()
+    if not actor_id:
+        raise PermissionError(f"{action_kind} operator action authorization is missing actor_id")
+    payload_value = authorization.get("payload") or {}
+    if not isinstance(payload_value, Mapping):
+        raise PermissionError(f"{action_kind} operator action authorization payload must be an object")
+    payload = dict(payload_value)
+    confirmation_id = _operator_action_confirmation_id(payload)
+    if not confirmation_id:
+        raise PermissionError(f"{action_kind} operator action authorization is missing confirmation_id")
+    payload_json = _operator_action_auth_payload_json(payload)
+    expires_at = expiry_from_iso(
+        authorized_at,
+        ttl_seconds=_operator_action_auth_ttl_seconds(
+            authorization.get("ttl_seconds", OPERATOR_ACTION_AUTH_TTL_SECONDS)
+        ),
+    )
+    secret = operator_action_auth_secret(create=True)
+    if not secret:
+        raise PermissionError(f"{action_kind} operator action authorization secret is not configured")
+    authorization_mac = _operator_action_auth_mac(
+        secret=secret,
+        action_kind=action_kind,
+        requested_target=requested_target,
+        actor_id=actor_id,
+        authorization_kind=authorization_kind,
+        payload_json=payload_json,
+        expires_at=expires_at,
+    )
+    return {
+        "actor_id": actor_id,
+        "authorization_kind": authorization_kind,
+        "authorization_payload_json": payload_json,
+        "authorization_mac": authorization_mac,
+        "authorized_at": authorized_at,
+        "authorization_expires_at": expires_at,
+    }
+
+
+def operator_action_authorization_valid(action: Mapping[str, Any]) -> tuple[bool, str]:
+    action_kind = str(action.get("action_kind") or "").strip().lower()
+    if not operator_action_requires_authorization(action_kind):
+        return True, "authorization not required"
+
+    authorization_kind = str(action.get("authorization_kind") or "").strip()
+    if authorization_kind != OPERATOR_ACTION_AUTH_KIND_OPERATOR_RAVEN:
+        return False, "missing or unsupported authorization_kind"
+    actor_id = str(action.get("actor_id") or "").strip()
+    if not actor_id:
+        return False, "missing actor_id"
+    payload_json = str(action.get("authorization_payload_json") or "").strip()
+    if not payload_json:
+        return False, "missing authorization_payload_json"
+    payload = json_loads(payload_json, {})
+    if not payload:
+        return False, "invalid authorization_payload_json"
+    if not _operator_action_confirmation_id(payload):
+        return False, "missing confirmation_id"
+    authorization_mac = str(action.get("authorization_mac") or "").strip()
+    if not authorization_mac:
+        return False, "missing authorization_mac"
+    expires_at = str(action.get("authorization_expires_at") or "").strip()
+    parsed_expires_at = parse_utc_iso(expires_at)
+    if parsed_expires_at is None:
+        return False, "missing or invalid authorization_expires_at"
+    if parsed_expires_at.timestamp() <= utc_now().timestamp():
+        return False, "authorization expired"
+    secret = operator_action_auth_secret(create=False)
+    if not secret:
+        return False, "authorization secret missing"
+    expected = _operator_action_auth_mac(
+        secret=secret,
+        action_kind=action_kind,
+        requested_target=str(action.get("requested_target") or ""),
+        actor_id=actor_id,
+        authorization_kind=authorization_kind,
+        payload_json=payload_json,
+        expires_at=expires_at,
+    )
+    if not hmac.compare_digest(expected, authorization_mac):
+        return False, "authorization MAC mismatch"
+    return True, "authorization valid"
+
+
 def _operator_action_row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     if row is None:
         return None
@@ -8421,6 +8657,7 @@ def request_operator_action(
     request_source: str = "",
     requested_target: str = "",
     dedupe_by_target: bool = False,
+    authorization: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], bool]:
     normalized_kind = str(action_kind or "").strip().lower()
     if not normalized_kind:
@@ -8448,21 +8685,46 @@ def request_operator_action(
         else:
             active = get_active_operator_action(conn, action_kind=normalized_kind, request_source=normalized_source)
         if active is not None:
-            if own_txn:
-                conn.commit()
-            return active, False
+            if not operator_action_requires_authorization(normalized_kind) or operator_action_authorization_valid(active)[0]:
+                if own_txn:
+                    conn.commit()
+                return active, False
         now_iso = utc_now_iso()
+        auth_values: dict[str, str | None] = {
+            "actor_id": "",
+            "authorization_kind": "",
+            "authorization_payload_json": "",
+            "authorization_mac": "",
+            "authorized_at": None,
+            "authorization_expires_at": None,
+        }
+        if operator_action_requires_authorization(normalized_kind):
+            auth_values = _mint_operator_action_authorization(
+                action_kind=normalized_kind,
+                requested_target=requested_target_value,
+                authorization=authorization,
+                authorized_at=now_iso,
+            )
         cursor = conn.execute(
             """
             INSERT INTO operator_actions (
-              action_kind, requested_target, requested_by, request_source, status, note, created_at
-            ) VALUES (?, ?, ?, ?, 'pending', '', ?)
+              action_kind, requested_target, requested_by, request_source,
+              actor_id, authorization_kind, authorization_payload_json, authorization_mac,
+              authorized_at, authorization_expires_at,
+              status, note, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', ?)
             """,
             (
                 normalized_kind,
                 requested_target_value,
                 str(requested_by or "").strip() or "operator",
                 normalized_source,
+                str(auth_values["actor_id"] or ""),
+                str(auth_values["authorization_kind"] or ""),
+                str(auth_values["authorization_payload_json"] or ""),
+                str(auth_values["authorization_mac"] or ""),
+                auth_values["authorized_at"],
+                auth_values["authorization_expires_at"],
                 now_iso,
             ),
         )

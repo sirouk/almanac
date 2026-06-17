@@ -60,6 +60,7 @@ from arclink_control import (
     NOTION_SLO_P99_SECONDS,
     note_refresh_job,
     operator_pin_upgrade_action_extra,
+    operator_action_authorization_valid,
     operator_upgrade_action_extra,
     queue_notification,
     read_onboarding_bot_token_secret,
@@ -2305,31 +2306,26 @@ def _run_pending_onboarding_notion_verifications_locked(conn, cfg: Config) -> No
     )
 
 
-CONFIRMED_OPERATOR_ACTION_SOURCES = {"operator-raven"}
-
-
-def _operator_action_has_confirmed_source(action: Mapping[str, Any]) -> bool:
-    source = str(action.get("request_source") or "").strip().lower()
-    return source in CONFIRMED_OPERATOR_ACTION_SOURCES
-
-
 def _fail_unconfirmed_operator_action(
     conn,
     cfg: Config,
     *,
     action: Mapping[str, Any],
     label: str,
+    reason: str,
 ) -> None:
     action_id = int(action["id"])
     source = str(action.get("request_source") or "").strip() or "unknown"
-    note = f"{label} request rejected: unconfirmed request source {source}"
+    clean_reason = str(reason or "invalid authorization").strip()
+    note = f"{label} request rejected: invalid operator authorization ({clean_reason})"
     finish_operator_action(conn, action_id=action_id, status="failed", note=note)
     _queue_operator_message(
         conn,
         cfg,
         (
-            f"{label} request {action_id} was not executed because it did not come from a confirmed Operator Raven command.\n"
-            f"Request source: {source}\n"
+            f"{label} request {action_id} was not executed because its operator authorization envelope was missing, expired, or invalid.\n"
+            f"Request source (audit only): {source}\n"
+            f"Authorization failure: {clean_reason}\n"
             "Use Operator Raven with an explicit confirm/code phrase to queue host mutations."
         ),
     )
@@ -2347,8 +2343,15 @@ def _run_pending_operator_actions(conn, cfg: Config) -> None:
     if action is None:
         _run_pending_pin_upgrade_actions(conn, cfg)
         return
-    if not _operator_action_has_confirmed_source(action):
-        _fail_unconfirmed_operator_action(conn, cfg, action=action, label="ArcLink upgrade")
+    authorized, authorization_reason = operator_action_authorization_valid(action)
+    if not authorized:
+        _fail_unconfirmed_operator_action(
+            conn,
+            cfg,
+            action=action,
+            label="ArcLink upgrade",
+            reason=authorization_reason,
+        )
         _run_pending_pin_upgrade_actions(conn, cfg)
         return
     action_id = int(action["id"])
@@ -2467,8 +2470,15 @@ def _run_pending_pin_upgrade_actions(conn, cfg: Config) -> None:
     action = get_pending_operator_action(conn, action_kind="pin-upgrade", reclaim_stale_running_seconds=0)
     if action is None:
         return
-    if not _operator_action_has_confirmed_source(action):
-        _fail_unconfirmed_operator_action(conn, cfg, action=action, label="Pinned-component upgrade")
+    authorized, authorization_reason = operator_action_authorization_valid(action)
+    if not authorized:
+        _fail_unconfirmed_operator_action(
+            conn,
+            cfg,
+            action=action,
+            label="Pinned-component upgrade",
+            reason=authorization_reason,
+        )
         return
     action_id = int(action["id"])
     requested_by = str(action.get("requested_by") or "operator").strip() or "operator"

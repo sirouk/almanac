@@ -21,6 +21,7 @@ from arclink_control import (
     upsert_setting,
     utc_now_iso,
 )
+from arclink_secrets_regex import redact_secret_material
 
 
 STATUS_KEY = "arclink_health_watch_last_status"
@@ -102,7 +103,7 @@ def _clip_lines(lines: list[str], *, max_lines: int = 12, max_chars: int = 2200)
     clipped: list[str] = []
     used = 0
     for line in lines:
-        clean = " ".join(str(line).split())
+        clean = redact_secret_material(" ".join(str(line).split()))
         if not clean:
             continue
         if len(clipped) >= max_lines or used + len(clean) > max_chars:

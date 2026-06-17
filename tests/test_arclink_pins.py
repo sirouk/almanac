@@ -25,6 +25,7 @@ PINS_SH = REPO / "bin" / "pins.sh"
 COMMON_SH = REPO / "bin" / "common.sh"
 BOOTSTRAP_USERLAND = REPO / "bin" / "bootstrap-userland.sh"
 COMPONENT_UPGRADE = REPO / "bin" / "component-upgrade.sh"
+ARCLINK_ENV_EXAMPLE = REPO / "config" / "arclink.env.example"
 
 
 def expect(condition: bool, message: str) -> None:
@@ -168,6 +169,70 @@ def test_pins_sh_round_trip_does_not_corrupt_other_components() -> None:
     print("PASS test_pins_sh_round_trip_does_not_corrupt_other_components")
 
 
+def test_pins_get_supports_array_indexes() -> None:
+    out = subprocess.check_output([
+        "bash", "-c",
+        f"source {PINS_SH}; pins_get hermes-agent extras.0"
+    ], text=True).strip()
+    expect(out == "cli", f"expected first hermes-agent extra, got {out!r}")
+    print("PASS test_pins_get_supports_array_indexes")
+
+
+def test_pins_set_raw_failure_preserves_pins_file() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        scratch = Path(tmp) / "pins.json"
+        shutil.copy(PINS_JSON, scratch)
+        before = scratch.read_bytes()
+        env = {**os.environ, "ARCLINK_PINS_FILE": str(scratch)}
+        result = subprocess.run([
+            "bash", "-c",
+            f"source {PINS_SH}; pins_set_raw hermes-agent extras '[not-json'"
+        ], env=env, capture_output=True, text=True)
+        expect(result.returncode != 0, "invalid raw JSON should fail")
+        expect(scratch.read_bytes() == before, "failed pins_set_raw clobbered pins.json")
+        leftovers = list(scratch.parent.glob(".pins.json.tmp.*"))
+        expect(not leftovers, f"failed pins_set_raw left temp files: {leftovers}")
+    print("PASS test_pins_set_raw_failure_preserves_pins_file")
+
+
+def test_pins_writes_use_same_directory_temp_and_lock() -> None:
+    text = PINS_SH.read_text(encoding="utf-8")
+    expect('mktemp "$dir/.${base}.tmp.XXXXXX"' in text, "pins writes must create temp files beside pins.json")
+    expect("flock -x 9 || exit 1" in text, "pins writes must fail closed if the lock cannot be acquired")
+    expect('9>"$lock_file"' in text, "pins writes must hold an fd-backed lock file")
+    print("PASS test_pins_writes_use_same_directory_temp_and_lock")
+
+
+def test_pins_validate_rejects_release_asset_without_repo() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        scratch = Path(tmp) / "pins.json"
+        scratch.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "components": {
+                        "quarto": {
+                            "kind": "release-asset",
+                            "tag": "v1.2.3",
+                            "asset_pattern": "quarto.tar.gz",
+                            "description": "missing repo should fail",
+                        }
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        env = {**os.environ, "ARCLINK_PINS_FILE": str(scratch)}
+        result = subprocess.run([
+            "bash", "-c",
+            f"source {PINS_SH}; pins_validate"
+        ], env=env, capture_output=True, text=True)
+        expect(result.returncode != 0, "release-asset without repo should fail validation")
+        expect("quarto" in result.stderr, result.stderr)
+    print("PASS test_pins_validate_rejects_release_asset_without_repo")
+
+
 def test_pins_sh_resolve_inherited_ref_for_hermes_docs() -> None:
     """hermes-docs declares inherits_from: hermes-agent. The resolver must
     return the hermes-agent ref unless hermes-docs has its own.
@@ -202,6 +267,49 @@ def test_common_sh_reads_hermes_pin_from_pins_json() -> None:
     expect(out[1] == expected_docs_ref, f"hermes docs pin: got {out[1]!r}, expected {expected_docs_ref!r}")
     expect(out[2] == "", f"legacy code-server image env should not be synthesized, got {out[2]!r}")
     print("PASS test_common_sh_reads_hermes_pin_from_pins_json")
+
+
+def test_arclink_env_hermes_fallback_refs_match_pins_json() -> None:
+    data = json.loads(PINS_JSON.read_text())
+    env_text = ARCLINK_ENV_EXAMPLE.read_text(encoding="utf-8")
+    agent_match = re.search(r"^ARCLINK_HERMES_AGENT_REF=([0-9a-f]{40})$", env_text, flags=re.MULTILINE)
+    docs_match = re.search(r"^ARCLINK_HERMES_DOCS_REF=([0-9a-f]{40})$", env_text, flags=re.MULTILINE)
+    expect(agent_match is not None, "missing ARCLINK_HERMES_AGENT_REF fallback")
+    expect(docs_match is not None, "missing ARCLINK_HERMES_DOCS_REF fallback")
+    expect(agent_match.group(1) == data["components"]["hermes-agent"]["ref"], "agent fallback drifted from pins.json")
+    expect(docs_match.group(1) == data["components"]["hermes-docs"]["ref"], "docs fallback drifted from pins.json")
+    print("PASS test_arclink_env_hermes_fallback_refs_match_pins_json")
+
+
+def test_common_sh_nextcloud_image_env_is_pin_fallback_only() -> None:
+    data = json.loads(PINS_JSON.read_text())
+    postgres = data["components"]["postgres"]
+    redis = data["components"]["redis"]
+    nextcloud = data["components"]["nextcloud"]
+    out = subprocess.check_output([
+        "bash", "-c",
+        f"set -e; cd {REPO}; "
+        "ARCLINK_POSTGRES_IMAGE=example.invalid/postgres; "
+        "ARCLINK_POSTGRES_TAG=bad-postgres; "
+        "ARCLINK_REDIS_IMAGE=example.invalid/redis; "
+        "ARCLINK_REDIS_TAG=bad-redis; "
+        "ARCLINK_NEXTCLOUD_IMAGE=example.invalid/nextcloud; "
+        "ARCLINK_NEXTCLOUD_TAG=bad-nextcloud; "
+        f"source {COMMON_SH} 2>/dev/null || true; "
+        "with_nextcloud_compose_env bash -c 'printf \"%s\\n\" "
+        "\"$ARCLINK_POSTGRES_IMAGE\" \"$ARCLINK_POSTGRES_TAG\" "
+        "\"$ARCLINK_REDIS_IMAGE\" \"$ARCLINK_REDIS_TAG\" "
+        "\"$ARCLINK_NEXTCLOUD_IMAGE\" \"$ARCLINK_NEXTCLOUD_TAG\"'"
+    ], text=True).splitlines()
+    expect(out == [
+        postgres["image"],
+        postgres["tag"],
+        redis["image"],
+        redis["tag"],
+        nextcloud["image"],
+        nextcloud["tag"],
+    ], str(out))
+    print("PASS test_common_sh_nextcloud_image_env_is_pin_fallback_only")
 
 
 def test_hermes_upgrade_check_is_read_only() -> None:
@@ -651,8 +759,14 @@ def main() -> int:
     test_bootstrap_userland_enforces_qmd_pin()
     test_bootstrap_userland_install_qmd_fails_hard_without_pin()
     test_pins_sh_round_trip_does_not_corrupt_other_components()
+    test_pins_get_supports_array_indexes()
+    test_pins_set_raw_failure_preserves_pins_file()
+    test_pins_writes_use_same_directory_temp_and_lock()
+    test_pins_validate_rejects_release_asset_without_repo()
     test_pins_sh_resolve_inherited_ref_for_hermes_docs()
     test_common_sh_reads_hermes_pin_from_pins_json()
+    test_arclink_env_hermes_fallback_refs_match_pins_json()
+    test_common_sh_nextcloud_image_env_is_pin_fallback_only()
     test_hermes_upgrade_check_is_read_only()
     test_component_upgrade_resolves_reachable_raw_sha_after_branch_advances()
     test_component_upgrade_check_reports_status_when_git_resolver_fails()
@@ -660,7 +774,7 @@ def main() -> int:
     test_component_upgrade_rebases_pin_commit_when_remote_arclink_advances()
     test_component_upgrade_requires_deploy_key_before_writing_pin()
     test_component_upgrade_reexec_discovers_operator_config_artifact()
-    print("PASS all 15 pins regression tests")
+    print("PASS all 21 pins regression tests")
     return 0
 
 

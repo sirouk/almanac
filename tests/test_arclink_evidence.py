@@ -52,6 +52,20 @@ class TestRedaction(unittest.TestCase):
         self.assertIn("token=***", result)
         self.assertNotIn("abcdef1234567890", result)
 
+    def test_redact_text_uses_shared_secret_families(self):
+        samples = [
+            "anthropic sk-ant-" + "a" * 24,
+            "telegram 123456:" + "A" * 24,
+            "jwt eyJ" + "a" * 10 + "." + "b" * 10 + "." + "c" * 10,
+            "chutes cpk_live" + "d" * 12,
+            "github ghp_" + "e" * 24,
+            "pem -----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
+        ]
+        for sample in samples:
+            result = evidence.redact_text(sample)
+            self.assertNotEqual(result, sample)
+            self.assertIn("***", result)
+
 
 class TestEvidenceRecord(unittest.TestCase):
     def test_to_dict(self):

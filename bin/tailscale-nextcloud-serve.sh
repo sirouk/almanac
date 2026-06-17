@@ -232,9 +232,10 @@ fi
 
 detect_tailscale_runtime || true
 
-# Drive and Code now live behind the authenticated Hermes dashboard
-# plugin surface. Do not publish raw Nextcloud or internal MCP routes through
-# Tailscale Serve; clear the legacy bundle when this host still owns it.
-"$SCRIPT_DIR/tailscale-nextcloud-unserve.sh" >/dev/null 2>&1 || true
+# Drive and Code now live behind the authenticated Hermes dashboard plugin
+# surface. Do not publish raw Nextcloud or internal MCP routes through Tailscale
+# Serve, and do not let the retired ENABLE_TAILSCALE_SERVE flag tear down routes
+# as a side effect of an install/upgrade.
 echo "ArcLink no longer publishes Nextcloud or internal MCP routes through Tailscale Serve."
+echo "Existing Tailscale Serve configuration is left untouched; run tailscale-nextcloud-unserve.sh explicitly to remove legacy ArcLink-owned routes."
 print_serve_summary

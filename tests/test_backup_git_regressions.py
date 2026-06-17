@@ -5,6 +5,7 @@ import json
 import shlex
 import sqlite3
 import subprocess
+import tarfile
 import tempfile
 from pathlib import Path
 
@@ -467,6 +468,35 @@ def test_restore_smoke_rejects_remote_sources_without_fetching() -> None:
     print("PASS test_restore_smoke_rejects_remote_sources_without_fetching")
 
 
+def test_restore_smoke_rejects_tar_symlink_escape_before_extracting() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        archive = tmp_path / "escape.tar"
+        restore_dir = tmp_path / "restore"
+        with tarfile.open(archive, "w") as tar:
+            info = tarfile.TarInfo("vault")
+            info.type = tarfile.SYMTYPE
+            info.linkname = "../escaped"
+            tar.addfile(info)
+
+        result = run(
+            [
+                str(RESTORE_SMOKE_SH),
+                "--kind",
+                "shared",
+                "--source",
+                str(archive),
+                "--restore-dir",
+                str(restore_dir),
+                "--json",
+            ]
+        )
+        expect(result.returncode != 0, "restore-smoke must reject escaping tar symlinks")
+        expect("unsafe link target" in result.stderr or "escaping link target" in result.stderr, result.stderr)
+        expect(not (restore_dir / "vault").exists(), "unsafe tar member should be rejected before extraction")
+    print("PASS test_restore_smoke_rejects_tar_symlink_escape_before_extracting")
+
+
 def test_agent_restore_smoke_rejects_symlink_to_excluded_content() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
@@ -506,8 +536,9 @@ def main() -> int:
     test_reconcile_backup_remote_fast_forwards_local_without_follow_up_push()
     test_shared_restore_smoke_restores_local_git_snapshot_without_live_fetch()
     test_restore_smoke_rejects_remote_sources_without_fetching()
+    test_restore_smoke_rejects_tar_symlink_escape_before_extracting()
     test_agent_restore_smoke_rejects_symlink_to_excluded_content()
-    print("PASS all 12 backup git regression tests")
+    print("PASS all 13 backup git regression tests")
     return 0
 
 

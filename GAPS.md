@@ -743,11 +743,13 @@ when they were active blockers during this buildout pass. Treat rows marked
   recipient's own Vault/Workspace (`docs/arclink/operations-runbook.md:150-165`);
   tests prove copy/duplicate works (`tests/test_arclink_plugins.py:640-686`).
   `shares.request` now returns
-  `copy_duplicate_policy: accepted_linked_resources_copy_to_owned_vault_or_workspace_only`
-  and destination roots `vault`/`workspace`
-  (`python/arclink_mcp_server.py:1031-1042`), and managed-context guidance says
-  the same rule instead of calling it a policy question
-  (`plugins/hermes-agent/arclink-managed-context/__init__.py:326-330`).
+  `copy_duplicate_policy: accepted_linked_resources_writable_in_place_without_reshare_or_git_mutation`,
+  destination roots `vault`/`workspace`, and detail that accepted Drive/Code
+  shared folders are writable in place, cannot be reshared, still block Linked
+  git mutations, and may also be copied or duplicated into owned roots
+  (`python/arclink_mcp_server.py:120-125`,
+  `python/arclink_mcp_server.py:1086-1089`). Managed-context guidance says
+  the same rule instead of calling it a policy question.
   Regression tests assert the MCP description, response, and recipe wording
   (`tests/test_arclink_mcp_schemas.py:223-228`,
   `tests/test_arclink_mcp_schemas.py:356-366`,

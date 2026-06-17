@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -55,6 +56,26 @@ def test_tool_subprocess_env_scrubs_secrets() -> None:
         finally:
             os.environ.clear()
             os.environ.update(old_env)
+
+
+def test_missing_required_env_reports_friendly_error() -> None:
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", ""),
+    }
+    result = subprocess.run(
+        [sys.executable, str(PDF_INGEST_PY)],
+        cwd=str(REPO),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    combined = result.stdout + result.stderr
+    expect(result.returncode != 0, "pdf-ingest.py should fail without required env")
+    expect("missing required environment variable" in combined, combined)
+    expect("Traceback" not in combined and "KeyError" not in combined, combined)
+    print("PASS test_missing_required_env_reports_friendly_error")
 
 
 def test_list_pdf_sources_rejects_symlink_escapes() -> None:
@@ -216,11 +237,12 @@ def test_pdf_same_size_same_second_rewrite_updates_sidecar() -> None:
 
 def main() -> int:
     test_tool_subprocess_env_scrubs_secrets()
+    test_missing_required_env_reports_friendly_error()
     test_list_pdf_sources_rejects_symlink_escapes()
     test_generated_artifact_cleanup_refuses_paths_outside_markdown_root()
     test_vision_endpoint_is_hashed_in_generated_frontmatter()
     test_pdf_same_size_same_second_rewrite_updates_sidecar()
-    print("PASS all 5 pdf ingest env tests")
+    print("PASS all 6 pdf ingest env tests")
     return 0
 
 

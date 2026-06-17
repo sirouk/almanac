@@ -183,7 +183,7 @@ PY
 }
 
 run_shell_lint() {
-  local files=("$ROOT_DIR/test.sh")
+  local files=("$ROOT_DIR/deploy.sh" "$ROOT_DIR/test.sh")
   local rel=""
 
   while IFS= read -r rel; do
@@ -247,7 +247,7 @@ run_pdf_ingest_preflight() {
     ARCLINK_PRIV_DIR="$priv_dir" \
     VAULT_DIR="$vault_dir" \
     STATE_DIR="$state_dir" \
-    PDF_INGEST_EXTRACTOR=auto \
+    PDF_INGEST_EXTRACTOR=pdftotext \
     PDF_INGEST_TRIGGER_QMD_REFRESH=0 \
     "$ROOT_DIR/bin/pdf-ingest.sh" >/tmp/arclink-preflight-ingest.log
 
@@ -271,7 +271,7 @@ PY
     ARCLINK_PRIV_DIR="$priv_dir" \
     VAULT_DIR="$vault_dir" \
     STATE_DIR="$state_dir" \
-    PDF_INGEST_EXTRACTOR=auto \
+    PDF_INGEST_EXTRACTOR=pdftotext \
     PDF_INGEST_TRIGGER_QMD_REFRESH=0 \
     "$ROOT_DIR/bin/pdf-ingest.sh" --quiet
 
@@ -294,7 +294,7 @@ PY
     ARCLINK_PRIV_DIR="$priv_dir" \
     VAULT_DIR="$vault_dir" \
     STATE_DIR="$state_dir" \
-    PDF_INGEST_EXTRACTOR=auto \
+    PDF_INGEST_EXTRACTOR=pdftotext \
     PDF_INGEST_TRIGGER_QMD_REFRESH=0 \
     "$ROOT_DIR/bin/pdf-ingest.sh" --quiet
 

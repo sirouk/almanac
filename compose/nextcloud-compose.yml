@@ -19,13 +19,20 @@ services:
     restart: unless-stopped
     volumes:
       - "${NEXTCLOUD_REDIS_DIR}:/data"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   app:
     image: ${ARCLINK_NEXTCLOUD_IMAGE:-docker.io/library/nextcloud}:${ARCLINK_NEXTCLOUD_TAG:-31-apache}
     restart: unless-stopped
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       - "127.0.0.1:${NEXTCLOUD_PORT:-18080}:80"
     environment:

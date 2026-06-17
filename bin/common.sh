@@ -1601,16 +1601,16 @@ run_compose() {
 
 with_nextcloud_compose_env() {
   # Container image+tag pins for the three services in the compose file are
-  # read from config/pins.json (postgres, redis, nextcloud). Env-var overrides
-  # still win, and a hard-coded fallback covers partially-bootstrapped hosts
-  # where jq/pins.sh isn't yet available.
+  # read from config/pins.json (postgres, redis, nextcloud). Existing env values
+  # are degraded-path fallbacks only when jq/pins.sh or the pins file is not yet
+  # available, matching the Hermes runtime pin precedence above.
   local _postgres_image _postgres_tag _redis_image _redis_tag _nextcloud_image _nextcloud_tag
-  _postgres_image="$(__pins_get_or_default postgres image docker.io/library/postgres)"
-  _postgres_tag="$(__pins_get_or_default postgres tag 16-alpine)"
-  _redis_image="$(__pins_get_or_default redis image docker.io/library/redis)"
-  _redis_tag="$(__pins_get_or_default redis tag 7-alpine)"
-  _nextcloud_image="$(__pins_get_or_default nextcloud image docker.io/library/nextcloud)"
-  _nextcloud_tag="$(__pins_get_or_default nextcloud tag 31-apache)"
+  _postgres_image="$(__pins_get_or_default postgres image "${ARCLINK_POSTGRES_IMAGE:-docker.io/library/postgres}")"
+  _postgres_tag="$(__pins_get_or_default postgres tag "${ARCLINK_POSTGRES_TAG:-16-alpine}")"
+  _redis_image="$(__pins_get_or_default redis image "${ARCLINK_REDIS_IMAGE:-docker.io/library/redis}")"
+  _redis_tag="$(__pins_get_or_default redis tag "${ARCLINK_REDIS_TAG:-7-alpine}")"
+  _nextcloud_image="$(__pins_get_or_default nextcloud image "${ARCLINK_NEXTCLOUD_IMAGE:-docker.io/library/nextcloud}")"
+  _nextcloud_tag="$(__pins_get_or_default nextcloud tag "${ARCLINK_NEXTCLOUD_TAG:-31-apache}")"
   (
     export NEXTCLOUD_PORT NEXTCLOUD_TRUSTED_DOMAIN
     export POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD
@@ -1619,12 +1619,12 @@ with_nextcloud_compose_env() {
     export NEXTCLOUD_CUSTOM_CONFIG_DIR NEXTCLOUD_EMPTY_SKELETON_DIR NEXTCLOUD_ARCLINK_CONFIG_FILE
     export NEXTCLOUD_HOOKS_DIR NEXTCLOUD_PRE_INSTALL_HOOK_DIR NEXTCLOUD_POST_INSTALL_HOOK_DIR NEXTCLOUD_BEFORE_STARTING_HOOK_DIR
     export NEXTCLOUD_PRE_INSTALL_HOOK_FILE NEXTCLOUD_POST_INSTALL_HOOK_FILE NEXTCLOUD_BEFORE_STARTING_HOOK_FILE VAULT_DIR
-    export ARCLINK_POSTGRES_IMAGE="${ARCLINK_POSTGRES_IMAGE:-$_postgres_image}"
-    export ARCLINK_POSTGRES_TAG="${ARCLINK_POSTGRES_TAG:-$_postgres_tag}"
-    export ARCLINK_REDIS_IMAGE="${ARCLINK_REDIS_IMAGE:-$_redis_image}"
-    export ARCLINK_REDIS_TAG="${ARCLINK_REDIS_TAG:-$_redis_tag}"
-    export ARCLINK_NEXTCLOUD_IMAGE="${ARCLINK_NEXTCLOUD_IMAGE:-$_nextcloud_image}"
-    export ARCLINK_NEXTCLOUD_TAG="${ARCLINK_NEXTCLOUD_TAG:-$_nextcloud_tag}"
+    export ARCLINK_POSTGRES_IMAGE="$_postgres_image"
+    export ARCLINK_POSTGRES_TAG="$_postgres_tag"
+    export ARCLINK_REDIS_IMAGE="$_redis_image"
+    export ARCLINK_REDIS_TAG="$_redis_tag"
+    export ARCLINK_NEXTCLOUD_IMAGE="$_nextcloud_image"
+    export ARCLINK_NEXTCLOUD_TAG="$_nextcloud_tag"
     "$@"
   )
 }

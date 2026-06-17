@@ -55,20 +55,21 @@ _ENV_ALTERNATES = {
 }
 
 
-def _env_present(key: str) -> bool:
-    return bool(os.environ.get(key, "").strip()) or any(
-        bool(os.environ.get(alt, "").strip()) for alt in _ENV_ALTERNATES.get(key, ())
+def _env_present(key: str, env: dict[str, str] | None = None) -> bool:
+    source = env if env is not None else os.environ
+    return bool(str(source.get(key, "")).strip()) or any(
+        bool(str(source.get(alt, "")).strip()) for alt in _ENV_ALTERNATES.get(key, ())
     )
 
 
-def check_step_credentials(step: JourneyStep) -> bool:
+def check_step_credentials(step: JourneyStep, env: dict[str, str] | None = None) -> bool:
     """Return True if all required env vars for the step are present."""
-    return all(_env_present(k) for k in step.required_env)
+    return all(_env_present(k, env=env) for k in step.required_env)
 
 
-def missing_credentials(step: JourneyStep) -> list[str]:
+def missing_credentials(step: JourneyStep, env: dict[str, str] | None = None) -> list[str]:
     """Return names of missing env vars (never values)."""
-    return [k for k in step.required_env if not _env_present(k)]
+    return [k for k in step.required_env if not _env_present(k, env=env)]
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +343,7 @@ def evaluate_journey(
     runners: dict[str, StepRunner] | None = None,
     *,
     stop_on_failure: bool = True,
+    env: dict[str, str] | None = None,
 ) -> list[JourneyStep]:
     """Evaluate journey steps in order.
 
@@ -364,7 +366,7 @@ def evaluate_journey(
             step.skip_reason = "prior step failed"
             continue
 
-        missing = missing_credentials(step)
+        missing = missing_credentials(step, env=env)
         if missing:
             step.status = "skipped"
             step.skip_reason = f"missing env: {', '.join(missing)}"

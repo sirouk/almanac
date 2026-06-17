@@ -451,6 +451,38 @@ def test_operation_idempotency_failed_attempt_replays_without_completion() -> No
     print("PASS test_operation_idempotency_failed_attempt_replays_without_completion")
 
 
+def test_notification_errors_backoff_and_due_fetch_skips_future_rows() -> None:
+    mod = load_module(CONTROL_PY, "arclink_control_db_notification_retry_test")
+    conn = memory_db(mod)
+    first = mod.queue_notification(
+        conn,
+        target_kind="operator",
+        target_id="operator",
+        channel_kind="tui-only",
+        message="first",
+    )
+    mod.mark_notification_error(conn, first, "temporary failure")
+    retry = conn.execute(
+        "SELECT attempt_count, last_attempt_at, next_attempt_at, delivery_error FROM notification_outbox WHERE id = ?",
+        (first,),
+    ).fetchone()
+    expect(retry["attempt_count"] == 1, dict(retry))
+    expect(str(retry["last_attempt_at"] or ""), dict(retry))
+    expect(mod.parse_utc_iso(str(retry["next_attempt_at"] or "")) > mod.utc_now(), dict(retry))
+    expect(retry["delivery_error"] == "temporary failure", dict(retry))
+
+    second = mod.queue_notification(
+        conn,
+        target_kind="operator",
+        target_id="operator",
+        channel_kind="tui-only",
+        message="second",
+    )
+    due = mod.fetch_undelivered_notifications(conn, limit=1)
+    expect(len(due) == 1 and due[0]["id"] == second, str(due))
+    print("PASS test_notification_errors_backoff_and_due_fetch_skips_future_rows")
+
+
 def test_operation_idempotency_persists_across_restart() -> None:
     mod = load_module(CONTROL_PY, "arclink_control_db_operation_idem_restart")
     with tempfile.TemporaryDirectory() as tmp:
@@ -687,6 +719,7 @@ if __name__ == "__main__":
     test_parse_utc_iso_normalizes_z_and_offset_timestamps()
     test_operation_idempotency_rejects_same_key_different_intent()
     test_operation_idempotency_failed_attempt_replays_without_completion()
+    test_notification_errors_backoff_and_due_fetch_skips_future_rows()
     test_operation_idempotency_persists_across_restart()
     test_upsert_user_preserves_protected_status_without_privileged_transition()
     test_email_merge_is_deterministic_and_repoints_owned_rows()

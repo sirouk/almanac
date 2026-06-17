@@ -883,6 +883,47 @@ def test_production_session_creation_requires_pepper() -> None:
     print("PASS test_production_session_creation_requires_pepper")
 
 
+def test_session_hash_pepper_reads_generated_config_file() -> None:
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_pepper_config_file_test")
+    saved = {
+        key: os.environ.get(key)
+        for key in (
+            "ARCLINK_CONFIG_FILE",
+            "ARCLINK_BASE_DOMAIN",
+            "ARCLINK_SESSION_HASH_PEPPER",
+            "ARCLINK_SESSION_HASH_PEPPER_REQUIRED",
+        )
+    }
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "arclink.env"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "ARCLINK_BASE_DOMAIN=arclink.online",
+                        "ARCLINK_SESSION_HASH_PEPPER=config-file-pepper",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+            os.environ.pop("ARCLINK_BASE_DOMAIN", None)
+            os.environ.pop("ARCLINK_SESSION_HASH_PEPPER", None)
+            os.environ.pop("ARCLINK_SESSION_HASH_PEPPER_REQUIRED", None)
+            expect(
+                api._session_hash_pepper() == "config-file-pepper",
+                "session pepper should read generated config file",
+            )
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    print("PASS test_session_hash_pepper_reads_generated_config_file")
+
+
 def test_revoke_session_rejects_invalid_kind_before_update_or_audit() -> None:
     control = load_module("arclink_control.py", "arclink_control_api_auth_revoke_kind_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_revoke_kind_test")
@@ -1065,12 +1106,13 @@ def main() -> int:
     test_session_kind_prefixes_are_enforced()
     test_session_auth_failures_use_generic_error_detail()
     test_production_session_creation_requires_pepper()
+    test_session_hash_pepper_reads_generated_config_file()
     test_revoke_session_rejects_invalid_kind_before_update_or_audit()
     test_revoke_session_rejects_missing_user_and_admin_before_update_or_audit()
     test_staged_revoke_requires_explicit_transaction()
     test_single_operator_policy_rejects_second_active_owner()
     test_proof_token_hashes_use_hmac_and_accept_legacy()
-    print("PASS all 22 ArcLink API/auth tests")
+    print("PASS all 23 ArcLink API/auth tests")
     return 0
 
 

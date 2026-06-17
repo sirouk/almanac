@@ -15,7 +15,7 @@ No capability below should be read as live-proven unless it says so.
 
 ## Module Map
 
-There are **84** `python/arclink_*.py` modules (including helpers and legacy
+There are **87** `python/arclink_*.py` modules (including helpers and legacy
 intake modules). They are grouped below by subsystem. Plugins live under
 `plugins/hermes-agent/`, not `python/` (see the Hermes Workspace Plugins
 section). The schema mechanism is a single idempotent `ensure_schema()` with
@@ -72,9 +72,11 @@ arclink_curator_discord_onboarding.py Curator Discord onboarding wiring
 arclink_operator_raven.py          Operator command surface (read previews + real action queueing)
 arclink_operator_agent.py          Operator's single in-stack Hermes identity + free-form turn bridge
 arclink_operator_upgrade_broker.py Docker-mode operator upgrade broker (operator-upgrade-broker, 8917)
+arclink_operator_upgrade_host_runner.py Host-side queue runner for authenticated operator upgrade jobs
 arclink_action_worker.py           Admin/operator action-intent consumer (arclink_action_intents)
 arclink_rollout.py                 Rollout model + ArcPod-update planner/materializer/record-only batch
 arclink_pin_upgrade_check.py       Hourly pinned-component upstream upgrade detector
+arclink_upgrade_policy.py          Source-owned dependency and ArcPod rollout policy catalog
 ```
 
 ### Academy / Crew / SOUL
@@ -161,6 +163,7 @@ arclink_wrapped.py          ArcLink Wrapped scoring/render/cadence/scheduler/del
 arclink_memory_synthesizer.py Memory synthesis card builder (memory-synth job)
 arclink_org_profile.py        Org-profile validate/apply/doctor
 arclink_org_profile_builder.py Org-profile builder
+arclink_skill_enablement.py   Per-agent approved-skill enablement helper
 arclink_notion_ssot.py        Notion API client + SSOT handshake + no-secret proof harness (PG-NOTION)
 arclink_notion_webhook.py     Notion webhook receiver + verification-token arming
 arclink_ssot_batcher.py       Notion-event batcher worker
@@ -277,11 +280,12 @@ Captain ──► Raven (Telegram / Discord) / web onboarding
          Scale operations snapshot (admin only)
 ```
 
-The control plane uses **44** `arclink_*` tables plus **9** non-prefixed
+The control plane uses **45** `arclink_*` tables plus **10** non-prefixed
 `academy_*` tables: `academy_programs`, `academy_trainees`,
 `academy_mode_sessions`, `academy_resource_proposals`, `academy_sources`,
 `academy_corpus_specialists`, `academy_specialist_sources`,
-`academy_source_provenance`, and `academy_specialist_subscriptions`. The
+`academy_source_provenance`, `academy_specialist_subscriptions`, and
+`academy_source_crawl_observations`. The
 remaining live-schema tables are legacy/substrate (e.g. `rate_limits`,
 `notification_outbox`, `operator_actions`). `arclink_evidence_runs` exists and is tested but is
 **unwired** — the live runner writes only `evidence/<run_id>.json`; nothing reads
@@ -298,7 +302,8 @@ authoritative, always-current catalog is:
   caps, rate limits, env vars, prices, broker token).
 - `docs/openapi/arclink-v1.openapi.json` — the machine-readable OpenAPI 3.1 spec,
   generated from `_ROUTES` by `build_arclink_openapi_spec()` and kept
-  byte-identical to code by a parity test (regenerate on any `_ROUTES` change).
+  content-equivalent to code by a canonical JSON parity test (regenerate on any
+  `_ROUTES` change).
 
 At a high level the boundary exposes these route families:
 

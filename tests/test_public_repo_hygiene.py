@@ -63,6 +63,13 @@ PROVIDER_CONTEXT_RE = re.compile(
     r")"
 )
 PROVIDER_CODE_PATHS = {
+    # Federation ground-truth canon: code-cited security analysis that necessarily
+    # names models/providers and discusses secret/key/socket boundaries (peers of the
+    # already-allowlisted docs/arclink/*.md and all of research/). The deep per-piece
+    # records live under research/ (already a PROVIDER_CONTEXT_DIR); these two are the
+    # root-level master docs.
+    Path("CANON.md"),
+    Path("DISSECT.md"),
     Path("IMPLEMENTATION_PLAN.md"),
     Path("PROMPT_build.md"),
     Path("PROMPT_document.md"),
@@ -113,6 +120,7 @@ PROVIDER_CODE_PATHS = {
     Path("tests/test_arclink_chutes_live_adapter.py"),
     Path("tests/test_arclink_chutes_oauth.py"),
     Path("tests/test_arclink_diagnostics.py"),
+    Path("tests/test_arclink_evidence.py"),
     Path("tests/test_arclink_e2e_live.py"),
     Path("tests/test_arclink_entitlements.py"),
     Path("tests/test_arclink_admin_actions.py"),

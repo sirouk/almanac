@@ -17,6 +17,8 @@ DEPLOY_SH = REPO / "bin" / "deploy.sh"
 HEALTH_SH = REPO / "bin" / "health.sh"
 INSTALL_SYSTEM_SERVICES_SH = REPO / "bin" / "install-system-services.sh"
 CI_INSTALL_SMOKE_SH = REPO / "bin" / "ci-install-smoke.sh"
+CI_PREFLIGHT_SH = REPO / "bin" / "ci-preflight.sh"
+INSTALL_SMOKE_WORKFLOW = REPO / ".github" / "workflows" / "install-smoke.yml"
 CURATOR_GATEWAY_SH = REPO / "bin" / "curator-gateway.sh"
 QMD_REFRESH_SH = REPO / "bin" / "qmd-refresh.sh"
 VAULT_WATCH_SH = REPO / "bin" / "vault-watch.sh"
@@ -903,6 +905,31 @@ def test_live_agent_tool_smoke_parses_explicit_selectors() -> None:
     expect("lower(unix_user) = ?" in body, body)
     expect("lower(coalesce(display_name, '')) = ?" in body, body)
     print("PASS test_live_agent_tool_smoke_parses_explicit_selectors")
+
+
+def test_ci_workflow_runs_python_lint_before_direct_test_loop() -> None:
+    workflow = INSTALL_SMOKE_WORKFLOW.read_text(encoding="utf-8")
+    lint = "python3 -m ruff check --select E9,F63,F7,F82 bin python tests plugins hooks"
+    expect("- master" not in workflow, "dead master branch trigger should not remain in CI workflow")
+    expect(lint in workflow, workflow)
+    expect(workflow.index(lint) < workflow.index('python3 "$test_file"'), workflow)
+    print("PASS test_ci_workflow_runs_python_lint_before_direct_test_loop")
+
+
+def test_ci_preflight_lints_root_deploy_and_pins_pdf_backend() -> None:
+    preflight = CI_PREFLIGHT_SH.read_text(encoding="utf-8")
+    pdf_flow = extract(preflight, "run_pdf_ingest_preflight() {", "run_pdf_ingest_vision_preflight() {")
+    expect('local files=("$ROOT_DIR/deploy.sh" "$ROOT_DIR/test.sh")' in preflight, preflight)
+    expect("PDF_INGEST_EXTRACTOR=auto" not in pdf_flow, pdf_flow)
+    expect(pdf_flow.count("PDF_INGEST_EXTRACTOR=pdftotext") == 3, pdf_flow)
+    print("PASS test_ci_preflight_lints_root_deploy_and_pins_pdf_backend")
+
+
+def test_live_agent_tool_smoke_opens_control_db_read_only() -> None:
+    body = (REPO / "bin" / "live-agent-tool-smoke.sh").read_text(encoding="utf-8")
+    expect('sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)' in body, body)
+    expect("sqlite3.connect(db_path)" not in body, body)
+    print("PASS test_live_agent_tool_smoke_opens_control_db_read_only")
 
 
 def test_agent_install_payload_tracks_current_agent_contract() -> None:
@@ -2757,7 +2784,7 @@ def test_control_enrollment_submenu_and_secret_are_first_class() -> None:
     expect("random_secret" in enrollment and "fleet_enrollment_hmac_root_rotated" in (REPO / "python" / "arclink_fleet_enrollment.py").read_text(encoding="utf-8"), "rotation should mint a new HMAC root and audit the event")
     expect("ARCLINK_FLEET_ENROLLMENT_SECRET: ${ARCLINK_FLEET_ENROLLMENT_SECRET:-}" in compose, "Compose should pass fleet enrollment secret")
     expect('ensure_env_file_value ARCLINK_FLEET_ENROLLMENT_SECRET "$(random_secret)"' in docker_helper, "Docker bootstrap should seed fleet enrollment secret")
-    expect("ARCLINK_FLEET_ENROLLMENT_SECRET=$fleet_enrollment_secret" in entrypoint, "Docker entrypoint should seed fleet enrollment secret")
+    expect("ARCLINK_FLEET_ENROLLMENT_SECRET=$q_fleet_enrollment_secret" in entrypoint, "Docker entrypoint should seed fleet enrollment secret")
     print("PASS test_control_enrollment_submenu_and_secret_are_first_class")
 
 
@@ -2776,7 +2803,7 @@ def test_control_docker_bootstrap_seeds_session_hash_pepper_and_gateway_broker_t
         "docker bootstrap should backfill a missing session hash pepper before Compose reads docker.env",
     )
     expect(
-        "ARCLINK_SESSION_HASH_PEPPER=$session_hash_pepper" in entrypoint,
+        "ARCLINK_SESSION_HASH_PEPPER=$q_session_hash_pepper" in entrypoint,
         "fresh Docker config generation should include the session hash pepper",
     )
     expect(
@@ -2797,7 +2824,7 @@ def test_control_docker_bootstrap_seeds_session_hash_pepper_and_gateway_broker_t
         "docker bootstrap should backfill a missing gateway exec broker token before Compose reads docker.env",
     )
     expect(
-        "ARCLINK_GATEWAY_EXEC_BROKER_TOKEN=$gateway_exec_broker_token" in entrypoint,
+        "ARCLINK_GATEWAY_EXEC_BROKER_TOKEN=$q_gateway_exec_broker_token" in entrypoint,
         "fresh Docker config generation should include the gateway exec broker token",
     )
     expect(
@@ -2815,7 +2842,7 @@ def test_control_docker_bootstrap_seeds_session_hash_pepper_and_gateway_broker_t
         "docker bootstrap should backfill a missing deployment exec broker token before Compose reads docker.env",
     )
     expect(
-        "ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN=$deployment_exec_broker_token" in entrypoint,
+        "ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN=$q_deployment_exec_broker_token" in entrypoint,
         "fresh Docker config generation should include the deployment exec broker token",
     )
     expect(
@@ -2833,7 +2860,7 @@ def test_control_docker_bootstrap_seeds_session_hash_pepper_and_gateway_broker_t
         "docker bootstrap should backfill a missing agent supervisor broker token before Compose reads docker.env",
     )
     expect(
-        "ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN=$agent_supervisor_broker_token" in entrypoint,
+        "ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN=$q_agent_supervisor_broker_token" in entrypoint,
         "fresh Docker config generation should include the agent supervisor broker token",
     )
     expect(
@@ -2851,7 +2878,7 @@ def test_control_docker_bootstrap_seeds_session_hash_pepper_and_gateway_broker_t
         "docker bootstrap should backfill a missing operator upgrade broker token before Compose reads docker.env",
     )
     expect(
-        "ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN=$operator_upgrade_broker_token" in entrypoint,
+        "ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN=$q_operator_upgrade_broker_token" in entrypoint,
         "fresh Docker config generation should include the operator upgrade broker token",
     )
     expect(
@@ -2869,7 +2896,7 @@ def test_control_docker_bootstrap_seeds_session_hash_pepper_and_gateway_broker_t
         "docker bootstrap should backfill a missing agent user helper token before Compose reads docker.env",
     )
     expect(
-        "ARCLINK_AGENT_USER_HELPER_TOKEN=$agent_user_helper_token" in entrypoint,
+        "ARCLINK_AGENT_USER_HELPER_TOKEN=$q_agent_user_helper_token" in entrypoint,
         "fresh Docker config generation should include the agent user helper token",
     )
     expect(
@@ -2887,7 +2914,7 @@ def test_control_docker_bootstrap_seeds_session_hash_pepper_and_gateway_broker_t
         "docker bootstrap should backfill a missing agent process helper token before Compose reads docker.env",
     )
     expect(
-        "ARCLINK_AGENT_PROCESS_HELPER_TOKEN=$agent_process_helper_token" in entrypoint,
+        "ARCLINK_AGENT_PROCESS_HELPER_TOKEN=$q_agent_process_helper_token" in entrypoint,
         "fresh Docker config generation should include the agent process helper token",
     )
     expect(
@@ -2900,17 +2927,86 @@ def test_control_docker_bootstrap_seeds_session_hash_pepper_and_gateway_broker_t
 
 def test_control_upgrade_syncs_checkout_from_upstream_before_build() -> None:
     text = DEPLOY_SH.read_text(encoding="utf-8")
-    sync = extract(text, "sync_control_upgrade_checkout_from_upstream() {", "run_control_install_flow() {")
+    sync = extract(text, "control_upgrade_fetch_upstream() {", "run_control_install_flow() {")
     flow = extract(text, "run_control_install_flow() {", "run_control_reconfigure_flow() {")
     expect("git -C \"$BOOTSTRAP_DIR\" fetch --prune \"$remote\"" in sync, sync)
+    expect("GIT_SSH_COMMAND=\"$ssh_command\"" in sync, "control upgrade fetch must honor the configured upstream deploy key")
+    expect("configure_upstream_git_for_repo \"$BOOTSTRAP_DIR\"" in sync, "control upgrade should make forwarded upstream deploy-key env load-bearing")
+    expect("Refusing control upgrade from branch" in sync and "expected '$expected_branch'" in sync, sync)
+    expect("has no upstream to fetch" in sync, sync)
+    expect("is ahead of upstream" in sync and "return 1" in sync, sync)
     expect("git -C \"$BOOTSTRAP_DIR\" merge --ff-only \"$upstream\"" in sync, sync)
     expect("ARCLINK_CONTROL_UPGRADE_SKIP_UPSTREAM_SYNC" in sync, sync)
     expect("merge-base --is-ancestor" in sync, sync)
     expect(
-        flow.index("verify_control_upgrade_checkout_clean") < flow.index("sync_control_upgrade_checkout_from_upstream") < flow.index("run_arclink_docker build"),
+        flow.index("verify_control_upgrade_checkout_clean")
+        < flow.index("require_main_upstream_branch_for_upgrade")
+        < flow.index("sync_control_upgrade_checkout_from_upstream")
+        < flow.index("run_arclink_docker build"),
         "control upgrade should verify a clean tree, sync upstream, then build",
     )
     print("PASS test_control_upgrade_syncs_checkout_from_upstream_before_build")
+
+
+def test_component_upgrade_reexec_reads_operator_artifact_config_file_key() -> None:
+    body = (REPO / "bin" / "component-upgrade.sh").read_text(encoding="utf-8")
+    reexec = extract(body, "reexec_upgrade() {", "do_apply() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        config = tmp_path / "live" / "config" / "arclink.env"
+        config.parent.mkdir(parents=True)
+        config.write_text("ARCLINK_USER=operator-svc\n", encoding="utf-8")
+        (repo / ".arclink-operator.env").write_text(
+            f"ARCLINK_OPERATOR_DEPLOYED_CONFIG_FILE={shlex.quote(str(config))}\n"
+            "ARCLINK_OPERATOR_DEPLOYED_REPO_DIR=/srv/operator-svc/arclink\n",
+            encoding="utf-8",
+        )
+        fakebin = tmp_path / "bin"
+        fakebin.mkdir()
+        log_path = tmp_path / "sudo.log"
+        (fakebin / "sudo").write_text(
+            "#!/usr/bin/env bash\n"
+            f"printf '%s\\n' \"$*\" > {shlex.quote(str(log_path))}\n",
+            encoding="utf-8",
+        )
+        (fakebin / "sudo").chmod(0o755)
+        script = f"""
+set -euo pipefail
+PATH={shlex.quote(str(fakebin))}:$PATH
+REPO_DIR={shlex.quote(str(repo))}
+note() {{ printf '%s\\n' "$*"; }}
+{reexec}
+reexec_upgrade
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"component-upgrade reexec artifact test failed: {result.stderr}")
+        sudo_log = log_path.read_text(encoding="utf-8")
+        expect(f"ARCLINK_CONFIG_FILE={config}" in sudo_log, sudo_log)
+        expect("ARCLINK_OPERATOR_DEPLOYED_CONFIG:-" not in reexec, reexec)
+        expect("ARCLINK_OPERATOR_DEPLOYED_CONFIG_FILE:-" in reexec, reexec)
+    print("PASS test_component_upgrade_reexec_reads_operator_artifact_config_file_key")
+
+
+def test_init_bootstrap_defaults_to_canonical_repo_and_safe_printf() -> None:
+    body = (REPO / "init.sh").read_text(encoding="utf-8")
+    expect("github.com/example/arclink" not in body, "top-level init.sh must not default to placeholder example URLs")
+    expect("https://github.com/sirouk/arclink.git" in body, body)
+    expect("ARCLINK_INIT_REPO_REF" in body and "raw.githubusercontent.com/sirouk/arclink/$REPO_REF/init.sh" in body, body)
+    expect("git clone --depth 1 --branch \"$REPO_REF\"" in body, body)
+    expect('printf "$TARGET_USER"' not in body, body)
+    expect("printf '%s' \"$TARGET_USER\"" in body, body)
+    print("PASS test_init_bootstrap_defaults_to_canonical_repo_and_safe_printf")
+
+
+def test_operator_hermes_home_install_lock_has_timeout() -> None:
+    body = (REPO / "bin" / "install-operator-hermes-home.sh").read_text(encoding="utf-8")
+    expect("ARCLINK_OPERATOR_INSTALL_LOCK_TIMEOUT_SECONDS" in body, body)
+    expect("flock -w \"$LOCK_TIMEOUT_SECONDS\" 9" in body, body)
+    expect("Timed out waiting for operator Hermes home install lock" in body, body)
+    expect("flock 9" not in body, "operator install lock must not block indefinitely")
+    print("PASS test_operator_hermes_home_install_lock_has_timeout")
 
 
 def _write_executable(path: Path, body: str) -> None:
@@ -3424,6 +3520,40 @@ printf 'qmd:%s\\n' "$(cat "$LOG_FILE")"
     print("PASS test_qmd_refresh_forces_and_consumes_local_rebuild_flag")
 
 
+def test_qmd_refresh_atomically_rewrites_config_and_surfaces_embed_failure() -> None:
+    text = QMD_REFRESH_SH.read_text(encoding="utf-8")
+    snippet = extract(text, "clear_qmd_embed_force_flag() {", "exec 9>")
+    expect('mktemp "${config}.tmp.XXXXXX"' in snippet, snippet)
+    expect('mv -f "$temp" "$config"' in snippet, snippet)
+    expect('cat "$temp" >"$config"' not in snippet, snippet)
+    with tempfile.TemporaryDirectory() as tmp:
+        config_path = Path(tmp) / "arclink.env"
+        config_path.write_text("QMD_EMBED_FORCE_ON_NEXT_REFRESH=1\nKEEP=ok\n", encoding="utf-8")
+        script = f"""
+set -euo pipefail
+QMD_INDEX_NAME=arclink
+QMD_EMBED_PROVIDER=local
+QMD_EMBED_FORCE_ON_NEXT_REFRESH=1
+QMD_EMBED_TIMEOUT_SECONDS=0
+CONFIG_FILE={shlex.quote(str(config_path))}
+{snippet}
+clear_qmd_embed_force_flag
+printf 'flag:%s\\n' "$(grep '^QMD_EMBED_FORCE_ON_NEXT_REFRESH=' "$CONFIG_FILE")"
+qmd() {{ return 42; }}
+QMD_EMBED_FORCE_ON_NEXT_REFRESH=0
+set +e
+run_qmd_embed
+rc=$?
+set -e
+printf 'embed_rc=%s\\n' "$rc"
+"""
+        result = bash(script)
+    expect(result.returncode == 0, f"qmd refresh failure surfacing failed: {result.stderr}\n{result.stdout}")
+    expect("flag:QMD_EMBED_FORCE_ON_NEXT_REFRESH=0" in result.stdout, result.stdout)
+    expect("embed_rc=42" in result.stdout, result.stdout)
+    print("PASS test_qmd_refresh_atomically_rewrites_config_and_surfaces_embed_failure")
+
+
 def test_collect_qmd_embedding_answers_reconfigures_between_local_and_endpoint() -> None:
     text = DEPLOY_SH.read_text(encoding="utf-8")
     snippet = extract(text, "normalize_qmd_embed_provider() {", "random_secret() {")
@@ -3797,6 +3927,16 @@ fi
         expect("Press ENTER after enabling Tailscale Serve" in combined, combined)
         expect("rerun ./deploy.sh install" in combined, combined)
     print("PASS test_tailscale_serve_command_timeout_surfaces_enablement_guidance")
+
+
+def test_retired_tailscale_serve_flag_does_not_unserve_during_deploy() -> None:
+    serve = TAILSCALE_NEXTCLOUD_SERVE_SH.read_text(encoding="utf-8")
+    deploy = DEPLOY_SH.read_text(encoding="utf-8")
+    expect('"$SCRIPT_DIR/tailscale-nextcloud-unserve.sh"' not in serve, serve)
+    expect("Existing Tailscale Serve configuration is left untouched" in serve, serve)
+    expect("warn_retired_tailscale_nextcloud_serve()" in deploy, deploy)
+    expect('"$ARCLINK_REPO_DIR/bin/tailscale-nextcloud-serve.sh"' not in deploy, deploy)
+    print("PASS test_retired_tailscale_serve_flag_does_not_unserve_during_deploy")
 
 
 def test_tailscale_funnel_command_timeout_surfaces_enablement_guidance() -> None:
@@ -4174,6 +4314,15 @@ def test_ci_install_smoke_force_removes_auto_provision_user() -> None:
     print("PASS test_ci_install_smoke_force_removes_auto_provision_user")
 
 
+def test_ci_install_smoke_reports_teardown_residue_on_failure_path() -> None:
+    text = CI_INSTALL_SMOKE_SH.read_text()
+    on_exit = extract(text, "on_exit() {", "trap 'on_exit $?")
+    expect("assert_smoke_target_removed()" in text, text)
+    expect("assert_smoke_target_removed ||" in on_exit, on_exit)
+    expect("Smoke teardown left ArcLink residue after failure." in on_exit, on_exit)
+    print("PASS test_ci_install_smoke_reports_teardown_residue_on_failure_path")
+
+
 def test_ci_install_smoke_dashboard_login_uses_root_path_for_subpaths() -> None:
     text = CI_INSTALL_SMOKE_SH.read_text()
     helper = extract(text, "http_status_code() {", "wait_for_http_status() {")
@@ -4346,8 +4495,10 @@ def test_deploy_uses_effective_nextcloud_enablement_for_runtime_actions() -> Non
            "shared service restart must use effective Nextcloud enablement")
     expect('if nextcloud_effectively_enabled; then\n    wait_for_port 127.0.0.1 "$NEXTCLOUD_PORT"' in text,
            "install/upgrade port waits must use effective Nextcloud enablement")
-    expect('if nextcloud_effectively_enabled && [[ "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then' in text,
-           "Tailscale Nextcloud publication must use effective Nextcloud enablement")
+    expect("warn_retired_tailscale_nextcloud_serve()" in text,
+           "retired Tailscale Nextcloud Serve flag must warn instead of publishing or tearing down")
+    expect('"$ARCLINK_REPO_DIR/bin/tailscale-nextcloud-serve.sh"' not in text,
+           "ENABLE_TAILSCALE_SERVE must not drive the retired serve/teardown script during install or upgrade")
     expect("no Nextcloud runtime is available; install podman or docker compose before rotating credentials" in text,
            "credential rotation must fail before starting a missing Nextcloud runtime")
     print("PASS test_deploy_uses_effective_nextcloud_enablement_for_runtime_actions")
@@ -4469,6 +4620,7 @@ def main() -> int:
         test_qmd_refresh_bounds_embedding_work,
         test_qmd_refresh_falls_back_to_local_embedding_when_endpoint_provider_selected,
         test_qmd_refresh_forces_and_consumes_local_rebuild_flag,
+        test_qmd_refresh_atomically_rewrites_config_and_surfaces_embed_failure,
         test_placeholder_upstream_default_uses_checkout_origin,
         test_json_field_reads_json_payload,
         test_noninteractive_notion_webhook_setup_flow_fails_closed_until_verified,
@@ -4485,6 +4637,9 @@ def main() -> int:
         test_live_agent_tool_smoke_inspects_private_home_as_target_user,
         test_discord_onboarding_dedupes_message_ids_before_state_transitions,
         test_live_agent_tool_smoke_parses_explicit_selectors,
+        test_ci_workflow_runs_python_lint_before_direct_test_loop,
+        test_ci_preflight_lints_root_deploy_and_pins_pdf_backend,
+        test_live_agent_tool_smoke_opens_control_db_read_only,
         test_agent_install_payload_tracks_current_agent_contract,
         test_emit_runtime_config_persists_org_interview_fields,
         test_emit_runtime_config_persists_org_provider_fields,
@@ -4533,6 +4688,9 @@ def main() -> int:
         test_control_enrollment_submenu_and_secret_are_first_class,
         test_control_docker_bootstrap_seeds_session_hash_pepper_and_gateway_broker_token,
         test_control_upgrade_syncs_checkout_from_upstream_before_build,
+        test_component_upgrade_reexec_reads_operator_artifact_config_file_key,
+        test_init_bootstrap_defaults_to_canonical_repo_and_safe_printf,
+        test_operator_hermes_home_install_lock_has_timeout,
         test_ensure_prereqs_ready_fake_system_is_noop,
         test_ensure_prereqs_check_only_plans_missing_without_mutation,
         test_ensure_prereqs_fake_install_uses_packages_and_get_docker_idiom,
@@ -4548,6 +4706,7 @@ def main() -> int:
         test_curator_gateway_defaults_reactions_on,
         test_restart_services_disables_only_curator_native_system_gateway_unit,
         test_tailscale_serve_command_timeout_surfaces_enablement_guidance,
+        test_retired_tailscale_serve_flag_does_not_unserve_during_deploy,
         test_tailscale_funnel_command_timeout_surfaces_enablement_guidance,
         test_mcp_exposes_user_owned_ssot_preflight_and_approval_tools,
         test_control_py_discovers_artifact_priv_dir_config,
@@ -4561,6 +4720,7 @@ def main() -> int:
         test_upgrade_refuses_non_arclink_branch_without_explicit_override,
         test_install_answer_file_has_exit_trap_cleanup,
         test_ci_install_smoke_force_removes_auto_provision_user,
+        test_ci_install_smoke_reports_teardown_residue_on_failure_path,
         test_ci_install_smoke_dashboard_login_uses_root_path_for_subpaths,
         test_ci_install_smoke_rate_limit_uses_actual_loopback_bucket,
         test_ci_install_smoke_admin_auth_respects_loopback_source_policy,

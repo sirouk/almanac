@@ -9582,10 +9582,35 @@ def mark_notification_delivered(conn: sqlite3.Connection, notification_id: int) 
     conn.commit()
 
 
+def notification_error_retry_delay_seconds(attempts: int) -> int:
+    step = max(1, int(attempts))
+    delay = 60 * (2 ** max(0, step - 1))
+    return max(60, min(3600, delay))
+
+
 def mark_notification_error(conn: sqlite3.Connection, notification_id: int, error: str) -> None:
+    row = conn.execute(
+        "SELECT attempt_count FROM notification_outbox WHERE id = ?",
+        (notification_id,),
+    ).fetchone()
+    attempts = int(row["attempt_count"] or 0) + 1 if row is not None else 1
+    now_iso = utc_now_iso()
     conn.execute(
-        "UPDATE notification_outbox SET delivery_error = ? WHERE id = ?",
-        (error[:500], notification_id),
+        """
+        UPDATE notification_outbox
+        SET attempt_count = ?,
+            last_attempt_at = ?,
+            next_attempt_at = ?,
+            delivery_error = ?
+        WHERE id = ?
+        """,
+        (
+            attempts,
+            now_iso,
+            utc_after_seconds_iso(notification_error_retry_delay_seconds(attempts)),
+            error[:500],
+            notification_id,
+        ),
     )
     conn.commit()
 
@@ -9597,11 +9622,14 @@ def fetch_undelivered_notifications(
     include_user_agent: bool = True,
     include_curator: bool = True,
 ) -> list[dict[str, Any]]:
-    where = ["delivered_at IS NULL"]
+    now_iso = utc_now_iso()
+    where = ["delivered_at IS NULL", "(next_attempt_at IS NULL OR next_attempt_at = '' OR next_attempt_at <= ?)"]
+    params: list[Any] = [now_iso]
     if not include_user_agent:
         where.append("target_kind != 'user-agent'")
     if not include_curator:
         where.append("target_kind != 'curator'")
+    params.append(limit)
     rows = conn.execute(
         f"""
         SELECT id, target_kind, target_id, channel_kind, message, extra_json, created_at, delivery_error,
@@ -9617,7 +9645,7 @@ def fetch_undelivered_notifications(
           id ASC
         LIMIT ?
         """,
-        (limit,),
+        tuple(params),
     ).fetchall()
     return [dict(row) for row in rows]
 
@@ -18766,10 +18794,9 @@ def write_managed_memory_stubs(
     when encountered, but ArcLink no longer writes dynamic recall stubs through
     Hermes memory files.
 
-    `SOUL.md` remains the durable onboarding/orientation prompt. It is
-    materialized only when the payload carries org-profile agent context; a
-    dynamic refresh without org-profile context does not clear an existing
-    `SOUL.md` overlay.
+    `SOUL.md` remains the durable onboarding/orientation prompt. Org-profile
+    overlays are materialized when the payload carries agent context and cleared
+    when the payload no longer carries org-profile context.
 
     Returns the paths written. Called from the user-agent-refresh context
     running as the enrollment user - never from the central curator (which runs
@@ -18902,13 +18929,17 @@ def write_managed_memory_stubs(
 
     org_profile_context = payload.get("org_profile_agent_context")
     org_profile_paths: dict[str, Any] = {}
-    if isinstance(org_profile_context, dict) and org_profile_context:
-        try:
+    try:
+        if isinstance(org_profile_context, dict) and org_profile_context:
             from arclink_org_profile import materialize_agent_context
 
             org_profile_paths = materialize_agent_context(hermes_home, org_profile_context)
-        except Exception as exc:  # noqa: BLE001
-            org_profile_paths = {"org_profile_error": str(exc)}
+        else:
+            from arclink_org_profile import clear_materialized_agent_context
+
+            org_profile_paths = clear_materialized_agent_context(hermes_home)
+    except Exception as exc:  # noqa: BLE001
+        org_profile_paths = {"org_profile_error": str(exc)}
 
     org_profile_changed = bool(org_profile_paths.get("changed")) if org_profile_paths else False
     result = {

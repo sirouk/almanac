@@ -99,7 +99,7 @@ db_path = sys.argv[1]
 target_unix_user = (sys.argv[2] or "").strip()
 target_agent_selector = (sys.argv[3] or "").strip().lower()
 
-conn = sqlite3.connect(db_path)
+conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
 conn.row_factory = sqlite3.Row
 query = """
     SELECT agent_id, unix_user, hermes_home, display_name

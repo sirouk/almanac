@@ -22,6 +22,7 @@ from arclink_control import (
     arclink_refuel_topup_options,
     append_arclink_audit,
     append_arclink_event,
+    config_env_value,
     parse_utc_iso,
     quote_arclink_refuel_topup,
     queue_notification,
@@ -268,14 +269,14 @@ def hash_share_request_broker_token(token: str) -> str:
 
 
 def _truthy_env(name: str) -> bool:
-    return str(os.environ.get(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+    return str(config_env_value(name, "")).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _session_hash_pepper() -> str:
-    pepper = str(os.environ.get("ARCLINK_SESSION_HASH_PEPPER") or "").strip()
+    pepper = str(config_env_value("ARCLINK_SESSION_HASH_PEPPER", "") or "").strip()
     if pepper:
         return pepper
-    base_domain = str(os.environ.get("ARCLINK_BASE_DOMAIN") or "").strip().lower()
+    base_domain = str(config_env_value("ARCLINK_BASE_DOMAIN", "") or "").strip().lower()
     production_domain = bool(
         base_domain
         and base_domain not in {"localhost", "127.0.0.1", "example.test"}

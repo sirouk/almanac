@@ -305,7 +305,7 @@ def _validated_pin_upgrade(item: dict[str, Any]) -> tuple[str, str, str]:
 
 def _pin_upgrade_command(component_upgrade: Path, item: dict[str, Any]) -> list[str]:
     component, flag, target = _validated_pin_upgrade(item)
-    return [str(component_upgrade), component, "apply", flag, target, "--skip-upgrade"]
+    return [str(component_upgrade), component, "apply", flag, target, "--skip-push", "--skip-upgrade"]
 
 
 def _validate_request(request_body: dict[str, Any], *, repo_dir: Path, priv_dir: Path) -> dict[str, Any]:
@@ -396,7 +396,11 @@ def _run_request(request_body: dict[str, Any], *, repo_dir: Path, priv_dir: Path
             handle.write("All requested pinned components were already current; skipping deploy upgrade.\n")
             handle.flush()
             return int(last_result.returncode if last_result is not None else 0)
-        last_result = _run_logged_command(handle, [str(deploy), "upgrade"], cwd=repo_dir, env=env, timeout_seconds=timeout_seconds)
+        deploy_env = dict(env)
+        deploy_env["ARCLINK_CONTROL_UPGRADE_ALLOW_DIRTY"] = "1"
+        handle.write("Applying queued pin changes from the local checkout without pushing upstream.\n")
+        handle.flush()
+        last_result = _run_logged_command(handle, [str(deploy), "upgrade"], cwd=repo_dir, env=deploy_env, timeout_seconds=timeout_seconds)
         return int(last_result.returncode if last_result is not None else 0)
 
 

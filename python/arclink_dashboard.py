@@ -533,6 +533,23 @@ def _env_present_with_alternates(
     return any(str(env.get(alt, "")).strip() for alt in alternates.get(key, ()))
 
 
+def _latest_evidence_status_from_env(env: Mapping[str, str]) -> dict[str, Any]:
+    db_path = Path(str(env.get("ARCLINK_DB_PATH") or "").strip())
+    if not str(db_path) or not db_path.is_file():
+        return {"status": "pending", "run_id": "", "note": "no evidence runs recorded"}
+    try:
+        from arclink_evidence import latest_evidence_status
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            return latest_evidence_status(conn)
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "unknown", "run_id": "", "note": f"could not read evidence status: {exc}"}
+
+
 def build_operator_snapshot(
     *,
     env: dict[str, str] | None = None,
@@ -565,6 +582,7 @@ def build_operator_snapshot(
 
     all_journey_creds_present = len(journey_blockers) == 0
     template_state = operator_evidence_template_state(env_source)
+    latest_evidence = _latest_evidence_status_from_env(env_source)
 
     return {
         "host_readiness": readiness.to_dict(),
@@ -578,6 +596,7 @@ def build_operator_snapshot(
         "evidence": {
             "template_ready": template_state["ready"],
             "template": template_state,
+            "latest_run": latest_evidence,
             "credentialed_evidence": "missing" if not all_journey_creds_present else "pending_run",
             "live_proof": "blocked" if not all_journey_creds_present else "pending_credentialed_run",
         },

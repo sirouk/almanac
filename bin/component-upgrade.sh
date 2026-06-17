@@ -512,12 +512,12 @@ reexec_upgrade() {
       discovered_config="$(
         (
           ARCLINK_OPERATOR_DEPLOYED_USER=""
-          ARCLINK_OPERATOR_DEPLOYED_REPO=""
+          ARCLINK_OPERATOR_DEPLOYED_REPO_DIR=""
           ARCLINK_OPERATOR_DEPLOYED_PRIV_DIR=""
-          ARCLINK_OPERATOR_DEPLOYED_CONFIG=""
+          ARCLINK_OPERATOR_DEPLOYED_CONFIG_FILE=""
           # shellcheck disable=SC1090
           source "$artifact"
-          printf '%s' "${ARCLINK_OPERATOR_DEPLOYED_CONFIG:-}"
+          printf '%s' "${ARCLINK_OPERATOR_DEPLOYED_CONFIG_FILE:-}"
         )
       )"
     fi

@@ -18,10 +18,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
 from arclink_http import http_request, parse_json_object
 
 
-VAULT_DIR = Path(os.environ["VAULT_DIR"]).resolve()
-MARKDOWN_DIR = Path(os.environ["PDF_INGEST_MARKDOWN_DIR"]).resolve()
-MANIFEST_DB = Path(os.environ["PDF_INGEST_MANIFEST_DB"]).resolve()
-STATUS_FILE = Path(os.environ["PDF_INGEST_STATUS_FILE"]).resolve()
+REQUIRED_ENV_VARS = (
+    "VAULT_DIR",
+    "PDF_INGEST_MARKDOWN_DIR",
+    "PDF_INGEST_MANIFEST_DB",
+    "PDF_INGEST_STATUS_FILE",
+)
+
+
+def require_env_path(name: str) -> Path:
+    value = os.environ.get(name)
+    if value:
+        return Path(value).resolve()
+    missing = [key for key in REQUIRED_ENV_VARS if not os.environ.get(key)]
+    raise SystemExit(
+        "pdf-ingest.py: missing required environment variable(s): "
+        + ", ".join(missing)
+        + "; run bin/pdf-ingest.sh or set the PDF ingest environment explicitly."
+    )
+
+
+VAULT_DIR = require_env_path("VAULT_DIR")
+MARKDOWN_DIR = require_env_path("PDF_INGEST_MARKDOWN_DIR")
+MANIFEST_DB = require_env_path("PDF_INGEST_MANIFEST_DB")
+STATUS_FILE = require_env_path("PDF_INGEST_STATUS_FILE")
 REQUESTED_EXTRACTOR = os.environ.get("PDF_INGEST_EXTRACTOR", "auto")
 NEXTCLOUD_VAULT_MOUNT_POINT = os.environ.get("NEXTCLOUD_VAULT_MOUNT_POINT", "/Vault")
 FORCE_DOCLING_OCR = os.environ.get("PDF_INGEST_DOCLING_FORCE_OCR", "0") == "1"

@@ -781,6 +781,32 @@ def test_operator_snapshot_honors_live_journey_env_alternates() -> None:
     print("PASS test_operator_snapshot_honors_live_journey_env_alternates")
 
 
+def test_operator_snapshot_reads_latest_evidence_status_from_db() -> None:
+    control = load_module("arclink_control.py", "arclink_control_dashboard_evidence_status_test")
+    evidence = load_module("arclink_evidence.py", "arclink_evidence_dashboard_status_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_evidence_status_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "arclink-control.sqlite3"
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            control.ensure_schema(conn)
+            ledger = evidence.EvidenceLedger(run_id="run_operator_snapshot", commit_hash="abc123")
+            ledger.add(evidence.EvidenceRecord(step_name="proof", status="passed", timestamp=1.0))
+            evidence.store_evidence_run(conn, ledger=ledger, deployment_id="arcdep_dash")
+        finally:
+            conn.close()
+
+        snapshot = dashboard.build_operator_snapshot(
+            env={"ARCLINK_DB_PATH": str(db_path)},
+            docker_binary="arclink-test-missing-docker-binary",
+        )
+    latest = snapshot["evidence"]["latest_run"]
+    expect(latest["status"] == "passed", str(latest))
+    expect(latest["run_id"] == "run_operator_snapshot", str(latest))
+    print("PASS test_operator_snapshot_reads_latest_evidence_status_from_db")
+
+
 def test_user_dashboard_canonicalizes_tailnet_path_app_urls() -> None:
     control = load_module("arclink_control.py", "arclink_control_dashboard_tailnet_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_tailnet_test")
@@ -1165,6 +1191,7 @@ def main() -> int:
     test_backup_verification_state_records_failed_closed_without_activation()
     test_operator_evidence_template_state_is_computed_from_template_file()
     test_operator_snapshot_honors_live_journey_env_alternates()
+    test_operator_snapshot_reads_latest_evidence_status_from_db()
     test_user_dashboard_canonicalizes_tailnet_path_app_urls()
     test_user_dashboard_withholds_unpublished_tailnet_app_urls()
     test_user_dashboard_withholds_tailnet_urls_until_publication_record_exists()

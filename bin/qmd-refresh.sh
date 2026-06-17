@@ -29,6 +29,7 @@ ensure_nvm
 
 clear_qmd_embed_force_flag() {
   local config="${CONFIG_FILE:-}"
+  local mode=""
   local old_umask=""
   local temp=""
 
@@ -36,9 +37,12 @@ clear_qmd_embed_force_flag() {
     return 0
   fi
 
-  temp="${config}.tmp.$$"
   old_umask="$(umask)"
   umask 077
+  temp="$(mktemp "${config}.tmp.XXXXXX")" || {
+    umask "$old_umask"
+    return 0
+  }
   if awk '
     BEGIN { cleared = 0 }
     /^QMD_EMBED_FORCE_ON_NEXT_REFRESH=/ {
@@ -54,13 +58,20 @@ clear_qmd_embed_force_flag() {
     }
   ' "$config" >"$temp"; then
     umask "$old_umask"
-    if cat "$temp" >"$config"; then
+    mode="$(stat -c '%a' "$config" 2>/dev/null || true)"
+    if [[ -n "$mode" ]]; then
+      chmod "$mode" "$temp" 2>/dev/null || true
+    fi
+    if mv -f "$temp" "$config"; then
+      temp=""
       QMD_EMBED_FORCE_ON_NEXT_REFRESH=0
     fi
   else
     umask "$old_umask"
   fi
-  rm -f "$temp"
+  if [[ -n "$temp" ]]; then
+    rm -f "$temp"
+  fi
 }
 
 run_qmd_embed() {
@@ -104,10 +115,10 @@ run_qmd_embed() {
     fi
     if [[ "$rc" == "124" || "$rc" == "137" ]]; then
       echo "QMD embedding timed out after ${timeout_seconds}s; text index is updated and embeddings will retry on the next refresh." >&2
-      return 0
+      return "$rc"
     fi
     echo "QMD embedding exited with status $rc; text index is updated and embeddings will retry on the next refresh." >&2
-    return 0
+    return "$rc"
   fi
 
   if "${embed_cmd[@]}"; then
@@ -116,6 +127,7 @@ run_qmd_embed() {
   else
     rc=$?
     echo "QMD embedding exited with status $rc; text index is updated and embeddings will retry on the next refresh." >&2
+    return "$rc"
   fi
 }
 
@@ -125,11 +137,14 @@ flock 9
 configure_qmd_collections
 qmd --index "$QMD_INDEX_NAME" update
 
+embed_status=0
 if [[ "$run_embed" == "1" ]]; then
-  run_qmd_embed
+  run_qmd_embed || embed_status=$?
 fi
 
 # Track how long documents have been waiting for embeddings so a quietly
 # starved embed lane surfaces as a health/diagnostics warning instead of
 # leaving vector search stale indefinitely.
 qmd_note_pending_embeddings_state || true
+
+exit "$embed_status"

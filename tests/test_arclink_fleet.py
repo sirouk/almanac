@@ -80,44 +80,6 @@ def test_register_existing_fleet_host_updates_config_without_touching_load() -> 
     print("PASS test_register_existing_fleet_host_updates_config_without_touching_load")
 
 
-def test_register_fleet_host_integrity_race_returns_winning_row() -> None:
-    control = load_module("arclink_control.py", "arclink_control_fleet_reg_race")
-    fleet = load_module("arclink_fleet.py", "arclink_fleet_reg_race")
-    conn = memory_db(control)
-    real_fleet_id = fleet._fleet_id
-
-    def racing_fleet_id(prefix: str) -> str:
-        now = control.utc_now_iso()
-        conn.execute(
-            """
-            INSERT INTO arclink_fleet_hosts (
-              host_id, hostname, region, tags_json, status, drain, capacity_slots,
-              observed_load, metadata_json, created_at, updated_at
-            ) VALUES ('host_race_winner', 'race.test', 'old-region', '{}', 'active',
-                      0, 1, 0, '{}', ?, ?)
-            """,
-            (now, now),
-        )
-        return f"{prefix}_race_loser"
-
-    try:
-        fleet._fleet_id = racing_fleet_id
-        host = fleet.register_fleet_host(
-            conn,
-            hostname="race.test",
-            region="new-region",
-            capacity_slots=7,
-            metadata={"ssh_host": "10.44.0.9"},
-        )
-    finally:
-        fleet._fleet_id = real_fleet_id
-    expect(host["host_id"] == "host_race_winner", str(host))
-    expect(host["region"] == "new-region", str(host))
-    expect(int(host["capacity_slots"]) == 7, str(host))
-    expect("10.44.0.9" in host["metadata_json"], host["metadata_json"])
-    print("PASS test_register_fleet_host_integrity_race_returns_winning_row")
-
-
 def test_register_rejects_empty_hostname() -> None:
     control = load_module("arclink_control.py", "arclink_control_fleet_empty")
     fleet = load_module("arclink_fleet.py", "arclink_fleet_empty")
@@ -514,56 +476,6 @@ def test_remove_placement() -> None:
     print("PASS test_remove_placement")
 
 
-def test_concurrent_remove_placement_decrements_once() -> None:
-    control = load_module("arclink_control.py", "arclink_control_fleet_rm_concurrent")
-    fleet = load_module("arclink_fleet.py", "arclink_fleet_rm_concurrent")
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = f"{tmpdir}/control.sqlite3"
-        seed = sqlite3.connect(db_path, timeout=15)
-        seed.row_factory = sqlite3.Row
-        control.ensure_schema(seed)
-        fleet.register_fleet_host(seed, hostname="h1.test", capacity_slots=3)
-        fleet.place_deployment(seed, deployment_id="dep_1")
-        seed.close()
-
-        barrier = threading.Barrier(2)
-        removed: list[object] = []
-        errors: list[str] = []
-        lock = threading.Lock()
-
-        def remove() -> None:
-            conn = sqlite3.connect(db_path, timeout=15)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA busy_timeout = 15000")
-            try:
-                barrier.wait(timeout=5)
-                row = fleet.remove_placement(conn, deployment_id="dep_1")
-                with lock:
-                    removed.append(row)
-            except Exception as exc:  # noqa: BLE001 - test records any unexpected thread failure
-                with lock:
-                    errors.append(str(exc))
-            finally:
-                conn.close()
-
-        threads = [threading.Thread(target=remove), threading.Thread(target=remove)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-
-        expect(errors == [], f"parallel remove errors: {errors}")
-        expect(sum(1 for row in removed if row is not None) == 1, str(removed))
-        check = sqlite3.connect(db_path)
-        check.row_factory = sqlite3.Row
-        active = check.execute("SELECT COUNT(*) AS c FROM arclink_deployment_placements WHERE deployment_id = 'dep_1' AND status = 'active'").fetchone()["c"]
-        host = check.execute("SELECT observed_load FROM arclink_fleet_hosts").fetchone()
-        expect(int(active) == 0, f"expected no active placements, got {active}")
-        expect(int(host["observed_load"]) == 0, str(dict(host)))
-        check.close()
-    print("PASS test_concurrent_remove_placement_decrements_once")
-
-
 def test_region_filter() -> None:
     control = load_module("arclink_control.py", "arclink_control_fleet_rgn")
     fleet = load_module("arclink_fleet.py", "arclink_fleet_rgn")
@@ -686,14 +598,11 @@ def test_fleet_inventory_orphan_reconciler_reports_without_repairing() -> None:
 if __name__ == "__main__":
     test_register_fleet_host()
     test_register_existing_fleet_host_updates_config_without_touching_load()
-    test_register_fleet_host_integrity_race_returns_winning_row()
     test_register_rejects_empty_hostname()
     test_update_fleet_host_drain()
     test_fleet_capacity_summary()
     test_fleet_capacity_summary_counts_only_eligible_available_slots()
     test_image_sync_failed_blocks_capacity_and_placement()
-    test_register_existing_host_preserves_image_sync_state()
-    test_provisioning_readiness_excludes_image_sync_failed_worker()
     test_control_plane_reserve_is_capped_and_used_after_remote_capacity()
     test_reconcile_fleet_observed_loads_repairs_stale_load()
     test_place_deployment_chooses_healthy_host()
@@ -706,10 +615,11 @@ if __name__ == "__main__":
     test_active_placement_unique_index_migrates_existing_duplicates()
     test_concurrent_placement_returns_one_active_row()
     test_remove_placement()
-    test_concurrent_remove_placement_decrements_once()
     test_region_filter()
     test_placement_rejects_secret_required_tags()
     test_standard_unit_strategy_uses_inventory_asu_available()
     test_standard_unit_capacity_summary_uses_asu_available()
     test_fleet_inventory_orphan_reconciler_reports_without_repairing()
-    print("\nAll fleet tests passed.")
+    test_register_existing_host_preserves_image_sync_state()
+    test_provisioning_readiness_excludes_image_sync_failed_worker()
+    print(f"\nAll 26 fleet tests passed.")

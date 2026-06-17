@@ -2761,7 +2761,17 @@ def test_operator_upgrade_broker_skips_deploy_when_pin_upgrade_noops() -> None:
         expect(payload.get("returncode") == 0, str(payload))
         expect(
             captured
-            == [[str(repo / "bin" / "component-upgrade.sh"), "hermes-agent", "apply", "--ref", "abc123", "--skip-upgrade"]],
+            == [
+                [
+                    str(repo / "bin" / "component-upgrade.sh"),
+                    "hermes-agent",
+                    "apply",
+                    "--ref",
+                    "abc123",
+                    "--skip-push",
+                    "--skip-upgrade",
+                ]
+            ],
             str(captured),
         )
         log_text = log_path.read_text(encoding="utf-8")
@@ -2769,6 +2779,67 @@ def test_operator_upgrade_broker_skips_deploy_when_pin_upgrade_noops() -> None:
         expect("skipping deploy upgrade" in log_text and "deploy.sh upgrade" not in log_text, log_text)
         expect(not requested_log_path.exists(), "container-style operator log path should be mapped to the host private bind")
     print("PASS test_operator_upgrade_broker_skips_deploy_when_pin_upgrade_noops")
+
+
+def test_operator_upgrade_host_runner_pin_changes_do_not_push_upstream() -> None:
+    runner = load_python_module(
+        PYTHON_DIR / "arclink_operator_upgrade_host_runner.py",
+        "arclink_operator_upgrade_host_runner_pin_local_test",
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo = root / "repo"
+        priv = root / "arclink-priv"
+        log_path = priv / "state" / "operator-actions" / "pin-upgrade.log"
+        marker = root / "commands.txt"
+        (repo / "bin").mkdir(parents=True)
+        (priv / "state" / "operator-actions").mkdir(parents=True)
+        (priv / "config").mkdir(parents=True)
+        (repo / "deploy.sh").write_text(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            f"printf 'deploy %s allow_dirty=%s\\n' \"$1\" \"${{ARCLINK_CONTROL_UPGRADE_ALLOW_DIRTY:-}}\" >> {shlex.quote(str(marker))}\n",
+            encoding="utf-8",
+        )
+        (repo / "bin" / "component-upgrade.sh").write_text(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            f"printf 'component %s\\n' \"$*\" >> {shlex.quote(str(marker))}\n"
+            "if [[ \"$*\" == *--skip-push* ]]; then echo 'skip-push-ok'; else echo 'missing skip-push' >&2; exit 2; fi\n"
+            "echo 'ARCLINK_COMPONENT_UPGRADE_STATUS=changed'\n",
+            encoding="utf-8",
+        )
+        (repo / "deploy.sh").chmod(0o755)
+        (repo / "bin" / "component-upgrade.sh").chmod(0o755)
+
+        result = runner._run_request(
+            {
+                "schema_version": 1,
+                "request_id": "op-pinlocal-0001",
+                "operation": "run_pin_upgrade",
+                "repo_dir": str(repo),
+                "priv_dir": str(priv),
+                "log_path": str(log_path),
+                "timeout_seconds": 30,
+                "install_items": [{"component": "hermes-agent", "kind": "git-commit", "target": "abc123"}],
+            },
+            repo_dir=repo,
+            priv_dir=priv,
+        )
+
+        expect(result == 0, str(result))
+        marker_lines = marker.read_text(encoding="utf-8").splitlines()
+        expect(
+            marker_lines
+            == [
+                "component hermes-agent apply --ref abc123 --skip-push --skip-upgrade",
+                "deploy upgrade allow_dirty=1",
+            ],
+            str(marker_lines),
+        )
+        log_text = log_path.read_text(encoding="utf-8")
+        expect("without pushing upstream" in log_text, log_text)
+    print("PASS test_operator_upgrade_host_runner_pin_changes_do_not_push_upstream")
 
 
 def test_operator_upgrade_host_runner_executes_full_host_path_and_noop_pin_skip() -> None:
@@ -6751,6 +6822,7 @@ def test_docker_operator_commands_are_present() -> None:
         "Docker record-release should refresh upgrade-check DB state so health does not false-warn after a clean upgrade",
     )
     expect("docker_live_agent_smoke()" in body and "./bin/live-agent-tool-smoke.sh" in body, body)
+    expect('[[ ! -x "$REPO_DIR/bin/live-agent-tool-smoke.sh" ]]' in body, body)
     expect("COMPOSE_PROFILES=curator,quarto,backup" in body, body)
     expect("FAIL Docker Compose config is valid, but no ArcLink services are running." in body, body)
     expect("docker_enrollment_status()" in body, body)
@@ -6791,6 +6863,57 @@ def test_docker_operator_commands_are_present() -> None:
     expect("docker health passed" not in body.lower() or "Docker health passed." in body, body)
     expect("redact_output" in job_loop and 'cat "$output_file"' not in job_loop, "Docker job loop must redact failure output before logs/state")
     print("PASS test_docker_operator_commands_are_present")
+
+
+def test_docker_job_loop_redacts_arclink_tokens_and_writes_atomic_status_schema() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        status_dir = Path(tmp) / "jobs"
+        result = subprocess.run(
+            [
+                "timeout",
+                "5",
+                "bash",
+                str(REPO / "bin" / "docker-job-loop.sh"),
+                "redaction-test",
+                "60",
+                "bash",
+                "-lc",
+                "\n".join(
+                    (
+                        "printf '%s\\n' 'ARCLINK_GATEWAY_EXEC_BROKER_TOKEN=secretvalue123'",
+                        "printf '%s\\n' 'broker_token=brokersecret456'",
+                        "printf '%s\\n' 'my_secret=hunter2'",
+                        "printf '%s\\n' 'Authorization: Bearer tok_abc123'",
+                        "exit 7",
+                    )
+                ),
+            ],
+            cwd=REPO,
+            env={**os.environ, "ARCLINK_DOCKER_JOB_STATUS_DIR": str(status_dir)},
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+        expect(result.returncode == 124, f"job loop should be killed during sleep: {result.returncode}")
+        combined = result.stdout + result.stderr
+        for leaked in ("secretvalue123", "brokersecret456", "hunter2", "tok_abc123"):
+            expect(leaked not in combined, f"job stderr leaked {leaked!r}: {combined!r}")
+        expect("ARCLINK_GATEWAY_EXEC_BROKER_TOKEN=[REDACTED]" in combined, combined)
+        expect("broker_token=[REDACTED]" in combined, combined)
+        expect("my_secret=[REDACTED]" in combined, combined)
+        expect("Authorization: Bearer [REDACTED]" in combined, combined)
+
+        payload = json.loads((status_dir / "redaction-test.json").read_text(encoding="utf-8"))
+        expect(payload.get("job") == "redaction-test", str(payload))
+        expect(payload.get("job_name") == "redaction-test", str(payload))
+        expect(payload.get("returncode") == 7, str(payload))
+        expect(payload.get("exit_code") == 7, str(payload))
+        output_tail = str(payload.get("output_tail") or "")
+        for leaked in ("secretvalue123", "brokersecret456", "hunter2", "tok_abc123"):
+            expect(leaked not in output_tail, f"status output_tail leaked {leaked!r}: {output_tail!r}")
+        expect(not list(status_dir.glob(".redaction-test.json.*")), "atomic status temp file was left behind")
+    print("PASS test_docker_job_loop_redacts_arclink_tokens_and_writes_atomic_status_schema")
 
 
 def test_docker_repair_backfills_dashboard_sso_and_crew_links() -> None:
@@ -7315,7 +7438,7 @@ docker_publish_tailnet_deployment_apps
             capture_output=True,
             check=False,
         )
-        expect(result.returncode == 0, f"tailnet publish failure probe failed: stdout={result.stdout!r} stderr={result.stderr!r}")
+        expect(result.returncode == 1, f"tailnet publish failure should now fail closed: stdout={result.stdout!r} stderr={result.stderr!r}")
         with sqlite3.connect(db_path) as conn:
             metadata = json.loads(conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()[0])
         expect(metadata["tailnet_app_publication"]["status"] == "unavailable", str(metadata))
@@ -7924,18 +8047,18 @@ def test_docker_entrypoint_generates_fresh_secrets() -> None:
         'repair_placeholder_secret NEXTCLOUD_ADMIN_PASSWORD "$PRIV_DIR/state/nextcloud/html/config/config.php"' in body,
         body,
     )
-    expect("POSTGRES_PASSWORD=$postgres_password" in body, body)
-    expect("NEXTCLOUD_ADMIN_PASSWORD=$nextcloud_admin_password" in body, body)
-    expect("ARCLINK_AGENT_USER_HELPER_TOKEN=$agent_user_helper_token" in body, body)
+    expect("POSTGRES_PASSWORD=$q_postgres_password" in body, body)
+    expect("NEXTCLOUD_ADMIN_PASSWORD=$q_nextcloud_admin_password" in body, body)
+    expect("ARCLINK_AGENT_USER_HELPER_TOKEN=$q_agent_user_helper_token" in body, body)
     expect("set_config_value ARCLINK_AGENT_USER_HELPER_TOKEN" in body, body)
-    expect("ARCLINK_AGENT_PROCESS_HELPER_TOKEN=$agent_process_helper_token" in body, body)
+    expect("ARCLINK_AGENT_PROCESS_HELPER_TOKEN=$q_agent_process_helper_token" in body, body)
     expect("set_config_value ARCLINK_AGENT_PROCESS_HELPER_TOKEN" in body, body)
-    expect("ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN=$operator_upgrade_broker_token" in body, body)
+    expect("ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN=$q_operator_upgrade_broker_token" in body, body)
     expect("set_config_value ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN" in body, body)
-    expect("ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN=$migration_capture_helper_token" in body, body)
+    expect("ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN=$q_migration_capture_helper_token" in body, body)
     expect("set_config_value ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN" in body, body)
     expect("local trusted_host_risk_accepted=" in body, body)
-    expect(f"{TRUSTED_HOST_RISK_ENV}=$trusted_host_risk_accepted" in body, body)
+    expect(f"{TRUSTED_HOST_RISK_ENV}=$q_trusted_host_risk_accepted" in body, body)
     expect(f"{TRUSTED_HOST_RISK_ENV}={TRUSTED_HOST_RISK_ACCEPTED}" not in body, body)
     docker_wrapper = read("bin/arclink-docker.sh")
     deploy = read("bin/deploy.sh")
@@ -7958,12 +8081,12 @@ def test_docker_entrypoint_generates_fresh_secrets() -> None:
         "Docker entrypoint must skip template seeding when split private mounts make the arclink-priv parent unwritable",
     )
     expect(
-        "unable to write Docker config" in body and "split private mounts may provide runtime config through Compose" in body,
-        "Docker entrypoint must not crash when split private mounts make the generated config path unwritable",
+        "unable to write Docker config" in body and "refusing to start with missing or stale runtime config" in body,
+        "Docker entrypoint must fail closed when it cannot create the generated config",
     )
     expect(
-        "unable to repair Docker config secrets" in body and "split private mounts may provide sealed runtime values" in body,
-        "Docker entrypoint must not crash when split private mounts make config secret repair impossible",
+        "config_has_placeholder_secrets" in body and "one or more required secrets are placeholders" in body,
+        "Docker entrypoint must fail closed when read-only config still has placeholder secrets",
     )
     expect(
         "unable to create Nextcloud data directory" in body and "split private mounts may provide it to the Nextcloud service" in body,
@@ -7972,6 +8095,50 @@ def test_docker_entrypoint_generates_fresh_secrets() -> None:
     expect('[[ -d "$live_data" && ! -w "$live_data" ]]' in body, body)
     expect('[[ ! -w "$(dirname "$nextcloud_config")" ]]' in body, body)
     print("PASS test_docker_entrypoint_generates_fresh_secrets")
+
+
+def test_docker_entrypoint_quotes_generated_config_values() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo = root / "repo with spaces"
+        priv = root / "priv with spaces"
+        config = priv / "config" / "docker.env"
+        sentinel = root / "should-not-exist"
+        repo.mkdir(parents=True)
+        result = subprocess.run(
+            [
+                "bash",
+                str(REPO / "bin" / "docker-entrypoint.sh"),
+                "bash",
+                "-lc",
+                "source \"$ARCLINK_CONFIG_FILE\"; printf 'pg=%s\\nnc=%s\\nrepo=%s\\n' "
+                "\"$POSTGRES_PASSWORD\" \"$NEXTCLOUD_ADMIN_PASSWORD\" \"$ARCLINK_REPO_DIR\"",
+            ],
+            cwd=REPO,
+            env={
+                **os.environ,
+                "ARCLINK_REPO_DIR": str(repo),
+                "ARCLINK_PRIV_DIR": str(priv),
+                "ARCLINK_PRIV_CONFIG_DIR": str(priv / "config"),
+                "ARCLINK_CONFIG_FILE": str(config),
+                "ARCLINK_DOCKER_CONFIG_REPO_DIR": str(repo),
+                "ARCLINK_DOCKER_CONFIG_PRIV_DIR": str(priv),
+                "POSTGRES_PASSWORD": f"pg value; $(touch {sentinel})",
+                "NEXTCLOUD_ADMIN_PASSWORD": "nextcloud value with spaces",
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+        expect(result.returncode == 0, f"entrypoint quote test failed: stdout={result.stdout!r} stderr={result.stderr!r}")
+        expect(f"pg=pg value; $(touch {sentinel})" in result.stdout, result.stdout)
+        expect("nc=nextcloud value with spaces" in result.stdout, result.stdout)
+        expect(f"repo={repo}" in result.stdout, result.stdout)
+        expect(not sentinel.exists(), "sourcing generated docker.env executed a secret value")
+        body = config.read_text(encoding="utf-8")
+        expect("POSTGRES_PASSWORD=pg\\ value\\;" in body and "$(" not in body.replace("\\$(", ""), body)
+    print("PASS test_docker_entrypoint_quotes_generated_config_values")
 
 
 def test_docker_entrypoint_runtime_env_config_preserves_pod_paths_without_secret_spill() -> None:
@@ -8073,8 +8240,31 @@ def test_docker_health_script_checks_container_runtime() -> None:
 def test_docker_control_health_requires_fleet_workers_running() -> None:
     body = read("bin/arclink-docker.sh")
     required = extract(body, "DOCKER_REQUIRED_RUNNING_SERVICES=(", ")\nDOCKER_PORT_MANIFEST")
-    expect("fleet-inventory-worker" in required, required)
-    expect("fleet-share-reconcile" in required, required)
+    for service in (
+        "fleet-inventory-worker",
+        "fleet-share-reconcile",
+        "deployment-exec-broker",
+        "migration-capture-helper",
+        "agent-user-helper",
+        "agent-process-helper",
+        "agent-supervisor-broker",
+        "operator-upgrade-broker",
+        "gateway-exec-broker",
+    ):
+        expect(service in required, f"Docker control health must require running service {service}\n{required}")
+    health_body = extract(body, "health() {", "\ndocker_host_priv_path() {")
+    for probe in (
+        "http://127.0.0.1:8912/health",
+        "http://127.0.0.1:8914/health",
+        "http://127.0.0.1:8915/health",
+        "http://127.0.0.1:8916/health",
+        "http://127.0.0.1:8913/health",
+        "http://127.0.0.1:8917/health",
+        "http://127.0.0.1:8911/health",
+    ):
+        expect(probe in health_body, f"Docker control health must directly probe broker/helper liveness {probe}\n{health_body}")
+    expect("docker_publish_tailnet_deployment_apps || true" not in health_body, health_body)
+    expect("docker_refresh_deployment_service_health || true" not in health_body, health_body)
     print("PASS test_docker_control_health_requires_fleet_workers_running")
 
 
@@ -8240,6 +8430,7 @@ def main() -> int:
     test_operator_upgrade_broker_runs_allowlisted_operator_upgrade()
     test_operator_upgrade_broker_queues_host_runner_by_default()
     test_operator_upgrade_broker_skips_deploy_when_pin_upgrade_noops()
+    test_operator_upgrade_host_runner_pin_changes_do_not_push_upstream()
     test_operator_upgrade_host_runner_executes_full_host_path_and_noop_pin_skip()
     test_operator_upgrade_host_runner_quarantines_bad_pending_files_and_expires_stale_requests()
     test_operator_upgrade_broker_signature_replay_cache_is_bounded()
@@ -8272,6 +8463,7 @@ def main() -> int:
     test_docker_agent_supervisor_rejects_unapproved_agent_process_env_keys()
     test_docker_agent_supervisor_delegates_process_launch_to_process_helper()
     test_docker_operator_commands_are_present()
+    test_docker_job_loop_redacts_arclink_tokens_and_writes_atomic_status_schema()
     test_docker_repair_backfills_dashboard_sso_and_crew_links()
     test_docker_repair_strips_control_network_for_remote_deployments()
     test_deployment_hermes_home_installer_seeds_runtime_knowledge()
@@ -8287,6 +8479,7 @@ def main() -> int:
     test_gateway_exec_broker_rejects_unsafe_docker_binary_before_subprocess()
     test_agent_supervisor_broker_rejects_unsafe_docker_binary_before_subprocess()
     test_docker_entrypoint_generates_fresh_secrets()
+    test_docker_entrypoint_quotes_generated_config_values()
     test_docker_entrypoint_runtime_env_config_preserves_pod_paths_without_secret_spill()
     test_docker_health_script_checks_container_runtime()
     test_docker_control_health_requires_fleet_workers_running()

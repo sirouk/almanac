@@ -80,4 +80,8 @@ cleanup() {
   kill "$qmd_pid" "$proxy_pid" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
-wait "$qmd_pid"
+set +e
+wait -n "$qmd_pid" "$proxy_pid"
+status="$?"
+set -e
+exit "$status"

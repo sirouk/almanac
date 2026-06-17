@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -55,10 +56,43 @@ def test_shell_common_reads_model_provider_defaults() -> None:
     print("PASS test_shell_common_reads_model_provider_defaults")
 
 
+def test_model_provider_config_version_is_enforced() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    from arclink_model_providers import provider_default_model, resolve_preset_target
+
+    with tempfile.TemporaryDirectory() as tmp:
+        config_path = Path(tmp) / "model-providers.yaml"
+        config_path.write_text(
+            "\n".join(
+                [
+                    "version: 2",
+                    "providers:",
+                    "  chutes:",
+                    "    target: chutes:custom-model",
+                    "    default_model: custom-model",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        env = {"ARCLINK_MODEL_PROVIDERS_FILE": str(config_path)}
+        expect(
+            provider_default_model("chutes", REPO, env) == "moonshotai/Kimi-K2.6-TEE",
+            "version 2 override must be ignored",
+        )
+        expect(
+            resolve_preset_target("chutes", "", REPO, env) == "chutes:moonshotai/Kimi-K2.6-TEE",
+            "version 2 target must be ignored",
+        )
+    print("PASS test_model_provider_config_version_is_enforced")
+
+
 def main() -> int:
     test_model_provider_yaml_defaults_are_authoritative()
     test_shell_common_reads_model_provider_defaults()
-    print("PASS all 2 model provider tests")
+    test_model_provider_config_version_is_enforced()
+    print("PASS all 3 model provider tests")
     return 0
 
 

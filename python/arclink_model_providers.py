@@ -61,6 +61,8 @@ def load_model_providers(repo_dir: Path | str | None = None, env: Mapping[str, s
     data = _load_yaml_file(model_providers_path(repo_dir, env))
     providers = data.get("providers") if isinstance(data, dict) else None
     merged = {key: dict(value) for key, value in DEFAULT_MODEL_PROVIDERS.items()}
+    if isinstance(data, dict) and data.get("version", 1) != 1:
+        return merged
     if isinstance(providers, dict):
         for key, value in providers.items():
             normalized_key = str(key or "").strip().lower()

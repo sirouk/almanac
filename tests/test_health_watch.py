@@ -90,7 +90,12 @@ def test_health_watch_notifies_on_changed_failures_and_recovery() -> None:
             cfg = control.Config.from_env()
             write_health_script(
                 health_script,
-                body="[ok]   qmd active\n[fail] arclink-github-backup.service last result is exit-code\n\nSummary: 1 ok, 0 warn, 1 fail",
+                body=(
+                    "[ok]   qmd active\n"
+                    "[fail] arclink-github-backup.service last result is exit-code\n"
+                    "[fail] backup token=ghp_aaaaaaaaaaaaaaaaaaaaaaaa leaked upstream\n\n"
+                    "Summary: 1 ok, 0 warn, 1 fail"
+                ),
                 exit_code=1,
             )
             first = health_watch.run_once(cfg, timeout_seconds=5)
@@ -100,6 +105,8 @@ def test_health_watch_notifies_on_changed_failures_and_recovery() -> None:
             expect(second["status"] == "fail" and second["notified"] is False, str(second))
             expect(len(messages) == 1, str(messages))
             expect("arclink-github-backup.service last result is exit-code" in messages[0], messages[0])
+            expect("ghp_aaaaaaaaaaaaaaaaaaaaaaaa" not in messages[0], messages[0])
+            expect("token=[REDACTED]" in messages[0], messages[0])
 
             write_health_script(
                 health_script,

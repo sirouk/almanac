@@ -103,14 +103,35 @@ esac
 
 validate_tar_members() {
   local archive="$1"
-  local member=""
-  while IFS= read -r member; do
-    case "$member" in
-      ""|/*|../*|*/../*|..|*/..)
-        die "archive contains unsafe path: $member"
-        ;;
-    esac
-  done < <(tar -tf "$archive")
+  python3 - "$archive" <<'PY'
+from __future__ import annotations
+
+import posixpath
+import sys
+import tarfile
+
+archive = sys.argv[1]
+
+
+def unsafe_path(name: str) -> bool:
+    if not name or name.startswith("/"):
+        return True
+    normalized = posixpath.normpath(name)
+    return normalized in ("", "..") or normalized.startswith("../") or "/../" in f"/{normalized}/"
+
+
+with tarfile.open(archive, "r:*") as tar:
+    for member in tar.getmembers():
+        if unsafe_path(member.name):
+            raise SystemExit(f"archive contains unsafe path: {member.name}")
+        if member.issym() or member.islnk():
+            linkname = member.linkname or ""
+            if unsafe_path(linkname):
+                raise SystemExit(f"archive contains unsafe link target: {member.name} -> {linkname}")
+            target = posixpath.normpath(posixpath.join(posixpath.dirname(member.name), linkname))
+            if unsafe_path(target):
+                raise SystemExit(f"archive contains escaping link target: {member.name} -> {linkname}")
+PY
 }
 
 restore_source() {

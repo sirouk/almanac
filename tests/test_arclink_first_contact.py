@@ -24,18 +24,20 @@ def write_fake_rpc(path: Path) -> None:
     path.write_text(
         "#!/usr/bin/env python3\n"
         "from __future__ import annotations\n"
-        "import argparse, json\n"
+        "import argparse, json, sys\n"
         "parser = argparse.ArgumentParser()\n"
         "parser.add_argument('--url', required=True)\n"
         "parser.add_argument('--tool', required=True)\n"
         "parser.add_argument('--json-args', default='{}')\n"
+        "parser.add_argument('--json-args-file')\n"
         "args = parser.parse_args()\n"
+        "raw_args = open(args.json_args_file, encoding='utf-8').read() if args.json_args_file and args.json_args_file != '-' else (sys.stdin.read() if args.json_args_file == '-' else (args.json_args or '{}'))\n"
         "if args.tool == 'catalog.vaults':\n"
         "    print(json.dumps({'vaults': [{'vault_name': 'Projects', 'subscribed': True, 'default_subscribed': True}]}))\n"
         "elif args.tool == 'vaults.refresh':\n"
         "    print(json.dumps({'active_subscriptions': ['Projects']}))\n"
         "elif args.tool == 'agents.managed-memory':\n"
-        "    print(json.dumps({'agent_id': 'agent-test', 'qmd-ref': 'ok', 'vault_path_contract': 'user-home-arclink-v1'}))\n"
+        "    print(json.dumps({'agent_id': 'agent-test', 'vault-ref': 'ok', 'qmd-ref': 'ok', 'vault-topology': '+ Projects', 'catalog': [], 'subscriptions': [], 'vault_path_contract': 'user-home-arclink-v1'}))\n"
         "elif args.tool == 'status':\n"
         "    print(json.dumps({'vault_warning_count': 0, 'vault_warnings': []}))\n"
         "elif args.tool == 'notion.search':\n"
@@ -185,6 +187,9 @@ def test_first_contact_runs_real_qmd_probe() -> None:
                         "resource-ref": "Canonical user access rails.",
                         "qmd-ref": "qmd MCP (deep retrieval): http://127.0.0.1:8181/mcp",
                         "notion-ref": "Shared Notion knowledge rail: notion.search / notion.fetch / notion.query.",
+                        "vault-topology": "+ Projects",
+                        "catalog": [{"vault_name": "Projects"}],
+                        "subscriptions": [{"vault_name": "Projects", "push_enabled": True}],
                         "vault_path_contract": "user-home-arclink-v1",
                     },
                     indent=2,
@@ -241,9 +246,21 @@ def test_first_contact_runs_real_qmd_probe() -> None:
         thread.join(timeout=5)
 
 
+def test_first_contact_validates_mcp_managed_memory_payload_before_writing_stubs() -> None:
+    body = SOURCE_SCRIPT.read_text(encoding="utf-8")
+    expect("validate_managed_payload()" in body, body)
+    expect('"vault-topology"' in body and '"catalog"' in body and '"subscriptions"' in body, body)
+    managed_call = body.index('--tool "agents.managed-memory"')
+    validation = body.index('validate_managed_payload "$managed_file"', managed_call)
+    stub_write = body.index("write_managed_memory_stubs", validation)
+    expect(managed_call < validation < stub_write, body[managed_call:stub_write])
+    print("PASS test_first_contact_validates_mcp_managed_memory_payload_before_writing_stubs")
+
+
 def main() -> int:
     test_first_contact_runs_real_qmd_probe()
-    print("PASS all 1 first-contact regression tests")
+    test_first_contact_validates_mcp_managed_memory_payload_before_writing_stubs()
+    print("PASS all 2 first-contact regression tests")
     return 0
 
 

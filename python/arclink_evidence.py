@@ -11,24 +11,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import sqlite3
 import subprocess
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from arclink_secrets_regex import REDACTION_TEXT, redact_secret_material
+
 
 # ---------------------------------------------------------------------------
 # Redaction
 # ---------------------------------------------------------------------------
-
-_SECRET_PATTERNS = (
-    re.compile(r"(sk_(?:live|test)_)[A-Za-z0-9_]+"),         # Stripe secret keys
-    re.compile(r"(whsec_)[A-Za-z0-9_]+"),                    # Stripe webhook secrets
-    re.compile(r"(rk_(?:live|test)_)[A-Za-z0-9_]+"),         # Stripe restricted keys
-    re.compile(r"([?&](?:api_?key|key|secret|token|password)=)[^&\s]+", re.I),
-)
 
 _SENSITIVE_KEY_PARTS = (
     "api_key",
@@ -67,10 +61,7 @@ def _is_sensitive_key(key: str) -> bool:
 
 def redact_text(value: str) -> str:
     """Redact known secret-looking substrings inside a larger string."""
-    redacted = value
-    for pattern in _SECRET_PATTERNS:
-        redacted = pattern.sub(lambda match: match.group(1) + "***", redacted)
-    return redacted
+    return redact_secret_material(value).replace(REDACTION_TEXT, "***")
 
 
 def redact_any(value: Any, *, key: str = "", sensitive_keys: set[str] | None = None) -> Any:

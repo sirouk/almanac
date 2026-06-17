@@ -30,6 +30,7 @@ from arclink_evidence import (
     generate_run_id,
     get_commit_hash,
     ledger_from_journey,
+    store_evidence_run,
 )
 from arclink_host_readiness import run_readiness
 from arclink_live_journey import (
@@ -471,14 +472,18 @@ def _browser_proof_runner(step_name: str, env: Mapping[str, str]) -> dict[str, A
     proof_env["ARCLINK_WORKSPACE_PROOF_VIEWPORT"] = viewport
     proof_env["ARCLINK_WORKSPACE_PROOF_URL"] = _workspace_proof_url(str(env.get("ARCLINK_WORKSPACE_PROOF_TLS_URL") or ""), plugin)
     proof_env.setdefault("ARCLINK_WORKSPACE_PROOF_SCREENSHOT_DIR", "../evidence/workspace-screenshots")
-    with tempfile.TemporaryDirectory(prefix=".arclink-workspace-proof-", dir=str(_REPO_ROOT / "web")) as tmp:
+    web_root = _REPO_ROOT / "web"
+    temp_kwargs: dict[str, Any] = {"prefix": ".arclink-workspace-proof-"}
+    if os.access(web_root, os.W_OK):
+        temp_kwargs["dir"] = str(web_root)
+    with tempfile.TemporaryDirectory(**temp_kwargs) as tmp:
         script = Path(tmp) / "workspace-proof.cjs"
         script.write_text(_browser_runner_script(), encoding="utf-8")
         result = _run_redacted_command(
             ["node", str(script)],
             env=proof_env,
             timeout=timeout,
-            cwd=_REPO_ROOT / "web",
+            cwd=web_root,
             parse_json_stdout=True,
         )
     result.update({"plugin": plugin, "viewport": viewport, "tls": True})
@@ -560,7 +565,7 @@ def _llm_router_local_fallback_runner(env: Mapping[str, str]) -> dict[str, Any]:
                     user_id="router-proof-user",
                     secret_ref="secret://arclink/llm-router/router-proof-deployment/api-key",
                     raw_key=raw_key,
-                    allowed_models=["model-a"],
+                    allowed_models=["model-a", "model-b"],
                 )
             finally:
                 conn.close()
@@ -668,6 +673,7 @@ def run_live_proof(
 
     # Phase 1: Host readiness
     readiness = run_readiness(
+        state_root=str(source.get("ARCLINK_STATE_ROOT") or "").strip() or None,
         env=source,
         skip_ports=skip_ports,
         docker_binary=docker_binary,
@@ -701,14 +707,7 @@ def run_live_proof(
     # Phase 4: Evaluate journey (runs step runners if live_executed)
     if status == "live_executed":
         _mark_unselected_proof_opt_in_steps(steps, source)
-        # evaluate_journey checks os.environ for credentials, so patch it
-        old_env = os.environ.copy()
-        os.environ.update(source)
-        try:
-            evaluate_journey(steps, runners=effective_runners, stop_on_failure=True)
-        finally:
-            os.environ.clear()
-            os.environ.update(old_env)
+        evaluate_journey(steps, runners=effective_runners, stop_on_failure=True, env=source)
     elif status == "blocked_missing_credentials":
         any_opt_in_enabled = _any_step_proof_opt_in_enabled(steps, source)
         # Mark steps with their skip reasons
@@ -740,19 +739,35 @@ def run_live_proof(
 
     # Phase 6: Write artifact
     evidence_path = ""
+    artifact_write_failed = False
     if artifact_dir is not None or status in ("dry_run_ready", "live_executed") or (live_requested and status.startswith("blocked_")):
         out_dir = Path(artifact_dir or "evidence")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        artifact_file = out_dir / f"{run_id}.json"
-        artifact_file.write_text(ledger.to_json())
-        evidence_path = str(artifact_file)
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            artifact_file = out_dir / f"{run_id}.json"
+            artifact_file.write_text(ledger.to_json(), encoding="utf-8")
+            evidence_path = str(artifact_file)
+        except OSError:
+            artifact_write_failed = True
+
+    evidence_store_failed = False
+    if _evidence_db_configured(source):
+        try:
+            _store_evidence_run(source, ledger=ledger, journey=journey, evidence_path=evidence_path)
+        except Exception:  # noqa: BLE001
+            evidence_store_failed = True
 
     # Determine exit code
+    checks_ok = _live_proof_checks_ok(journey, readiness=readiness, diagnostics=diagnostics)
     if status == "live_executed":
-        exit_code = 0 if ledger.all_passed else 1
-    elif status == "dry_run_ready" or (status == "blocked_missing_credentials" and not live_requested):
+        exit_code = 0 if ledger.all_passed and checks_ok else 1
+    elif status == "dry_run_ready":
+        exit_code = 0 if checks_ok else 1
+    elif status == "blocked_missing_credentials" and not live_requested:
         exit_code = 0
     else:
+        exit_code = 1
+    if artifact_write_failed or evidence_store_failed:
         exit_code = 1
 
     return LiveProofResult(
@@ -765,6 +780,49 @@ def run_live_proof(
         evidence_path=evidence_path,
         exit_code=exit_code,
     )
+
+
+def _live_proof_checks_ok(journey: str, *, readiness: Any, diagnostics: Any) -> bool:
+    readiness_required = journey in {"hosted", "workspace", "all"}
+    diagnostics_required = journey in {"hosted", "all"}
+    if readiness_required and not bool(getattr(readiness, "ready", False)):
+        return False
+    if diagnostics_required and not bool(getattr(diagnostics, "all_ok", False)):
+        return False
+    return True
+
+
+def _evidence_db_configured(source: Mapping[str, str]) -> bool:
+    return bool(str(source.get("ARCLINK_DB_PATH") or "").strip())
+
+
+def _store_evidence_run(
+    source: Mapping[str, str],
+    *,
+    ledger: Any,
+    journey: str,
+    evidence_path: str,
+) -> None:
+    from arclink_control import ensure_schema
+
+    db_path = str(source.get("ARCLINK_DB_PATH") or "").strip()
+    if not db_path:
+        return
+    path = Path(db_path).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    try:
+        conn.row_factory = sqlite3.Row
+        ensure_schema(conn)
+        store_evidence_run(
+            conn,
+            ledger=ledger,
+            deployment_id=str(source.get("ARCLINK_DEPLOYMENT_ID") or "").strip(),
+            journey=journey,
+            evidence_path=evidence_path,
+        )
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------

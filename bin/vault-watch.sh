@@ -75,10 +75,9 @@ try:
         """,
         (rel_path, rel_path.rstrip("/") + "/%"),
     ).fetchone()
-except sqlite3.Error:
-    # If the manifest exists but cannot be read, fail open and let the PDF
-    # reconciler clean up any possible stale sidecars.
-    raise SystemExit(0)
+except sqlite3.Error as exc:
+    print(f"vault-watch: cannot read PDF ingest manifest {manifest_db}: {exc}", file=sys.stderr)
+    raise SystemExit(1)
 finally:
     if conn is not None:
         conn.close()

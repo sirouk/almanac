@@ -1019,6 +1019,84 @@ def test_public_agent_live_trigger_claims_and_defers_until_detached_bridge_finis
             os.environ.update(old_env)
 
 
+def test_public_agent_live_trigger_skips_not_due_head_of_line() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_notification_delivery_live_due_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_live_due_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(
+            config_path,
+            {
+                "ARCLINK_USER": "arclink",
+                "ARCLINK_HOME": str(root / "home-arclink"),
+                "ARCLINK_REPO_DIR": str(REPO),
+                "ARCLINK_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ARCLINK_DB_PATH": str(root / "state" / "arclink-control.sqlite3"),
+                "ARCLINK_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ARCLINK_CURATOR_DIR": str(root / "state" / "curator"),
+                "ARCLINK_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ARCLINK_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ARCLINK_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ARCLINK_RELEASE_STATE_FILE": str(root / "state" / "arclink-release.json"),
+                "ARCLINK_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "TELEGRAM_BOT_TOKEN": "telegram-public-token",
+            },
+        )
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            with control.connect_db(cfg) as conn:
+                first = control.queue_notification(
+                    conn,
+                    target_kind="public-agent-turn",
+                    target_id="tg:123",
+                    channel_kind="telegram",
+                    message="not due",
+                    extra={"deployment_id": "arcdep_test", "prefix": "arc-testpod"},
+                )
+                second = control.queue_notification(
+                    conn,
+                    target_kind="public-agent-turn",
+                    target_id="tg:123",
+                    channel_kind="telegram",
+                    message="due now",
+                    extra={"deployment_id": "arcdep_test", "prefix": "arc-testpod"},
+                )
+                conn.execute(
+                    "UPDATE notification_outbox SET next_attempt_at = ? WHERE id = ?",
+                    (control.utc_after_seconds_iso(3600), first),
+                )
+                conn.commit()
+
+            prompts: list[str] = []
+
+            def fake_gateway_turn(**kwargs):
+                prompts.append(str(kwargs.get("prompt") or ""))
+                return True, ""
+
+            delivery._run_public_agent_gateway_turn = fake_gateway_turn
+            summary = delivery.run_public_agent_turns_once(cfg, channel_kind="telegram", target_id="tg:123", limit=1)
+            expect(summary["processed"] == 1 and summary["delivered"] == 1, str(summary))
+            expect(prompts == ["due now"], str(prompts))
+            with control.connect_db(cfg) as conn:
+                rows = conn.execute(
+                    "SELECT id, delivered_at FROM notification_outbox ORDER BY id ASC"
+                ).fetchall()
+            expect(rows[0]["id"] == first and rows[0]["delivered_at"] is None, str([dict(row) for row in rows]))
+            expect(rows[1]["id"] == second and rows[1]["delivered_at"], str([dict(row) for row in rows]))
+            print("PASS test_public_agent_live_trigger_skips_not_due_head_of_line")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_public_agent_turn_runner_prefers_running_gateway_container() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -1126,6 +1204,43 @@ def test_public_agent_gateway_bridge_detaches_long_running_turns() -> None:
             expect(proc.stdin.closed is True, "bridge stdin should be closed after payload write")
             expect((Path(tmp) / "state" / "docker" / "jobs" / "public-agent-bridge.log").parent.exists(), "bridge log dir missing")
             print("PASS test_public_agent_gateway_bridge_detaches_long_running_turns")
+        finally:
+            delivery.subprocess.Popen = original_popen
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_public_agent_gateway_bridge_unlinks_job_when_worker_spawn_fails() -> None:
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_bridge_spawn_cleanup_test")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        old_env = os.environ.copy()
+        os.environ["STATE_DIR"] = str(root / "state")
+        original_popen = delivery.subprocess.Popen
+
+        def fail_popen(*args, **kwargs):
+            raise OSError("spawn failed")
+
+        delivery.subprocess.Popen = fail_popen
+        try:
+            ok, error = delivery._spawn_public_agent_gateway_bridge(
+                cmd=[
+                    "docker",
+                    "exec",
+                    "-i",
+                    "arclink-arcdep_test-hermes-gateway-1",
+                    "/opt/arclink/runtime/hermes-venv/bin/python3",
+                    "/home/arclink/arclink/python/arclink_public_agent_bridge.py",
+                ],
+                payload={"platform": "telegram", "bot_token": "runtime-token", "text": "hello"},
+                notification_id=77,
+                project_name="arclink-arcdep_test",
+            )
+            expect(ok is False and "could not start" in error, error)
+            job_dir = root / "state" / "docker" / "jobs" / "public-agent-bridge-jobs"
+            expect(not list(job_dir.glob("*.json")), "bridge job file should be removed on spawn failure")
+            print("PASS test_public_agent_gateway_bridge_unlinks_job_when_worker_spawn_fails")
         finally:
             delivery.subprocess.Popen = original_popen
             os.environ.clear()
@@ -1405,6 +1520,18 @@ def test_public_agent_bridge_command_validator_confines_compose_paths() -> None:
                 project_name="arclink-arcdep_test",
             )
             expect(ok is False and "not allowlisted" in error, error)
+            ok, _kind, error = delivery._validate_public_agent_bridge_cmd(
+                [
+                    "docker",
+                    "exec",
+                    "-i",
+                    "arclink-arcdep_test-not-hermes-gateway-1",
+                    "/opt/arclink/runtime/hermes-venv/bin/python3",
+                    "/home/arclink/arclink/python/arclink_public_agent_bridge.py",
+                ],
+                project_name="arclink-arcdep_test",
+            )
+            expect(ok is False and "hermes-gateway service" in error, error)
             print("PASS test_public_agent_bridge_command_validator_confines_compose_paths")
         finally:
             os.environ.clear()
@@ -2473,8 +2600,10 @@ def main() -> int:
     test_operator_agent_turn_delivery_uses_control_stack_gateway()
     test_public_agent_turn_delivery_bridges_discord_channel_metadata()
     test_public_agent_live_trigger_claims_and_defers_until_detached_bridge_finishes()
+    test_public_agent_live_trigger_skips_not_due_head_of_line()
     test_public_agent_turn_runner_prefers_running_gateway_container()
     test_public_agent_gateway_bridge_detaches_long_running_turns()
+    test_public_agent_gateway_bridge_unlinks_job_when_worker_spawn_fails()
     test_public_agent_bridge_worker_marks_delivery_after_bridge_success()
     test_public_agent_bridge_worker_rejects_unallowlisted_commands()
     test_public_agent_bridge_command_validator_confines_compose_paths()

@@ -20,7 +20,6 @@ if [[ ! -r "$ARCLINK_BOOTSTRAP_TOKEN_FILE" ]]; then
   exit 2
 fi
 
-TOKEN="$(tr -d '[:space:]' <"$ARCLINK_BOOTSTRAP_TOKEN_FILE")"
 RPC="$ARCLINK_SHARED_REPO_DIR/bin/arclink-rpc"
 
 if [[ ! -x "$RPC" ]]; then
@@ -38,19 +37,80 @@ managed_file="$tmpdir/managed.json"
 qmd_probe_file="$tmpdir/qmd-probe.json"
 notion_probe_file="$tmpdir/notion-probe.json"
 
-"$RPC" --url "$ARCLINK_MCP_URL" --tool "catalog.vaults" \
-  --json-args "$(python3 - "$TOKEN" <<'PY'
-import json, sys
-print(json.dumps({"token": sys.argv[1]}))
-PY
-  )" >"$catalog_file"
+write_auth_args() {
+  local output_file="$1"
 
-"$RPC" --url "$ARCLINK_MCP_URL" --tool "vaults.refresh" \
-  --json-args "$(python3 - "$TOKEN" <<'PY'
-import json, sys
-print(json.dumps({"token": sys.argv[1]}))
+  python3 - "$ARCLINK_BOOTSTRAP_TOKEN_FILE" "$output_file" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+token = "".join(Path(sys.argv[1]).read_text(encoding="utf-8").split())
+Path(sys.argv[2]).write_text(json.dumps({"token": token}) + "\n", encoding="utf-8")
 PY
-  )" >"$refresh_file"
+}
+
+write_notion_search_args() {
+  local output_file="$1"
+
+  python3 - "$ARCLINK_BOOTSTRAP_TOKEN_FILE" "$output_file" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+token = "".join(Path(sys.argv[1]).read_text(encoding="utf-8").split())
+Path(sys.argv[2]).write_text(
+    json.dumps({"token": token, "query": "ArcLink", "limit": 3}) + "\n",
+    encoding="utf-8",
+)
+PY
+}
+
+validate_managed_payload() {
+  local payload_file="$1"
+
+  python3 - "$payload_file" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+try:
+    payload = json.loads(source.read_text(encoding="utf-8"))
+except Exception as exc:
+    print(f"first-contact: invalid managed-memory payload JSON: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+if not isinstance(payload, dict):
+    print("first-contact: managed-memory payload is not a JSON object", file=sys.stderr)
+    raise SystemExit(1)
+required = (
+    "agent_id",
+    "vault-ref",
+    "qmd-ref",
+    "vault-topology",
+    "catalog",
+    "subscriptions",
+    "vault_path_contract",
+)
+missing = [key for key in required if key not in payload]
+if missing:
+    print(f"first-contact: managed-memory payload missing required keys: {', '.join(missing)}", file=sys.stderr)
+    raise SystemExit(1)
+if not isinstance(payload.get("catalog"), list) or not isinstance(payload.get("subscriptions"), list):
+    print("first-contact: managed-memory payload catalog/subscriptions must be arrays", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
+catalog_args="$tmpdir/catalog.args.json"
+write_auth_args "$catalog_args"
+"$RPC" --url "$ARCLINK_MCP_URL" --tool "catalog.vaults" \
+  --json-args-file "$catalog_args" >"$catalog_file"
+
+refresh_args="$tmpdir/refresh.args.json"
+write_auth_args "$refresh_args"
+"$RPC" --url "$ARCLINK_MCP_URL" --tool "vaults.refresh" \
+  --json-args-file "$refresh_args" >"$refresh_file"
 
 agent_id=""
 if [[ -r "$ENROLLMENT_STATE_FILE" ]]; then
@@ -73,34 +133,25 @@ managed_payload_path=""
 if [[ -n "$agent_id" ]]; then
   managed_payload_path="$ARCLINK_AGENTS_STATE_DIR/$agent_id/managed-memory.json"
 fi
-if [[ -n "$managed_payload_path" && -r "$managed_payload_path" ]] && python3 - "$managed_payload_path" "$managed_file" <<'PY'
-import json
+if [[ -n "$managed_payload_path" && -r "$managed_payload_path" ]] && validate_managed_payload "$managed_payload_path" && python3 - "$managed_payload_path" "$managed_file" <<'PY'
 import shutil
 import sys
 from pathlib import Path
 
 source = Path(sys.argv[1])
 target = Path(sys.argv[2])
-try:
-    payload = json.loads(source.read_text(encoding="utf-8"))
-except Exception:
-    raise SystemExit(1)
-if not isinstance(payload, dict):
-    raise SystemExit(1)
-required = ("agent_id", "vault-ref", "qmd-ref", "catalog", "subscriptions", "vault_path_contract")
-if any(key not in payload for key in required):
-    raise SystemExit(1)
 shutil.copyfile(source, target)
 PY
 then
   :
 else
+  managed_args="$tmpdir/managed.args.json"
+  write_auth_args "$managed_args"
   "$RPC" --url "$ARCLINK_MCP_URL" --tool "agents.managed-memory" \
-    --json-args "$(python3 - "$TOKEN" <<'PY'
-import json, sys
-print(json.dumps({"token": sys.argv[1]}))
-PY
-    )" >"$managed_file"
+    --json-args-file "$managed_args" >"$managed_file"
+  if ! validate_managed_payload "$managed_file"; then
+    exit 2
+  fi
 fi
 
 "$RPC" --url "$ARCLINK_MCP_URL" --tool "status" --json-args "{}" >"$status_file"
@@ -263,12 +314,10 @@ if [[ -n "${ARCLINK_NOTION_INDEX_ROOTS:-}" || -n "${ARCLINK_SSOT_NOTION_SPACE_UR
   notion_expected="1"
 fi
 
+notion_probe_args="$tmpdir/notion-probe.args.json"
+write_notion_search_args "$notion_probe_args"
 if "$RPC" --url "$ARCLINK_MCP_URL" --tool "notion.search" \
-  --json-args "$(python3 - "$TOKEN" <<'PY'
-import json, sys
-print(json.dumps({"token": sys.argv[1], "query": "ArcLink", "limit": 3}))
-PY
-  )" >"$notion_probe_file" 2>"$tmpdir/notion-probe.err"; then
+  --json-args-file "$notion_probe_args" >"$notion_probe_file" 2>"$tmpdir/notion-probe.err"; then
   :
 else
   if [[ "$notion_expected" == "1" ]]; then

@@ -25,6 +25,34 @@ def _section_between(body: str, start: str, end: str) -> str:
     return body[start_index:end_index]
 
 
+def _assignment_literal(path: Path, name: str):
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in tree.body:
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == name:
+            return ast.literal_eval(node.value)
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == name:
+                    return ast.literal_eval(node.value)
+    raise AssertionError(f"{path.relative_to(REPO)} missing assignment for {name}")
+
+
+def _arclink_module_names() -> set[str]:
+    return {path.stem for path in (REPO / "python").glob("arclink_*.py")}
+
+
+def _control_table_names(prefix: str) -> set[str]:
+    control = (REPO / "python" / "arclink_control.py").read_text(encoding="utf-8")
+    return set(re.findall(rf"CREATE TABLE IF NOT EXISTS\s+({re.escape(prefix)}[A-Za-z0-9_]+)", control))
+
+
+def _linked_copy_duplicate_policy() -> str:
+    mcp_server = (REPO / "python" / "arclink_mcp_server.py").read_text(encoding="utf-8")
+    match = re.search(r'_LINKED_COPY_DUPLICATE_POLICY = "([^"]+)"', mcp_server)
+    expect(bool(match), "arclink_mcp_server.py should define _LINKED_COPY_DUPLICATE_POLICY")
+    return match.group(1)
+
+
 def _product_matrix_rows() -> list[tuple[int, str, str, str, str]]:
     rows: list[tuple[int, str, str, str, str]] = []
     for line_number, line in enumerate(PRODUCT_MATRIX.read_text(encoding="utf-8").splitlines(), 1):
@@ -125,6 +153,94 @@ def test_product_matrix_gated_rows_keep_live_or_policy_boundaries() -> None:
     expect(not proof_offenders, "Proof-gated rows need explicit live/external proof language:\n" + "\n".join(proof_offenders))
     expect(not policy_offenders, "Policy-question rows need explicit operator/product decision language:\n" + "\n".join(policy_offenders))
     print("PASS test_product_matrix_gated_rows_keep_live_or_policy_boundaries")
+
+
+def test_architecture_and_brief_module_inventory_matches_python_files() -> None:
+    module_names = _arclink_module_names()
+    docs = (
+        (Path("docs/arclink/architecture.md"), f"There are **{len(module_names)}** `python/arclink_*.py` modules"),
+        (Path("research/ARCLINK_GROUND_TRUTH_BRIEF.md"), f"There are **{len(module_names)}** `python/arclink_*.py` files"),
+    )
+    for rel, count_phrase in docs:
+        body = (REPO / rel).read_text(encoding="utf-8")
+        expect(count_phrase in body, f"{rel} must declare current module count {len(module_names)}")
+        mentioned = set(re.findall(r"\b(arclink_[A-Za-z0-9_]+)(?:\.py)?\b", body))
+        missing = sorted(module_names - mentioned)
+        expect(not missing, f"{rel} module map missing python/arclink_*.py files: {missing}")
+    print("PASS test_architecture_and_brief_module_inventory_matches_python_files")
+
+
+def test_brief_and_architecture_table_inventory_matches_schema() -> None:
+    arclink_tables = _control_table_names("arclink_")
+    academy_tables = _control_table_names("academy_")
+    architecture = (REPO / "docs" / "arclink" / "architecture.md").read_text(encoding="utf-8")
+    brief = (REPO / "research" / "ARCLINK_GROUND_TRUTH_BRIEF.md").read_text(encoding="utf-8")
+
+    architecture_phrase = f"uses **{len(arclink_tables)}** `arclink_*` tables plus **{len(academy_tables)}** non-prefixed"
+    expect(architecture_phrase in architecture, "architecture.md must declare current arclink_/academy_ table counts")
+    architecture_tables = set(re.findall(r"\b(academy_[A-Za-z0-9_]+)\b", architecture))
+    expect(
+        academy_tables <= architecture_tables,
+        f"architecture.md missing academy table names: {sorted(academy_tables - architecture_tables)}",
+    )
+
+    expect(
+        f"**`arclink_*`-prefixed tables: {len(arclink_tables)}**" in brief,
+        "Ground Truth Brief must declare current arclink_ table count",
+    )
+    expect(
+        f"**`academy_*` tables: {len(academy_tables)}**" in brief,
+        "Ground Truth Brief must declare current academy_ table count",
+    )
+    brief_tables = set(re.findall(r"\b((?:arclink|academy)_[A-Za-z0-9_]+)\b", brief))
+    missing = sorted((arclink_tables | academy_tables) - brief_tables)
+    expect(not missing, f"Ground Truth Brief table list missing schema tables: {missing}")
+    print("PASS test_brief_and_architecture_table_inventory_matches_schema")
+
+
+def test_ground_truth_brief_route_counts_match_hosted_api_tables() -> None:
+    hosted_api = REPO / "python" / "arclink_hosted_api.py"
+    routes = _assignment_literal(hosted_api, "_ROUTES")
+    router_paths = _assignment_literal(hosted_api, "_LLM_ROUTER_OPENAPI_PATHS")
+    hosted_paths = {path_suffix for _method, path_suffix in routes}
+    openapi_paths = {f"/api/v1{path_suffix}" for path_suffix in hosted_paths} | set(router_paths)
+    brief = (REPO / "research" / "ARCLINK_GROUND_TRUTH_BRIEF.md").read_text(encoding="utf-8")
+    brief_text = " ".join(brief.split())
+
+    required = (
+        f"{len(routes)} `_ROUTES` entries",
+        f"{len(hosted_paths)} unique path suffixes",
+        f"{len(openapi_paths)} OpenAPI path objects",
+    )
+    missing = [phrase for phrase in required if phrase not in brief_text]
+    expect(not missing, f"Ground Truth Brief hosted API route counts drifted: missing {missing}")
+    print("PASS test_ground_truth_brief_route_counts_match_hosted_api_tables")
+
+
+def test_openapi_docs_describe_canonical_json_not_byte_identity() -> None:
+    docs = (
+        Path("docs/API_REFERENCE.md"),
+        Path("docs/arclink/architecture.md"),
+        Path("research/ARCLINK_GROUND_TRUTH_BRIEF.md"),
+    )
+    offenders: list[str] = []
+    for rel in docs:
+        body = (REPO / rel).read_text(encoding="utf-8")
+        if "byte-identical" in body.lower() or "byte identical" in body.lower():
+            offenders.append(f"{rel} still claims byte-identical OpenAPI parity")
+        if "canonical JSON" not in body and "canonical-JSON" not in body:
+            offenders.append(f"{rel} should describe the OpenAPI guard as canonical JSON parity")
+    expect(not offenders, "\n".join(offenders))
+    print("PASS test_openapi_docs_describe_canonical_json_not_byte_identity")
+
+
+def test_gaps_gap_016_policy_matches_mcp_constant() -> None:
+    policy = _linked_copy_duplicate_policy()
+    gaps = (REPO / "GAPS.md").read_text(encoding="utf-8")
+    stale_policy = "accepted_linked_resources_copy_to_owned_vault_or_workspace_only"
+    expect(policy in gaps, "GAPS.md GAP-016 must cite the live linked-resource copy policy string")
+    expect(stale_policy not in gaps, "GAPS.md GAP-016 still cites the stale linked-resource copy policy string")
+    print("PASS test_gaps_gap_016_policy_matches_mcp_constant")
 
 
 def test_agents_service_user_unit_list_matches_templates() -> None:
@@ -360,6 +476,11 @@ def main() -> int:
     test_product_matrix_totals_match_rows_and_statuses_are_known()
     test_product_matrix_real_rows_have_source_and_proof_anchors()
     test_product_matrix_gated_rows_keep_live_or_policy_boundaries()
+    test_architecture_and_brief_module_inventory_matches_python_files()
+    test_brief_and_architecture_table_inventory_matches_schema()
+    test_ground_truth_brief_route_counts_match_hosted_api_tables()
+    test_openapi_docs_describe_canonical_json_not_byte_identity()
+    test_gaps_gap_016_policy_matches_mcp_constant()
     test_agents_service_user_unit_list_matches_templates()
     test_org_profile_docs_mark_cli_as_shipped_contract()
     test_docs_do_not_claim_stripe_webhook_skip()

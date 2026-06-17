@@ -491,12 +491,24 @@ def _validate_public_agent_bridge_cmd(cmd: list[str], *, project_name: str = "")
         container_name = parts[3].strip()
         if not PUBLIC_AGENT_BRIDGE_CONTAINER_RE.fullmatch(container_name):
             return False, "", "public Agent bridge container name is not allowlisted"
-        if "hermes-gateway" not in container_name:
-            return False, "", "public Agent bridge may only exec the hermes-gateway service"
-        if expected_project and not (
-            container_name.startswith(f"{expected_project}-") or container_name.startswith(f"{expected_project}_")
+        service_suffix = container_name
+        if expected_project:
+            service_suffix = ""
+            for separator in ("-", "_"):
+                prefix = f"{expected_project}{separator}"
+                if container_name.startswith(prefix):
+                    service_suffix = container_name[len(prefix):]
+                    break
+            if not service_suffix:
+                return False, "", "public Agent bridge container does not match the deployment project"
+        allowed_services = ("hermes-gateway", "operator-hermes-gateway", "control-operator-hermes-gateway")
+        if not any(
+            service_suffix == service
+            or service_suffix.startswith(f"{service}-")
+            or service_suffix.startswith(f"{service}_")
+            for service in allowed_services
         ):
-            return False, "", "public Agent bridge container does not match the deployment project"
+            return False, "", "public Agent bridge may only exec the hermes-gateway service"
         return True, "docker-exec-hermes-gateway", ""
 
     if (
@@ -1064,6 +1076,13 @@ def _load_public_agent_bridge_job(job_path: Path) -> dict[str, Any]:
     return body
 
 
+def _unlink_public_agent_bridge_job(job_path: Path) -> None:
+    try:
+        job_path.unlink()
+    except OSError:
+        pass
+
+
 def _append_public_agent_bridge_log(message: str) -> None:
     try:
         log_path = _public_agent_bridge_log_path()
@@ -1266,8 +1285,10 @@ def _spawn_public_agent_gateway_bridge(
                     return True, ""
                 if returncode == 0:
                     return True, ""
+                _unlink_public_agent_bridge_job(job_path)
                 return False, f"Hermes public gateway bridge worker exited immediately with status {returncode}; see {log_path}"
         except OSError as exc:
+            _unlink_public_agent_bridge_job(job_path)
             return False, f"could not start Hermes public gateway bridge worker: {str(exc)[:180]}"
 
     log_path = _public_agent_bridge_log_path()
@@ -1732,6 +1753,9 @@ def run_public_agent_turns_once(
     clean_target = str(target_id or "").strip()
     where = ["delivered_at IS NULL", "target_kind = 'public-agent-turn'"]
     params: list[Any] = []
+    now_iso = utc_now_iso()
+    where.append("(next_attempt_at IS NULL OR next_attempt_at = '' OR next_attempt_at <= ?)")
+    params.append(now_iso)
     if clean_channel:
         where.append("channel_kind = ?")
         params.append(clean_channel)

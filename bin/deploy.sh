@@ -393,6 +393,13 @@ nextcloud_effectively_enabled() {
   [[ "${ENABLE_NEXTCLOUD:-0}" == "1" ]] && nextcloud_runtime_available
 }
 
+warn_retired_tailscale_nextcloud_serve() {
+  if nextcloud_effectively_enabled && [[ "${ENABLE_TAILSCALE_SERVE:-0}" == "1" ]]; then
+    echo "ENABLE_TAILSCALE_SERVE is retired; ArcLink no longer publishes Nextcloud or internal MCP routes through Tailscale Serve." >&2
+    echo "Leaving existing Tailscale Serve configuration untouched. Run tailscale-nextcloud-unserve.sh explicitly to remove legacy ArcLink-owned routes." >&2
+  fi
+}
+
 host_uname_s() {
   uname -s 2>/dev/null || printf '%s\n' "unknown"
 }
@@ -5563,13 +5570,11 @@ run_root_install() {
   restart_shared_user_services_root
   uid="$(id -u "$ARCLINK_USER")"
 
-  if [[ -n "${TAILSCALE_OPERATOR_USER:-}" ]] && command -v tailscale >/dev/null 2>&1 && { { nextcloud_effectively_enabled && [[ "$ENABLE_TAILSCALE_SERVE" == "1" ]]; } || [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; }; then
+  if [[ -n "${TAILSCALE_OPERATOR_USER:-}" ]] && command -v tailscale >/dev/null 2>&1 && [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
     tailscale set --operator="$TAILSCALE_OPERATOR_USER" >/dev/null 2>&1 || true
   fi
 
-  if nextcloud_effectively_enabled && [[ "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
-    ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/tailscale-nextcloud-serve.sh"
-  fi
+  warn_retired_tailscale_nextcloud_serve
   if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
     ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/tailscale-notion-webhook-funnel.sh"
   elif [[ -x "$ARCLINK_REPO_DIR/bin/tailscale-notion-webhook-unfunnel.sh" ]]; then
@@ -5705,13 +5710,11 @@ run_root_upgrade() {
   restart_shared_user_services_root
   uid="$(id -u "$ARCLINK_USER")"
 
-  if [[ -n "${TAILSCALE_OPERATOR_USER:-}" ]] && command -v tailscale >/dev/null 2>&1 && { { nextcloud_effectively_enabled && [[ "$ENABLE_TAILSCALE_SERVE" == "1" ]]; } || [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; }; then
+  if [[ -n "${TAILSCALE_OPERATOR_USER:-}" ]] && command -v tailscale >/dev/null 2>&1 && [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
     tailscale set --operator="$TAILSCALE_OPERATOR_USER" >/dev/null 2>&1 || true
   fi
 
-  if nextcloud_effectively_enabled && [[ "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
-    ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/tailscale-nextcloud-serve.sh"
-  fi
+  warn_retired_tailscale_nextcloud_serve
   if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
     ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/tailscale-notion-webhook-funnel.sh"
   elif [[ -x "$ARCLINK_REPO_DIR/bin/tailscale-notion-webhook-unfunnel.sh" ]]; then
@@ -11532,8 +11535,37 @@ verify_control_upgrade_checkout_clean() {
   return 1
 }
 
+control_upgrade_fetch_upstream() {
+  local remote="$1"
+  local remote_url="" ssh_command=""
+
+  if [[ "${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" == "1" ]]; then
+    configure_upstream_git_for_repo "$BOOTSTRAP_DIR"
+  fi
+
+  remote_url="$(git -C "$BOOTSTRAP_DIR" remote get-url "$remote" 2>/dev/null || true)"
+  if [[ "${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" == "1" ]] && git_remote_uses_ssh "$remote_url"; then
+    if [[ ! -f "${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}" ]]; then
+      echo "ArcLink upstream deploy key private file is missing; cannot fetch $remote_url." >&2
+      return 1
+    fi
+    if [[ ! -f "${ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE:-$(default_upstream_git_known_hosts_file)}" ]]; then
+      echo "ArcLink upstream deploy key known_hosts file is missing; cannot fetch $remote_url." >&2
+      return 1
+    fi
+    ssh_command="$(upstream_git_ssh_command)"
+    GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false SSH_ASKPASS=/bin/false GCM_INTERACTIVE=Never \
+      GIT_SSH_COMMAND="$ssh_command" git -C "$BOOTSTRAP_DIR" fetch --prune "$remote"
+    return
+  fi
+
+  GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false SSH_ASKPASS=/bin/false GCM_INTERACTIVE=Never \
+    git -C "$BOOTSTRAP_DIR" fetch --prune "$remote"
+}
+
 sync_control_upgrade_checkout_from_upstream() {
   local branch="" upstream="" remote="" before="" after="" upstream_commit=""
+  local expected_branch="${ARCLINK_UPSTREAM_BRANCH:-arclink}"
 
   if [[ "${ARCLINK_CONTROL_UPGRADE_ALLOW_DIRTY:-0}" == "1" ]]; then
     echo "Skipping upstream sync because ARCLINK_CONTROL_UPGRADE_ALLOW_DIRTY=1."
@@ -11549,14 +11581,19 @@ sync_control_upgrade_checkout_from_upstream() {
 
   branch="$(git -C "$BOOTSTRAP_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
   if [[ -z "$branch" ]]; then
-    echo "Control upgrade checkout is detached; building current commit without upstream sync." >&2
-    return 0
+    echo "Refusing control upgrade from a detached checkout; checkout ${expected_branch} or set ARCLINK_CONTROL_UPGRADE_SKIP_UPSTREAM_SYNC=1 for an intentional local build." >&2
+    return 1
+  fi
+  if [[ "$branch" != "$expected_branch" ]]; then
+    echo "Refusing control upgrade from branch '$branch'; expected '$expected_branch'." >&2
+    echo "Set ARCLINK_UPSTREAM_BRANCH and ARCLINK_ALLOW_NON_ARCLINK_UPGRADE=1 only for an explicit staging or emergency deployment." >&2
+    return 1
   fi
   upstream="$(git -C "$BOOTSTRAP_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
   if [[ -z "$upstream" ]]; then
-    echo "Control upgrade branch '$branch' has no upstream; building current checkout without git fetch." >&2
-    echo "Set an upstream or run git pull manually before ./deploy.sh control upgrade." >&2
-    return 0
+    echo "Refusing control upgrade: branch '$branch' has no upstream to fetch." >&2
+    echo "Set an upstream or set ARCLINK_CONTROL_UPGRADE_SKIP_UPSTREAM_SYNC=1 for an intentional local build." >&2
+    return 1
   fi
   remote="$(git -C "$BOOTSTRAP_DIR" config "branch.$branch.remote" 2>/dev/null || true)"
   if [[ -z "$remote" ]]; then
@@ -11564,7 +11601,7 @@ sync_control_upgrade_checkout_from_upstream() {
   fi
 
   echo "Checking upstream for control upgrade ($branch -> $upstream)..."
-  git -C "$BOOTSTRAP_DIR" fetch --prune "$remote"
+  control_upgrade_fetch_upstream "$remote"
   before="$(git -C "$BOOTSTRAP_DIR" rev-parse HEAD)"
   upstream_commit="$(git -C "$BOOTSTRAP_DIR" rev-parse "$upstream")"
   if [[ "$before" == "$upstream_commit" ]]; then
@@ -11578,8 +11615,9 @@ sync_control_upgrade_checkout_from_upstream() {
     return 0
   fi
   if git -C "$BOOTSTRAP_DIR" merge-base --is-ancestor "$upstream_commit" "$before"; then
-    echo "Control upgrade checkout is ahead of upstream $upstream; building local ahead commit ${before:0:12}." >&2
-    return 0
+    echo "Refusing control upgrade: checkout ${before:0:12} is ahead of upstream $upstream." >&2
+    echo "Push the commit to the configured upstream branch, or set ARCLINK_CONTROL_UPGRADE_SKIP_UPSTREAM_SYNC=1 for an intentional local build." >&2
+    return 1
   fi
   echo "Refusing control upgrade: branch '$branch' has diverged from upstream '$upstream'." >&2
   echo "Resolve the divergence with git merge/rebase, then rerun ./deploy.sh control upgrade." >&2
@@ -11596,7 +11634,7 @@ run_control_install_flow() {
   if [[ "$run_interactive" == "1" ]]; then
     operation="control-install"
   fi
-  for arg in "${CONTROL_DEPLOY_ARGS[@]:-}"; do
+  for arg in "${CONTROL_DEPLOY_ARGS[@]}"; do
     case "$arg" in
       --skip-prereq-install)
         ARCLINK_SKIP_PREREQ_INSTALL=1
@@ -11622,6 +11660,7 @@ run_control_install_flow() {
   fi
   if [[ "$run_interactive" != "1" ]]; then
     verify_control_upgrade_checkout_clean
+    require_main_upstream_branch_for_upgrade
     sync_control_upgrade_checkout_from_upstream
   fi
   load_docker_runtime_config

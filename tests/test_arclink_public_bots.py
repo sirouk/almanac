@@ -14,6 +14,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 PYTHON_DIR = REPO / "python"
+os.environ.setdefault("ARCLINK_SESSION_HASH_PEPPER", "public-bots-test-pepper")
 
 
 def expect(condition: bool, message: str) -> None:
@@ -636,11 +637,32 @@ def test_public_bot_credentials_reveal_and_ack_dashboard_password() -> None:
         secret_path = secret_dir / f"{hashlib.sha256(secret_ref.encode('utf-8')).hexdigest()}.secret"
         secret_path.write_text("arc_public_bot_dashboard_password\n", encoding="utf-8")
         try:
+            blocked = bots.handle_arclink_public_bot_turn(
+                conn,
+                channel="telegram",
+                channel_identity="tg:42",
+                text="/credentials",
+                metadata={"telegram_chat_type": "group"},
+            )
+            expect(blocked.action == "credentials_private_channel_required", str(blocked))
+            expect("arc_public_bot_dashboard_password" not in blocked.reply, blocked.reply)
+            row = conn.execute(
+                """
+                SELECT status, revealed_at, removed_at
+                FROM arclink_credential_handoffs
+                WHERE deployment_id = ?
+                  AND credential_kind = 'dashboard_password'
+                """,
+                (seeded["deployment_id"],),
+            ).fetchone()
+            expect(row["status"] == "available" and not row["revealed_at"] and not row["removed_at"], str(dict(row)))
+
             revealed = bots.handle_arclink_public_bot_turn(
                 conn,
                 channel="telegram",
                 channel_identity="tg:42",
                 text="/credentials",
+                metadata={"telegram_chat_type": "private"},
             )
             expect(revealed.action == "credentials_revealed", str(revealed))
             expect("arc_public_bot_dashboard_password" in revealed.reply, revealed.reply)
@@ -745,6 +767,7 @@ def test_public_bot_credentials_repair_legacy_dashboard_ref_to_user_secret() -> 
                 channel="telegram",
                 channel_identity="tg:42",
                 text="/credentials",
+                metadata={"telegram_chat_type": "private"},
             )
             expect(revealed.action == "credentials_revealed", str(revealed))
             expect("arc_public_bot_repaired_dashboard_password" in revealed.reply, revealed.reply)
@@ -800,6 +823,7 @@ def test_public_bot_credentials_can_target_newly_ready_agent() -> None:
                 channel="telegram",
                 channel_identity="tg:42",
                 text="/raven credentials arcdep_second",
+                metadata={"telegram_chat_type": "private"},
             )
             expect(revealed.action == "credentials_revealed", str(revealed))
             expect(revealed.deployment_id == "arcdep_second", str(revealed))

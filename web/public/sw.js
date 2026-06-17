@@ -1,8 +1,6 @@
-const CACHE_NAME = "arclink-console-v1";
+const CACHE_NAME = "arclink-console-v2";
 const STATIC_ASSETS = [
   "/",
-  "/dashboard",
-  "/admin",
   "/onboarding",
   "/brand/raven/raven_pfp.webp",
   "/brand/raven/raven_card.webp",

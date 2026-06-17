@@ -6,6 +6,7 @@ import sqlite3
 import sys
 import tempfile
 from pathlib import Path
+from typing import get_type_hints
 
 from arclink_test_helpers import expect, load_module, memory_db
 
@@ -493,6 +494,13 @@ def test_academy_agent_training_stages_per_agent_and_projects_identity() -> None
     print("PASS test_academy_agent_training_stages_per_agent_and_projects_identity")
 
 
+def test_academy_rollup_type_hints_resolve() -> None:
+    crew = load_module("arclink_crew_recipes.py", "arclink_crew_type_hints_test")
+    hints = get_type_hints(crew._academy_rollup_status)
+    expect("deployments" in hints and "Sequence" in str(hints["deployments"]), str(hints))
+    print("PASS test_academy_rollup_type_hints_resolve")
+
+
 if __name__ == "__main__":
     test_validation_and_deterministic_fallback()
     test_provider_success_and_unsafe_retry_fallback()
@@ -502,3 +510,4 @@ if __name__ == "__main__":
     test_academy_review_stages_on_active_recipe_without_workspace_writes()
     test_academy_weekly_review_persists_on_active_recipe_without_workspace_writes()
     test_academy_agent_training_stages_per_agent_and_projects_identity()
+    test_academy_rollup_type_hints_resolve()

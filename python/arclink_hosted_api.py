@@ -191,7 +191,7 @@ class HostedApiConfig:
         self.cookie_samesite: str = _normalize_cookie_samesite(str(e.get("ARCLINK_COOKIE_SAMESITE", SESSION_COOKIE_SAMESITE)))
         cookie_secure_raw = str(e.get("ARCLINK_COOKIE_SECURE", "")).strip()
         self.cookie_secure: bool = (
-            cookie_secure_raw != "0"
+            _cookie_secure_override(cookie_secure_raw)
             if cookie_secure_raw
             else not _is_local_http_origin(self.cors_origin)
         )
@@ -212,6 +212,8 @@ class HostedApiConfig:
             minimum=1,
             maximum=32 * 1024 * 1024,
         )
+        self.trusted_proxy_cidrs: str = str(e.get("ARCLINK_TRUSTED_PROXY_CIDRS", "")).strip()
+        self.admin_allowed_cidrs: str = str(e.get("ARCLINK_ADMIN_ALLOWED_CIDRS", "")).strip()
         self.backend_allowed_cidrs: str = str(e.get("ARCLINK_BACKEND_ALLOWED_CIDRS", "")).strip()
         self.fleet_enrollment_secret: str = str(e.get("ARCLINK_FLEET_ENROLLMENT_SECRET", "")).strip()
         self.webhook_rate_limit_window_seconds: int = _bounded_env_int(
@@ -394,6 +396,15 @@ def _normalize_cookie_samesite(value: str) -> str:
     if clean == "lax":
         return "Lax"
     return "Strict"
+
+
+def _cookie_secure_override(value: str) -> bool:
+    clean = str(value or "").strip().lower()
+    if clean in {"0", "false", "no", "off"}:
+        return False
+    if clean in {"1", "true", "yes", "on"}:
+        return True
+    return bool(clean)
 
 
 def _request_id(headers: Mapping[str, Any]) -> str:
@@ -628,17 +639,44 @@ def _remote_ip_from_headers(
 ) -> str:
     """Resolve the client IP used for CIDR decisions.
 
-    Forwarded headers are trusted only when the direct peer is already a
-    local/trusted backend peer. This preserves reverse-proxy behavior without
-    letting an arbitrary public client spoof an allowed source.
+    Forwarded headers are trusted only when the direct peer is explicitly
+    listed in ARCLINK_TRUSTED_PROXY_CIDRS. When unset, forwarded headers are
+    ignored and the direct peer is the only origin evidence.
     """
-    direct = str(remote_addr or "").strip() or _api_header(headers, "x-real-ip") or "127.0.0.1"
-    forwarded = _api_header(headers, "x-forwarded-for")
-    if forwarded and _backend_client_allowed(config, direct):
-        candidate = forwarded.split(",", 1)[0].strip()
+    direct = str(remote_addr or "").strip()
+    if not direct:
+        return ""
+    if _trusted_proxy_allowed(config, direct):
+        candidate = _forwarded_ip_candidate(headers)
         if candidate:
             return candidate
     return direct
+
+
+def _forwarded_ip_candidate(headers: Mapping[str, Any]) -> str:
+    forwarded = _api_header(headers, "x-forwarded-for")
+    real_ip = _api_header(headers, "x-real-ip")
+    return (forwarded.split(",", 1)[0].strip() if forwarded else "") or real_ip
+
+
+def _trusted_proxy_allowed(config: HostedApiConfig, remote_ip: str) -> bool:
+    normalized = str(remote_ip or "").strip()
+    if not normalized:
+        return False
+    return is_ip_in_cidrs(normalized, config.trusted_proxy_cidrs)
+
+
+def _remote_ip_trust_from_headers(
+    config: HostedApiConfig,
+    headers: Mapping[str, Any],
+    remote_addr: str = "",
+) -> str:
+    direct = str(remote_addr or "").strip()
+    if not direct:
+        return "unverified"
+    if _trusted_proxy_allowed(config, direct) and _forwarded_ip_candidate(headers):
+        return "trusted-proxy-forwarded"
+    return "direct-peer"
 
 
 def _backend_client_allowed(config: HostedApiConfig, remote_ip: str) -> bool:
@@ -646,6 +684,13 @@ def _backend_client_allowed(config: HostedApiConfig, remote_ip: str) -> bool:
     if is_loopback_ip(normalized):
         return True
     return is_ip_in_cidrs(normalized, config.backend_allowed_cidrs)
+
+
+def _admin_client_allowed(config: HostedApiConfig, remote_ip: str) -> bool:
+    normalized = str(remote_ip or "").strip()
+    if is_loopback_ip(normalized):
+        return True
+    return is_ip_in_cidrs(normalized, config.admin_allowed_cidrs)
 
 
 def _webhook_provider_for_route(route_key: str) -> str:
@@ -807,6 +852,74 @@ def _public_bot_checkout_token_valid(session: Mapping[str, Any], *, plan: str, t
     return bool(expected and supplied_digest and hmac.compare_digest(expected, supplied_digest))
 
 
+def _public_bot_checkout_token_consumed_for_open_checkout(
+    session: Mapping[str, Any],
+    *,
+    plan: str,
+    token: str,
+) -> bool:
+    metadata = json_loads_safe(str(session.get("metadata_json") or "{}"))
+    raw_hashes = metadata.get("public_bot_checkout_consumed_verifiers")
+    if not isinstance(raw_hashes, Mapping):
+        return False
+    expected = str(raw_hashes.get(plan) or "").strip()
+    supplied = str(token or "").strip()
+    supplied_digest = hashlib.sha256(supplied.encode("utf-8")).hexdigest() if supplied else ""
+    return bool(expected and supplied_digest and hmac.compare_digest(expected, supplied_digest))
+
+
+def _consume_public_bot_checkout_token(
+    conn: sqlite3.Connection,
+    session: Mapping[str, Any],
+    *,
+    plan: str,
+    token: str,
+) -> bool:
+    original_metadata_json = str(session.get("metadata_json") or "{}")
+    metadata = json_loads_safe(original_metadata_json)
+    raw_hashes = metadata.get("public_bot_checkout_verifiers")
+    if not isinstance(raw_hashes, Mapping):
+        return False
+    expected = str(raw_hashes.get(plan) or "").strip()
+    supplied = str(token or "").strip()
+    supplied_digest = hashlib.sha256(supplied.encode("utf-8")).hexdigest() if supplied else ""
+    if not (expected and supplied_digest and hmac.compare_digest(expected, supplied_digest)):
+        return False
+    next_hashes = {str(key): str(value) for key, value in dict(raw_hashes).items() if str(key) != plan and str(value)}
+    if next_hashes:
+        metadata["public_bot_checkout_verifiers"] = next_hashes
+    else:
+        metadata.pop("public_bot_checkout_verifiers", None)
+    consumed = dict(metadata.get("public_bot_checkout_consumed_at") or {}) if isinstance(metadata.get("public_bot_checkout_consumed_at"), Mapping) else {}
+    consumed[plan] = utc_now_iso()
+    metadata["public_bot_checkout_consumed_at"] = consumed
+    consumed_verifiers = (
+        dict(metadata.get("public_bot_checkout_consumed_verifiers") or {})
+        if isinstance(metadata.get("public_bot_checkout_consumed_verifiers"), Mapping)
+        else {}
+    )
+    consumed_verifiers[plan] = expected
+    metadata["public_bot_checkout_consumed_verifiers"] = consumed_verifiers
+    cursor = conn.execute(
+        """
+        UPDATE arclink_onboarding_sessions
+           SET metadata_json = ?, updated_at = ?
+         WHERE session_id = ? AND metadata_json = ?
+        """,
+        (
+            json.dumps(metadata, sort_keys=True, separators=(",", ":")),
+            utc_now_iso(),
+            str(session.get("session_id") or ""),
+            original_metadata_json,
+        ),
+    )
+    if cursor.rowcount != 1:
+        conn.rollback()
+        return False
+    conn.commit()
+    return True
+
+
 def _handle_public_bot_onboarding_checkout_redirect(
     conn: sqlite3.Connection,
     query: Mapping[str, str],
@@ -826,14 +939,17 @@ def _handle_public_bot_onboarding_checkout_redirect(
     if row is None:
         return _json_response(404, {"error": "onboarding_session_not_found", "request_id": request_id}, request_id=request_id)
     session = dict(row)
-    if not _public_bot_checkout_token_valid(session, plan=plan, token=token):
-        return _json_response(403, {"error": "invalid_public_bot_checkout_token", "request_id": request_id}, request_id=request_id)
+    token_is_active = _public_bot_checkout_token_valid(session, plan=plan, token=token)
 
     existing_url = str(session.get("checkout_url") or "").strip()
     existing_plan = str(session.get("selected_plan_id") or "").strip().lower()
     checkout_state = str(session.get("checkout_state") or "").strip().lower()
     if existing_url and checkout_state in {"open", "paid"}:
         if existing_plan == plan:
+            if token_is_active and not _consume_public_bot_checkout_token(conn, session, plan=plan, token=token):
+                return _json_response(403, {"error": "invalid_public_bot_checkout_token", "request_id": request_id}, request_id=request_id)
+            if not token_is_active and not _public_bot_checkout_token_consumed_for_open_checkout(session, plan=plan, token=token):
+                return _json_response(403, {"error": "invalid_public_bot_checkout_token", "request_id": request_id}, request_id=request_id)
             proof_cookie = _issue_onboarding_claim_cookie(conn, session_id=session_id, config=config)
             return _json_response(
                 303,
@@ -846,6 +962,10 @@ def _handle_public_bot_onboarding_checkout_redirect(
     price_id = config.founders_price_id if plan == "founders" else config.scale_price_id
     if not price_id:
         return _json_response(503, {"error": "stripe_price_not_configured", "request_id": request_id}, request_id=request_id)
+    if not token_is_active:
+        return _json_response(403, {"error": "invalid_public_bot_checkout_token", "request_id": request_id}, request_id=request_id)
+    if not _consume_public_bot_checkout_token(conn, session, plan=plan, token=token):
+        return _json_response(403, {"error": "invalid_public_bot_checkout_token", "request_id": request_id}, request_id=request_id)
 
     answer = answer_public_onboarding_api(
         conn,
@@ -913,12 +1033,12 @@ def _handle_stripe_webhook(
 
     # Raven speaks before silence: queue a "payment cleared" ping back to the
     # user's originating channel the first time entitlement transitions to paid.
-    if not result.replayed and result.entitlement_state == "paid" and result.user_id:
+    if result.entitlement_state == "paid" and result.user_id:
         try:
             _queue_paid_ping(conn, user_id=result.user_id, request_id=request_id)
         except Exception:  # noqa: BLE001 - never fail the webhook over a ping
             logger.exception("paid_ping_failed user_id=%s request_id=%s", result.user_id, request_id)
-    elif not result.replayed and result.entitlement_state != "paid" and result.user_id:
+    elif result.entitlement_state in {"past_due", "cancelled"} and result.user_id:
         try:
             _queue_billing_noncurrent_ping(
                 conn,
@@ -2031,11 +2151,13 @@ def _handle_fleet_enrollment_callback(
     headers: Mapping[str, Any],
     request_id: str,
     config: HostedApiConfig,
+    remote_addr: str,
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
     auth = _api_header(headers, "authorization")
     scheme, _, token = auth.partition(" ")
     if scheme.lower() != "bearer" or not token.strip():
         return _json_response(401, {"error": "unauthorized", "request_id": request_id}, request_id=request_id)
+    resolved_source_ip = _remote_ip_from_headers(config, headers, remote_addr)
     try:
         result = consume_fleet_enrollment(
             conn,
@@ -2043,7 +2165,8 @@ def _handle_fleet_enrollment_callback(
             payload=body,
             secret=config.fleet_enrollment_secret,
             actor="worker-bootstrap",
-            source_ip=_api_header(headers, "x-real-ip") or _api_header(headers, "x-forwarded-for"),
+            source_ip=resolved_source_ip or "unverified",
+            source_ip_trust=_remote_ip_trust_from_headers(config, headers, remote_addr),
         )
     except ArcLinkFleetEnrollmentError:
         return _json_response(401, {"error": "unauthorized", "request_id": request_id}, request_id=request_id)
@@ -2950,6 +3073,46 @@ def _handle_telegram_webhook(
             )
             return False
 
+    def _rollback_credential_reveal_after_send_failure() -> None:
+        if str(result.get("action") or "") != "credentials_revealed":
+            return
+        session_id = str(result.get("session_id") or "").strip()
+        channel_identity = str(result.get("channel_identity") or "").strip()
+        row = None
+        if session_id:
+            row = conn.execute(
+                "SELECT deployment_id FROM arclink_onboarding_sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        if row is None and channel_identity:
+            row = conn.execute(
+                """
+                SELECT deployment_id
+                FROM arclink_onboarding_sessions
+                WHERE channel_identity = ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (channel_identity,),
+            ).fetchone()
+        deployment_id = str((dict(row) if row is not None else {}).get("deployment_id") or "").strip()
+        if not deployment_id:
+            return
+        conn.execute(
+            """
+            UPDATE arclink_credential_handoffs
+               SET revealed_at = '', updated_at = ?
+             WHERE deployment_id = ?
+               AND credential_kind = 'dashboard_password'
+               AND status = 'available'
+               AND acknowledged_at = ''
+               AND removed_at = ''
+            """,
+            (utc_now_iso(), deployment_id),
+        )
+        conn.commit()
+
+    send_error = ""
     if telegram_transport is not None:
         if callback_query_id and hasattr(telegram_transport, "answer_callback_query"):
             try:
@@ -2963,7 +3126,9 @@ def _handle_telegram_webhook(
             try:
                 telegram_transport.send_message(result["chat_id"], result["text"], reply_markup=result.get("reply_markup"), entities=result.get("entities") or None)
                 sent = True
-            except Exception as exc:  # noqa: BLE001 - webhook must not retry forever on reply transport failure
+            except Exception as exc:  # noqa: BLE001 - surface reply failure so Telegram retries the update
+                send_error = _log_error_text(exc, limit=160)
+                _rollback_credential_reveal_after_send_failure()
                 logger.warning("telegram_reply_send_failed transport=injected action=%s error=%s", result.get("action", ""), _log_error_text(exc, limit=160))
     else:
         if telegram_config.is_live:
@@ -2980,8 +3145,16 @@ def _handle_telegram_webhook(
                 try:
                     live_transport.send_message(result["chat_id"], result["text"], reply_markup=result.get("reply_markup"), entities=result.get("entities") or None)
                     sent = True
-                except Exception as exc:  # noqa: BLE001 - acknowledge Telegram update even if the reply API errors
+                except Exception as exc:  # noqa: BLE001 - surface reply failure so Telegram retries the update
+                    send_error = _log_error_text(exc, limit=160)
+                    _rollback_credential_reveal_after_send_failure()
                     logger.warning("telegram_reply_send_failed transport=live action=%s error=%s", result.get("action", ""), _log_error_text(exc, limit=160))
+    if send_error:
+        return _json_response(
+            502,
+            {"ok": False, "error": "telegram_reply_send_failed", "action": result.get("action", "reply")},
+            request_id=request_id,
+        )
     live_triggered = False
     if str(result.get("action") or "") in PUBLIC_AGENT_LIVE_TRIGGER_ACTIONS:
         fast_acknowledged = _kick_telegram_fast_agent_ack(
@@ -3928,7 +4101,7 @@ def route_arclink_hosted_api(
     query: Mapping[str, str] | None = None,
     config: HostedApiConfig | None = None,
     stripe_client: Any | None = None,
-    remote_addr: str = "",
+    remote_addr: str = "127.0.0.1",
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
     """Route a single API request and return (status, payload, headers).
 
@@ -3978,7 +4151,7 @@ def route_arclink_hosted_api(
 
     if route_key in _CIDR_PROTECTED_ROUTES:
         client_ip = _remote_ip_from_headers(cfg, headers, remote_addr)
-        if not _backend_client_allowed(cfg, client_ip):
+        if not _admin_client_allowed(cfg, client_ip):
             logger.warning(
                 "api_cidr_denied method=%s path=%s route=%s remote_ip=%s request_id=%s",
                 clean_method, route_path, route_key, client_ip, request_id,
@@ -4026,7 +4199,7 @@ def route_arclink_hosted_api(
         elif route_key == "discord_webhook":
             result = _handle_discord_webhook(conn, body, headers, request_id, cfg, None, stripe)
         elif route_key == "fleet_enrollment_callback":
-            result = _handle_fleet_enrollment_callback(conn, parsed_body, headers, request_id, cfg)
+            result = _handle_fleet_enrollment_callback(conn, parsed_body, headers, request_id, cfg, remote_addr)
         elif route_key == "login":
             login_client_ip = _remote_ip_from_headers(cfg, headers, remote_addr)
             result = _handle_login(
@@ -4034,7 +4207,7 @@ def route_arclink_hosted_api(
                 parsed_body,
                 request_id,
                 cfg,
-                allow_admin=_backend_client_allowed(cfg, login_client_ip),
+                allow_admin=_admin_client_allowed(cfg, login_client_ip),
                 client_ip=login_client_ip,
             )
         elif route_key == "admin_login":
@@ -4296,6 +4469,15 @@ def make_arclink_hosted_api_wsgi(
             response_body = json.dumps(payload, sort_keys=True).encode("utf-8")
             start_response(_status_text(status_code), response_headers)
             return [response_body]
+        if length < 0:
+            result = _response_with_cors(
+                _json_response(400, {"error": "invalid_content_length", "request_id": request_id}, request_id=request_id),
+                cfg,
+            )
+            status_code, payload, response_headers = result
+            response_body = json.dumps(payload, sort_keys=True).encode("utf-8")
+            start_response(_status_text(status_code), response_headers)
+            return [response_body]
         if length > body_limit:
             result = _response_with_cors(
                 _json_response(413, {"error": "body_too_large", "request_id": request_id}, request_id=request_id),
@@ -4305,7 +4487,17 @@ def make_arclink_hosted_api_wsgi(
             response_body = json.dumps(payload, sort_keys=True).encode("utf-8")
             start_response(_status_text(status_code), response_headers)
             return [response_body]
-        body = environ["wsgi.input"].read(length).decode("utf-8") if length else ""
+        try:
+            body = environ["wsgi.input"].read(length).decode("utf-8") if length else ""
+        except UnicodeDecodeError:
+            result = _response_with_cors(
+                _json_response(400, {"error": "invalid_body_encoding", "request_id": request_id}, request_id=request_id),
+                cfg,
+            )
+            status_code, payload, response_headers = result
+            response_body = json.dumps(payload, sort_keys=True).encode("utf-8")
+            start_response(_status_text(status_code), response_headers)
+            return [response_body]
 
         # Build headers dict from CGI environ
         headers: dict[str, str] = {}

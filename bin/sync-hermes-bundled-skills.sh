@@ -32,8 +32,13 @@ for candidate in "${runtime_candidates[@]}"; do
 done
 
 if [[ -z "$runtime_dir" ]]; then
-  echo "Hermes bundled skills source not available; skipping bundled skill sync." >&2
-  exit 0
+  if [[ "${ARCLINK_SYNC_HERMES_BUNDLED_SKILLS_OPTIONAL:-0}" == "1" ]]; then
+    echo "Hermes bundled skills source not available; skipping bundled skill sync by explicit operator opt-out." >&2
+    exit 0
+  fi
+  echo "Hermes bundled skills source not available; refusing to skip bundled skill sync." >&2
+  echo "Set ARCLINK_SYNC_HERMES_BUNDLED_SKILLS_OPTIONAL=1 only for explicit development no-op runs." >&2
+  exit 1
 fi
 
 python_bin="$runtime_dir/hermes-venv/bin/python3"

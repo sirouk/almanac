@@ -108,13 +108,7 @@ chmod 0644 \
   "$TARGET_DIR/arclink-notion-claim-poll.timer"
 
 start_system_service_if_idle() {
-  local unit="$1" state=""
-  state="$(systemctl show -p ActiveState --value "$unit" 2>/dev/null || true)"
-  case "$state" in
-    active|activating|reloading|deactivating)
-      return 0
-      ;;
-  esac
+  local unit="$1"
   systemctl start "$unit" >/dev/null 2>&1 || true
 }
 

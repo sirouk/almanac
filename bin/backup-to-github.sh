@@ -128,9 +128,9 @@ if ! git -C "$ARCLINK_PRIV_DIR" diff --cached --quiet --exit-code; then
 fi
 
 if [[ -n "$BACKUP_GIT_REMOTE" ]]; then
+  prepare_backup_git_transport "$BACKUP_GIT_REMOTE"
   require_private_github_backup_remote "$BACKUP_GIT_REMOTE"
   ensure_backup_git_origin_remote "$ARCLINK_PRIV_DIR"
-  prepare_backup_git_transport "$BACKUP_GIT_REMOTE"
   reconcile_backup_git_remote_branch "$ARCLINK_PRIV_DIR" "$BACKUP_GIT_BRANCH"
   if [[ "$BACKUP_RECONCILE_PUSH_REQUIRED" == "1" ]]; then
     # The steady-state backup path is a single-writer timer on this host, so a

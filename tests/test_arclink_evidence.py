@@ -52,6 +52,20 @@ class TestRedaction(unittest.TestCase):
         self.assertIn("token=***", result)
         self.assertNotIn("abcdef1234567890", result)
 
+    def test_redact_text_uses_shared_secret_families(self):
+        samples = [
+            "anthropic sk-ant-" + "a" * 24,
+            "telegram 123456:" + "A" * 24,
+            "jwt eyJ" + "a" * 10 + "." + "b" * 10 + "." + "c" * 10,
+            "chutes cpk_live" + "d" * 12,
+            "github ghp_" + "e" * 24,
+            "pem -----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
+        ]
+        for sample in samples:
+            result = evidence.redact_text(sample)
+            self.assertNotEqual(result, sample)
+            self.assertIn("***", result)
+
 
 class TestEvidenceRecord(unittest.TestCase):
     def test_to_dict(self):
@@ -231,6 +245,31 @@ class TestEvidenceDBStorage(unittest.TestCase):
             evidence.store_evidence_run(conn, ledger=ledger, deployment_id="dep_1")
         runs = evidence.list_evidence_runs(conn, deployment_id="dep_1")
         self.assertEqual(len(runs), 3)
+
+    def test_list_evidence_runs_filters_by_journey(self):
+        conn = self._db()
+        evidence.store_evidence_run(conn, ledger=self._sample_ledger(run_id="run_hosted"), journey="hosted")
+        evidence.store_evidence_run(conn, ledger=self._sample_ledger(run_id="run_workspace"), journey="workspace")
+        runs = evidence.list_evidence_runs(conn, journey="workspace")
+        self.assertEqual([row["run_id"] for row in runs], ["run_workspace"])
+
+    def test_evidence_governance_status_requires_all_production_journeys(self):
+        conn = self._db()
+        for journey in ("hosted", "workspace", "router"):
+            evidence.store_evidence_run(
+                conn,
+                ledger=self._sample_ledger(run_id=f"run_{journey}"),
+                journey=journey,
+            )
+        blocked = self._sample_ledger(run_id="run_external", status="skipped")
+        blocked.status = "blocked_missing_credentials"
+        evidence.store_evidence_run(conn, ledger=blocked, journey="external")
+        status = evidence.evidence_governance_status(conn)
+        self.assertFalse(status["production_ready"])
+        self.assertEqual(status["missing_journeys"], [])
+        self.assertEqual(status["incomplete_journeys"], ["external"])
+        self.assertEqual(status["journeys"]["hosted"]["status"], "passed")
+        self.assertEqual(status["journeys"]["external"]["status"], "blocked")
 
     def test_latest_evidence_status_no_runs(self):
         conn = self._db()

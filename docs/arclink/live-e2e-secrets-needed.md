@@ -133,8 +133,9 @@ rows and skips unrelated provider rows.
 These external rows are a **catalog only** — they have no executable runners
 (see the warning above), so supplying these credentials lets you confirm the
 planning/opt-in behavior but does not exercise the named provider. Live external
-proof for each provider remains proof-gated (PG-STRIPE, PG-BOTS, PG-PROVIDER,
-PG-NOTION, PG-CLOUDFLARE, PG-TAILSCALE) and is not run by this runner today.
+proof for each provider remains proof-gated (PG-STRIPE, PG-BOTS, PG-HERMES,
+PG-FLEET, PG-PROVIDER, PG-NOTION, PG-CLOUDFLARE, PG-TAILSCALE) and is not run by
+this runner today.
 
 | Var | Required For | Purpose |
 |-----|-------------|---------|
@@ -150,6 +151,15 @@ PG-NOTION, PG-CLOUDFLARE, PG-TAILSCALE) and is not run by this runner today.
 | `ARCLINK_PROOF_HERMES_DASHBOARD` | Hermes dashboard landing | Enables deployed dashboard landing proof |
 | `ARCLINK_HERMES_DASHBOARD_URL` | Hermes dashboard landing | HTTPS Hermes dashboard URL |
 | `ARCLINK_HERMES_DASHBOARD_AUTH` | Hermes dashboard landing | Session/auth material supplied outside tracked files |
+| `ARCLINK_PROOF_TERMINAL_TMUX` | Terminal tmux durability | Enables dashboard/container restart persistence proof |
+| `ARCLINK_WORKSPACE_PROOF_TLS_URL` | Terminal tmux / workspace proof | HTTPS workspace base URL |
+| `ARCLINK_WORKSPACE_PROOF_AUTH` | Terminal tmux / workspace proof | Browser/session auth material supplied outside tracked files |
+| `ARCLINK_PROOF_HERMES_RELOAD_SKILLS` | Skill reload after enablement | Enables `/reload_skills` usability proof after ArcLink enables a skill |
+| `ARCLINK_PROOF_FLEET_SKILLS` | Fleet-shared skill guard | Enables fleet-shared `SKILL.md` guard/discovery proof |
+| `ARCLINK_PROOF_CALLBACK_STATE` | Native callback replay | Enables callback-family replay proof |
+| `ARCLINK_PROOF_DISCORD_MEDIA` | Discord media/components | Enables components/embed/attachment metadata proof |
+| `ARCLINK_PROOF_DISCORD_FREE_TEXT` | Discord Gateway free text | Enables `MESSAGE_CREATE` selected-agent ingress proof |
+| `ARCLINK_PROOF_TELEGRAM_TEXT_SPLIT` | Telegram long-text split | Enables long-message split delivery proof |
 | `ARCLINK_PROOF_CHUTES_OAUTH` | Chutes OAuth connect | Enables OAuth connect/callback proof |
 | `ARCLINK_CHUTES_OAUTH_CLIENT_ID` | Chutes OAuth connect | Chutes OAuth client id |
 | `ARCLINK_CHUTES_OAUTH_CLIENT_SECRET_REF` | Chutes OAuth connect | Secret reference for the Chutes OAuth client secret |

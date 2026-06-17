@@ -173,7 +173,16 @@ def diagnose_qmd_pending_embeddings(
             )
         ]
     current = float(now if now is not None else time.time())
-    age = max(0, int(current) - pending_since)
+    age = int(current) - pending_since
+    if age < 0:
+        return [
+            DiagnosticCheck(
+                provider="qmd",
+                name="pending_embeddings_age",
+                ok=False,
+                detail="pending-embeddings marker is from the future; check host clock sync",
+            )
+        ]
     stale = age > max_age
     detail = f"{pending} document(s) pending embeddings for ~{age // 3600}h" + (
         f" (exceeds {max_age // 3600}h threshold; vector search is stale)" if stale else ""

@@ -267,6 +267,7 @@ def _notify_transition(conn: sqlite3.Connection, *, host_id: str, hostname: str,
         channel_kind="operator",
         message=message,
         extra={"host_id": host_id, "hostname": hostname, "state": state, "previous_state": previous},
+        commit=False,
     )
 
 
@@ -364,7 +365,28 @@ def _apply_capacity_or_inventory(
     machine_id = _linked_machine_id(host)
     if not machine_id:
         return
-    asu_capacity = compute_asu(hardware) if hardware else float(capacity_slots)
+    try:
+        asu_capacity = compute_asu(hardware) if hardware else float(capacity_slots)
+    except Exception as exc:
+        conn.execute(
+            """
+            UPDATE arclink_inventory_machines
+            SET status = 'degraded', connectivity_summary_json = ?, last_probed_at = ?
+            WHERE machine_id = ?
+            """,
+            (
+                _redacted_json(
+                    {
+                        "ok": False,
+                        "probe_kind": kind,
+                        "error": f"invalid hardware summary: {redact_then_truncate(str(exc), limit=240)}",
+                    }
+                ),
+                now,
+                machine_id,
+            ),
+        )
+        return
     asu_consumed = current_load(machine_id, conn)
     sets = [
         "status = 'ready'",

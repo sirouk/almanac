@@ -142,6 +142,9 @@ def test_migration_captures_materializes_verifies_and_replays() -> None:
         outside = Path(tmpdir) / "outside.txt"
         outside.write_text("outside state\n", encoding="utf-8")
         (Path(source_roots["root"]) / "vault" / "outside-link").symlink_to(outside)
+        target_root = target_base / "dep_1-captain-one"
+        (target_root / "vault").mkdir(parents=True)
+        (target_root / "vault" / "stale.md").write_text("stale target state\n", encoding="utf-8")
         result = migration.migrate_pod(
             conn,
             executor=fake_executor(executor_mod),
@@ -162,8 +165,10 @@ def test_migration_captures_materializes_verifies_and_replays() -> None:
         paths = {item["path"]: item for item in manifest["files"]}
         expect(paths["vault/mission.md"]["boundary"] == "vault", str(paths))
         expect(len(paths["vault/mission.md"]["sha256"]) == 64, str(paths["vault/mission.md"]))
-        expect("vault/outside-link" not in paths, str(paths))
-        expect(not (target_base / "dep_1-captain-one" / "vault" / "outside-link").exists(), "symlink should not be materialized")
+        expect(paths["vault/outside-link"]["type"] == "symlink", str(paths["vault/outside-link"]))
+        target_link = target_root / "vault" / "outside-link"
+        expect(target_link.is_symlink() and os.readlink(target_link) == str(outside), "symlink should be preserved")
+        expect(not (target_root / "vault" / "stale.md").exists(), "materialize should clear stale target files")
         placements = {
             row["placement_id"]: row["status"]
             for row in conn.execute("SELECT placement_id, status FROM arclink_deployment_placements").fetchall()
@@ -596,6 +601,263 @@ def test_migration_dry_run_plans_without_mutating_files_or_placements() -> None:
     print("PASS test_migration_dry_run_plans_without_mutating_files_or_placements")
 
 
+def test_default_verifier_requires_fresh_service_health() -> None:
+    control = load_module("arclink_control.py", "arclink_control_pod_migration_fresh_health")
+    migration = load_module("arclink_pod_migration.py", "arclink_pod_migration_fresh_health")
+    conn = memory_db(control)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        seed_deployment(control, conn, Path(tmpdir))
+        started = datetime.now(timezone.utc)
+        empty = migration._default_verifier(conn, {"deployment_id": "dep_1", "updated_at": started.isoformat()}, {})
+        expect(empty["healthy"] is False and empty["blockers"]["service_health"] == "missing", str(empty))
+        conn.execute(
+            """
+            INSERT INTO arclink_service_health (deployment_id, service_name, status, checked_at, detail_json)
+            VALUES ('dep_1', 'gateway', 'healthy', ?, '{}')
+            """,
+            ((started - timedelta(seconds=5)).isoformat(),),
+        )
+        conn.commit()
+        stale = migration._default_verifier(conn, {"deployment_id": "dep_1", "updated_at": started.isoformat()}, {})
+        expect(stale["healthy"] is False and stale["blockers"]["gateway"] == "stale", str(stale))
+        conn.execute(
+            "UPDATE arclink_service_health SET checked_at = ? WHERE deployment_id = 'dep_1' AND service_name = 'gateway'",
+            ((started + timedelta(seconds=5)).isoformat(),),
+        )
+        conn.commit()
+        fresh = migration._default_verifier(conn, {"deployment_id": "dep_1", "updated_at": started.isoformat()}, {})
+        expect(fresh["healthy"] is True and fresh["fresh_service_count"] == 1, str(fresh))
+        gated = migration._apply_docker_status_gate({"healthy": True}, "failed")
+        expect(gated["healthy"] is False and gated["blockers"]["docker_compose_apply"] == "failed", str(gated))
+    print("PASS test_default_verifier_requires_fresh_service_health")
+
+
+def test_migration_default_verifier_fails_closed_without_fresh_health() -> None:
+    control = load_module("arclink_control.py", "arclink_control_pod_migration_default_verify")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_pod_migration_default_verify")
+    migration = load_module("arclink_pod_migration.py", "arclink_pod_migration_default_verify")
+    conn = memory_db(control)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        seed_deployment(control, conn, Path(tmpdir))
+        result = migration.migrate_pod(
+            conn,
+            executor=fake_executor(executor_mod),
+            deployment_id="dep_1",
+            target_machine_id="host_target",
+            migration_id="mig_abababababababababababab",
+            env=ROOT_CAPTURE_ENV,
+        )
+        expect(result["status"] == "rolled_back", str(result))
+        row = conn.execute("SELECT verification_json FROM arclink_pod_migrations WHERE migration_id = ?", (result["migration_id"],)).fetchone()
+        verification = json.loads(row["verification_json"])
+        expect(verification["blockers"]["service_health"] == "missing", str(verification))
+    print("PASS test_migration_default_verifier_fails_closed_without_fresh_health")
+
+
+def test_active_live_migration_blocks_distinct_migration_ids() -> None:
+    control = load_module("arclink_control.py", "arclink_control_pod_migration_active_block")
+    migration = load_module("arclink_pod_migration.py", "arclink_pod_migration_active_block")
+    conn = memory_db(control)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        seed_deployment(control, conn, Path(tmpdir))
+        first = migration.plan_pod_migration(
+            conn,
+            deployment_id="dep_1",
+            target_machine_id="host_target",
+            migration_id="mig_acacacacacacacacacacacac",
+        )
+        expect(first["status"] == "planned", str(first))
+        try:
+            migration.plan_pod_migration(
+                conn,
+                deployment_id="dep_1",
+                target_machine_id="host_target",
+                migration_id="mig_bcbcbcbcbcbcbcbcbcbcbcbc",
+            )
+        except migration.ArcLinkPodMigrationError as exc:
+            expect("active migration" in str(exc), str(exc))
+        else:
+            raise AssertionError("expected distinct live migration to be blocked")
+    print("PASS test_active_live_migration_blocks_distinct_migration_ids")
+
+
+def test_running_migration_id_cannot_be_reentered() -> None:
+    control = load_module("arclink_control.py", "arclink_control_pod_migration_running_reentry")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_pod_migration_running_reentry")
+    migration = load_module("arclink_pod_migration.py", "arclink_pod_migration_running_reentry")
+    conn = memory_db(control)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        seed_deployment(control, conn, Path(tmpdir))
+        row = migration.plan_pod_migration(
+            conn,
+            deployment_id="dep_1",
+            target_machine_id="host_target",
+            migration_id="mig_cdcdcdcdcdcdcdcdcdcdcdcd",
+        )
+        conn.execute("UPDATE arclink_pod_migrations SET status = 'running' WHERE migration_id = ?", (row["migration_id"],))
+        conn.commit()
+        executor = fake_executor(executor_mod)
+        try:
+            migration.migrate_pod(
+                conn,
+                executor=executor,
+                deployment_id="dep_1",
+                target_machine_id="host_target",
+                migration_id=row["migration_id"],
+                verifier=lambda _conn, _row, _intent: {"healthy": True},
+                env=ROOT_CAPTURE_ENV,
+            )
+        except migration.ArcLinkPodMigrationError as exc:
+            expect("already running" in str(exc), str(exc))
+        else:
+            raise AssertionError("expected running migration reentry to fail before host mutation")
+        expect(executor._fake_lifecycle_runs == {}, str(executor._fake_lifecycle_runs))
+    print("PASS test_running_migration_id_cannot_be_reentered")
+
+
+def test_existing_plan_rechecks_target_availability() -> None:
+    control = load_module("arclink_control.py", "arclink_control_pod_migration_target_recheck")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_pod_migration_target_recheck")
+    migration = load_module("arclink_pod_migration.py", "arclink_pod_migration_target_recheck")
+    conn = memory_db(control)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        seed_deployment(control, conn, Path(tmpdir))
+        row = migration.plan_pod_migration(
+            conn,
+            deployment_id="dep_1",
+            target_machine_id="host_target",
+            migration_id="mig_dededededededededededede",
+        )
+        conn.execute("UPDATE arclink_fleet_hosts SET drain = 1 WHERE host_id = 'host_target'")
+        conn.commit()
+        executor = fake_executor(executor_mod)
+        try:
+            migration.migrate_pod(
+                conn,
+                executor=executor,
+                deployment_id="dep_1",
+                target_machine_id="host_target",
+                migration_id=row["migration_id"],
+                verifier=lambda _conn, _row, _intent: {"healthy": True},
+                env=ROOT_CAPTURE_ENV,
+            )
+        except migration.ArcLinkPodMigrationError as exc:
+            expect("target host is not available" in str(exc), str(exc))
+        else:
+            raise AssertionError("expected drained target to fail existing plan recheck")
+        expect(executor._fake_lifecycle_runs == {}, str(executor._fake_lifecycle_runs))
+    print("PASS test_existing_plan_rechecks_target_availability")
+
+
+def test_migration_gc_revalidates_capture_path_before_rmtree() -> None:
+    control = load_module("arclink_control.py", "arclink_control_pod_migration_gc_guard")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_pod_migration_gc_guard")
+    migration = load_module("arclink_pod_migration.py", "arclink_pod_migration_gc_guard")
+    conn = memory_db(control)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        seed_deployment(control, conn, Path(tmpdir))
+        result = migration.migrate_pod(
+            conn,
+            executor=fake_executor(executor_mod),
+            deployment_id="dep_1",
+            target_machine_id="host_target",
+            migration_id="mig_efefefefefefefefefefefef",
+            verifier=lambda _conn, _row, _intent: {"healthy": True},
+            retention_days=0,
+            env=ROOT_CAPTURE_ENV,
+        )
+        unsafe = Path(tmpdir) / "unsafe-delete"
+        unsafe.mkdir()
+        (unsafe / "keep.txt").write_text("do not delete\n", encoding="utf-8")
+        conn.execute(
+            "UPDATE arclink_pod_migrations SET capture_dir = ? WHERE migration_id = ?",
+            (str(unsafe), result["migration_id"]),
+        )
+        conn.commit()
+        try:
+            migration.garbage_collect_pod_migrations(conn, now=datetime.now(timezone.utc) + timedelta(seconds=1))
+        except migration.ArcLinkPodMigrationError as exc:
+            expect("capture directory" in str(exc), str(exc))
+        else:
+            raise AssertionError("expected GC to fail closed on an unsafe capture_dir")
+        expect((unsafe / "keep.txt").exists(), "GC must not delete an unvalidated capture_dir")
+        row = conn.execute("SELECT source_garbage_collected_at FROM arclink_pod_migrations WHERE migration_id = ?", (result["migration_id"],)).fetchone()
+        expect(row["source_garbage_collected_at"] == "", str(dict(row)))
+    print("PASS test_migration_gc_revalidates_capture_path_before_rmtree")
+
+
+def test_invalid_gc_days_fails_before_host_mutation() -> None:
+    control = load_module("arclink_control.py", "arclink_control_pod_migration_bad_gc_days")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_pod_migration_bad_gc_days")
+    migration = load_module("arclink_pod_migration.py", "arclink_pod_migration_bad_gc_days")
+    conn = memory_db(control)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        seed_deployment(control, conn, Path(tmpdir))
+        executor = fake_executor(executor_mod)
+        try:
+            migration.migrate_pod(
+                conn,
+                executor=executor,
+                deployment_id="dep_1",
+                target_machine_id="host_target",
+                migration_id="mig_fafafafafafafafafafafafa",
+                verifier=lambda _conn, _row, _intent: {"healthy": True},
+                env={**ROOT_CAPTURE_ENV, "ARCLINK_MIGRATION_GC_DAYS": "not-an-integer"},
+            )
+        except migration.ArcLinkPodMigrationError as exc:
+            expect("ARCLINK_MIGRATION_GC_DAYS" in str(exc), str(exc))
+        else:
+            raise AssertionError("expected invalid GC days to fail before migration starts")
+        rows = conn.execute("SELECT COUNT(*) AS c FROM arclink_pod_migrations").fetchone()
+        expect(int(rows["c"]) == 0, str(dict(rows)))
+        expect(executor._fake_lifecycle_runs == {}, str(executor._fake_lifecycle_runs))
+    print("PASS test_invalid_gc_days_fails_before_host_mutation")
+
+
+def test_success_and_idempotency_complete_are_atomic() -> None:
+    control = load_module("arclink_control.py", "arclink_control_pod_migration_atomic_success")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_pod_migration_atomic_success")
+    migration = load_module("arclink_pod_migration.py", "arclink_pod_migration_atomic_success")
+    conn = memory_db(control)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        seed_deployment(control, conn, Path(tmpdir))
+        original_complete = migration.complete_arclink_operation_idempotency
+
+        def fail_complete(*_args, **_kwargs):
+            raise RuntimeError("simulated idempotency complete failure")
+
+        migration.complete_arclink_operation_idempotency = fail_complete
+        try:
+            try:
+                migration.migrate_pod(
+                    conn,
+                    executor=fake_executor(executor_mod),
+                    deployment_id="dep_1",
+                    target_machine_id="host_target",
+                    migration_id="mig_fbfbfbfbfbfbfbfbfbfbfbfb",
+                    verifier=lambda _conn, _row, _intent: {"healthy": True},
+                    env=ROOT_CAPTURE_ENV,
+                )
+            except RuntimeError as exc:
+                expect("simulated idempotency" in str(exc), str(exc))
+            else:
+                raise AssertionError("expected idempotency completion failure")
+        finally:
+            migration.complete_arclink_operation_idempotency = original_complete
+        row = conn.execute("SELECT status FROM arclink_pod_migrations WHERE migration_id = 'mig_fbfbfbfbfbfbfbfbfbfbfbfb'").fetchone()
+        expect(row["status"] == "rolled_back", str(dict(row)))
+        idem = conn.execute(
+            """
+            SELECT status
+            FROM arclink_operation_idempotency
+            WHERE operation_kind = 'pod_migration'
+              AND idempotency_key = 'arclink:migration:mig_fbfbfbfbfbfbfbfbfbfbfbfb'
+            """
+        ).fetchone()
+        expect(idem["status"] == "failed", str(dict(idem)))
+    print("PASS test_success_and_idempotency_complete_are_atomic")
+
+
 def main() -> int:
     test_migration_captures_materializes_verifies_and_replays()
     test_migration_capture_requires_explicit_root_opt_in()
@@ -608,7 +870,15 @@ def main() -> int:
     test_redeploy_in_place_rollback_restarts_source_without_target_teardown()
     test_migration_gc_marks_expired_successes_only()
     test_migration_dry_run_plans_without_mutating_files_or_placements()
-    print("PASS all 10 ArcLink Pod migration tests")
+    test_default_verifier_requires_fresh_service_health()
+    test_migration_default_verifier_fails_closed_without_fresh_health()
+    test_active_live_migration_blocks_distinct_migration_ids()
+    test_running_migration_id_cannot_be_reentered()
+    test_existing_plan_rechecks_target_availability()
+    test_migration_gc_revalidates_capture_path_before_rmtree()
+    test_invalid_gc_days_fails_before_host_mutation()
+    test_success_and_idempotency_complete_are_atomic()
+    print("PASS all 19 ArcLink Pod migration tests")
     return 0
 
 

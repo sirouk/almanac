@@ -41,7 +41,7 @@ secret manager. Never commit them.
 | Stripe | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, product/price ids, portal configuration |
 | Domain ingress | Cloudflare zone id or discoverable zone plus scoped DNS/API token |
 | Tailscale ingress | Logged-in node, MagicDNS/HTTPS readiness, Serve/Funnel approval where used |
-| Hosted API | `ARCLINK_SESSION_HASH_PEPPER`, `ARCLINK_SESSION_HASH_PEPPER_REQUIRED=1`, CORS/cookie settings, and a narrowed `ARCLINK_BACKEND_ALLOWED_CIDRS` |
+| Hosted API | `ARCLINK_SESSION_HASH_PEPPER`, `ARCLINK_SESSION_HASH_PEPPER_REQUIRED=1`, CORS/cookie settings, `ARCLINK_TRUSTED_PROXY_CIDRS` for proxy header trust, `ARCLINK_ADMIN_ALLOWED_CIDRS` for Operator admin sources, and `ARCLINK_BACKEND_ALLOWED_CIDRS` for internal backend peers |
 | Public Telegram | Public onboarding bot token, `TELEGRAM_WEBHOOK_SECRET`, and webhook registration with the secret-token header |
 | Public Discord | Discord bot token/application credentials and interaction endpoint |
 | Model provider | Owner/admin API key for per-deployment key lifecycle |
@@ -60,7 +60,7 @@ secret manager. Never commit them.
 4. Choose provider adapter mode: `fake` for validation or explicit live mode
    only when credentials and operator approval are present.
 5. Configure the hosted API boundary: session hash pepper, cookie/CORS values,
-   and the admin/control CIDR allow-list.
+   proxy-trust CIDRs, Operator admin CIDRs, and internal backend CIDRs.
 6. Accept the `GAP-019` Docker trusted-host acknowledgement when this machine
    is the operator-owned Control Node host. The prompt writes
    `ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED=accepted` only to private Docker

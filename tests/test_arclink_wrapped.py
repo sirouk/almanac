@@ -180,6 +180,17 @@ def seed_wrapped_fixture(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def test_wrapped_notification_extra_json_rejects_plaintext_secret_material() -> None:
+    wrapped = load_module(WRAPPED_PY, "arclink_wrapped_test_secret_json")
+    try:
+        wrapped._notification_extra_json({"token": "sk-proj-abcdefghijklmnopqrstuvwxyz"})
+    except ValueError as exc:
+        expect("secret material" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected Wrapped JSON persistence helper to reject plaintext secret material")
+    print("PASS test_wrapped_notification_extra_json_rejects_plaintext_secret_material")
+
+
 def test_generate_wrapped_report_is_scoped_redacted_and_persisted() -> None:
     wrapped = load_module(WRAPPED_PY, "arclink_wrapped_test_core")
     conn = memory_db()
@@ -370,6 +381,12 @@ def test_wrapped_scheduler_skips_empty_new_agent_and_operator_inventory() -> Non
 
     due = wrapped.list_due_wrapped_captains(conn, now="2026-05-30T12:00:00+00:00")
     expect(due == [], str(due))
+    session_due = wrapped.list_due_wrapped_captains(
+        conn,
+        now="2026-05-30T12:00:00+00:00",
+        session_counter=lambda **_: {"session_count": 1, "turn_count": 4},
+    )
+    expect([row["user_id"] for row in session_due] == ["user_empty"], str(session_due))
     summary = wrapped.run_wrapped_scheduler_once(conn, now="2026-05-30T12:00:00+00:00")
     expect(summary["due"] == 0 and summary["generated"] == 0 and summary["queued"] == 0, str(summary))
 
@@ -496,6 +513,49 @@ def test_wrapped_delivery_normalizes_add_agent_contacts_and_skips_missing_channe
     print("PASS test_wrapped_delivery_normalizes_add_agent_contacts_and_skips_missing_channel")
 
 
+def test_wrapped_scheduler_retries_committed_report_delivery_without_duplicate_generation() -> None:
+    wrapped = load_module(WRAPPED_PY, "arclink_wrapped_test_delivery_retry")
+    conn = memory_db()
+    seed_wrapped_fixture(conn)
+    conn.execute("UPDATE arclink_users SET status = 'suspended' WHERE user_id = 'user_2'")
+    conn.commit()
+
+    original_channel = wrapped._captain_delivery_channel
+
+    def broken_channel(*_args, **_kwargs):
+        raise RuntimeError("outbox insert failed")
+
+    wrapped._captain_delivery_channel = broken_channel
+    try:
+        first = wrapped.run_wrapped_scheduler_once(conn, now="2026-05-13T12:00:00+00:00")
+        expect(first["generated"] == 1 and first["failed"] == 1, str(first))
+        early = wrapped.run_wrapped_scheduler_once(conn, now="2026-05-13T12:05:00+00:00")
+        expect(early["due"] == 0 and early["generated"] == 0 and early["failed"] == 0, str(early))
+        retry = wrapped.run_wrapped_scheduler_once(conn, now="2026-05-13T12:20:00+00:00")
+        expect(retry["generated"] == 0 and retry["failed"] == 1, str(retry))
+    finally:
+        wrapped._captain_delivery_channel = original_channel
+
+    generated_count = conn.execute(
+        "SELECT COUNT(*) AS count FROM arclink_wrapped_reports WHERE user_id = 'user_1' AND status = 'generated'"
+    ).fetchone()["count"]
+    failed_count = conn.execute(
+        "SELECT COUNT(*) AS count FROM arclink_wrapped_reports WHERE user_id = 'user_1' AND status = 'failed'"
+    ).fetchone()["count"]
+    expect(generated_count == 1, f"expected one generated report, got {generated_count}")
+    expect(failed_count == 2, f"expected two failed retry markers, got {failed_count}")
+
+    recovered = wrapped.run_wrapped_scheduler_once(conn, now="2026-05-13T13:21:00+00:00")
+    expect(recovered["generated"] == 0 and recovered["queued"] == 1 and recovered["failed"] == 0, str(recovered))
+    generated_after_recovery = conn.execute(
+        "SELECT COUNT(*) AS count FROM arclink_wrapped_reports WHERE user_id = 'user_1' AND status = 'generated'"
+    ).fetchone()["count"]
+    expect(generated_after_recovery == 1, f"delivery retry must not mint a duplicate report: {generated_after_recovery}")
+    outbox = conn.execute("SELECT COUNT(*) AS count FROM notification_outbox WHERE target_kind = 'captain-wrapped'").fetchone()["count"]
+    expect(outbox == 1, str(outbox))
+    print("PASS test_wrapped_scheduler_retries_committed_report_delivery_without_duplicate_generation")
+
+
 def test_wrapped_scheduler_retries_failures_and_notifies_operator_after_persistent_failure() -> None:
     wrapped = load_module(WRAPPED_PY, "arclink_wrapped_test_scheduler")
     conn = memory_db()
@@ -506,10 +566,14 @@ def test_wrapped_scheduler_retries_failures_and_notifies_operator_after_persiste
     def broken_counter(**_kwargs):
         raise RuntimeError("provider token=sk-proj-abcdefghijklmnopqrstuvwxyz unavailable")
 
-    for _ in range(3):
+    for timestamp in (
+        "2026-05-13T12:00:00+00:00",
+        "2026-05-13T12:15:00+00:00",
+        "2026-05-13T13:15:00+00:00",
+    ):
         summary = wrapped.run_wrapped_scheduler_once(
             conn,
-            now="2026-05-13T12:00:00+00:00",
+            now=timestamp,
             session_counter=broken_counter,
         )
     expect(summary["failed"] == 1, str(summary))
@@ -528,14 +592,16 @@ def test_wrapped_scheduler_retries_failures_and_notifies_operator_after_persiste
 
 
 def main() -> int:
+    test_wrapped_notification_extra_json_rejects_plaintext_secret_material()
     test_generate_wrapped_report_is_scoped_redacted_and_persisted()
     test_wrapped_report_score_is_deterministic_for_same_inputs()
     test_wrapped_frequency_periods_due_and_admin_privacy()
     test_wrapped_scheduler_skips_empty_new_agent_and_operator_inventory()
     test_wrapped_delivery_queue_respects_quiet_hours_and_marks_cadence()
     test_wrapped_delivery_normalizes_add_agent_contacts_and_skips_missing_channel()
+    test_wrapped_scheduler_retries_committed_report_delivery_without_duplicate_generation()
     test_wrapped_scheduler_retries_failures_and_notifies_operator_after_persistent_failure()
-    print("PASS all 6 ArcLink Wrapped tests")
+    print("PASS all 9 ArcLink Wrapped tests")
     return 0
 
 

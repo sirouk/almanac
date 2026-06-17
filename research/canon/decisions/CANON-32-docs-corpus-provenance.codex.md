@@ -1,0 +1,11 @@
+<<<CODEX-DECISIONS-START CANON-32>>>
+## CANON-32 — Codex (GPT-5.5 xhigh) decision recommendations (symphony-anchored)
+
+### DECISION 1: Provider-name hygiene policy for canonical specs and redaction tests
+- RECOMMENDATION: Treat provider-name mentions as public-but-controlled provider context, not as secrets. Keep `test_provider_name_is_only_used_for_model_provider_context()` fail-closed for general public files, but explicitly allow source-owned provider/security/provenance contexts: `CANON.md`, `DISSECT.md`, `research/**`, provider docs/code/tests, and `tests/test_arclink_evidence.py`. Do not rewrite `CANON.md` to hide current provider truth, and do not weaken private-operator-term scanning. Current `tests/test_public_repo_hygiene.py:65-138` already matches this shape; ratify it. Regression proof: `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_public_repo_hygiene.py` and `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_arclink_evidence.py`.
+- SYMPHONY ANCHOR: Secrets, Keys, And Rotation: “Public docs, chat transcripts, logs, evidence artifacts, command arguments, and generated markdown must never contain secret values.” Whole-System Traversal: “Every step should have a local source owner, a local regression or dry-run proof where possible.”
+- RATIONALE: The provider name is not a secret; provider tokens are. The canon/spec files are CANON-32-owned source truth, and the evidence test is CANON-23-owned proof that provider-token families redact. A narrow path/context allowlist preserves same-truth docs, keeps redaction evidence, and still fails closed on stray provider branding outside approved contexts.
+- TRADEOFFS & ALTERNATIVES: Replacing provider names with generic wording would make CANON less truthful and weaken redaction tests. Broadening the regex to allow every `Chutes` line would make the hygiene gate toothless. Line-level allowlists are more brittle than path/context ownership. Residual risk: approved files can still overuse provider names, so reviewers should treat allowlist additions as policy changes.
+- EFFORT / BLAST-RADIUS: low; touches `tests/test_public_repo_hygiene.py` policy only, plus existing CANON-32/CANON-23 regression checks.
+
+<<<CODEX-DECISIONS-END CANON-32>>>

@@ -62,6 +62,7 @@ def test_telegram_parse_update() -> None:
     })
     expect(native_callback is not None, "should parse native callback")
     expect(native_callback["telegram_native_callback"] is True, str(native_callback))
+    expect(native_callback["telegram_callback_family"] == "mp", str(native_callback))
     expect(native_callback["callback_message_id"] == "8", str(native_callback))
     expect("telegram_update_json" in native_callback, str(native_callback))
     media = tg.parse_telegram_update({
@@ -254,6 +255,81 @@ def test_telegram_operator_identity_uses_operator_raven_before_public_onboarding
     expect(group_leak_attempt is not None, "group public bot path should still reply safely")
     expect(group_leak_attempt["action"] != "operator_raven_status", str(group_leak_attempt))
     print("PASS test_telegram_operator_identity_uses_operator_raven_before_public_onboarding")
+
+
+def test_telegram_operator_path_uses_identity_rate_limit() -> None:
+    control = load_module("arclink_control.py", "arclink_control_tg_operator_rate_test")
+    tg = load_module("arclink_telegram.py", "arclink_telegram_operator_rate_test")
+    conn = memory_db(control)
+    env = {
+        "ARCLINK_CURATOR_CHANNELS": "telegram,discord",
+        "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "discord",
+        "OPERATOR_NOTIFY_CHANNEL_ID": "1234567890",
+        "ARCLINK_OPERATOR_TELEGRAM_USER_IDS": "99",
+    }
+    for index in range(20):
+        result = tg.handle_telegram_update(
+            conn,
+            {
+                "update_id": 1000 + index,
+                "message": {
+                    "message_id": 100 + index,
+                    "chat": {"id": 99, "type": "private"},
+                    "from": {"id": 99},
+                    "text": "/operator_status",
+                },
+            },
+            env=env,
+        )
+        expect(result is not None and result["action"] == "operator_raven_status", str(result))
+    try:
+        tg.handle_telegram_update(
+            conn,
+            {
+                "update_id": 2000,
+                "message": {
+                    "message_id": 200,
+                    "chat": {"id": 99, "type": "private"},
+                    "from": {"id": 99},
+                    "text": "/operator_status",
+                },
+            },
+            env=env,
+        )
+    except Exception as exc:  # noqa: BLE001
+        expect("rate limit" in str(exc).lower(), str(exc))
+    else:
+        raise AssertionError("expected operator identity rate limit")
+    rows = conn.execute(
+        "SELECT COUNT(*) AS n FROM rate_limits WHERE scope = 'arclink:operator:telegram' AND subject = 'telegram:99'"
+    ).fetchone()
+    expect(rows["n"] == 20, str(dict(rows)))
+    print("PASS test_telegram_operator_path_uses_identity_rate_limit")
+
+
+def test_telegram_send_message_splits_long_text_and_clamps_entities_per_chunk() -> None:
+    tg = load_module("arclink_telegram.py", "arclink_telegram_entity_clamp_test")
+    calls: list[dict[str, object]] = []
+    tg._request_json = lambda url, *, method="GET", payload=None, timeout=30: calls.append(payload or {}) or {"message_id": len(calls)}
+    tg.telegram_send_message(
+        bot_token="123:abc",
+        chat_id="42",
+        text="a" * 4005,
+        reply_markup={"inline_keyboard": [[{"text": "Open", "url": "https://example.test"}]]},
+        entities=(
+            {"type": "code", "offset": 3998, "length": 10},
+            {"type": "code", "offset": 4001, "length": 5},
+        ),
+    )
+    expect(len(calls) == 2, str(calls))
+    first, second = calls
+    expect(len(str(first["text"])) == 4000, str(first))
+    expect(str(second["text"]) == "a" * 5, str(second))
+    expect("reply_markup" not in first, str(first))
+    expect("reply_markup" in second, str(second))
+    expect(first["entities"] == [{"type": "code", "offset": 3998, "length": 2}], str(first))
+    expect(second["entities"] == [{"type": "code", "offset": 0, "length": 5}, {"type": "code", "offset": 1, "length": 4}], str(second))
+    print("PASS test_telegram_send_message_splits_long_text_and_clamps_entities_per_chunk")
 
 
 def test_telegram_fake_transport_polling() -> None:
@@ -668,6 +744,8 @@ def main() -> int:
     test_telegram_parse_update()
     test_telegram_handle_update_through_bot_contract()
     test_telegram_operator_identity_uses_operator_raven_before_public_onboarding()
+    test_telegram_operator_path_uses_identity_rate_limit()
+    test_telegram_send_message_splits_long_text_and_clamps_entities_per_chunk()
     test_telegram_fake_transport_polling()
     test_telegram_registers_public_bot_actions()
     test_telegram_registers_operator_command_scope()
@@ -680,7 +758,7 @@ def main() -> int:
     test_telegram_refuses_live_without_token()
     test_live_transport_requires_token()
     test_telegram_validate_live_readiness()
-    print("PASS all 16 ArcLink Telegram adapter tests")
+    print("PASS all 18 ArcLink Telegram adapter tests")
     return 0
 
 

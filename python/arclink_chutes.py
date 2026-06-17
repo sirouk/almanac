@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 from urllib import request as urlrequest
 
+from arclink_boundary import reject_secret_material
 from arclink_product import chutes_base_url, chutes_default_model
 
 
@@ -104,7 +105,7 @@ class ChutesDeploymentBoundary:
                 "usage_percent": self.usage_percent,
                 "warning_threshold_percent": self.warning_threshold_percent,
                 "hard_limit_percent": self.hard_limit_percent,
-                "limit_enforced": True,
+                "limit_enforced": self.budget_status != "unlimited",
             },
             "billing_lifecycle": dict(self.billing_lifecycle),
         }
@@ -457,7 +458,9 @@ def _json_loads_object(value: Any) -> dict[str, Any]:
 
 
 def _json_dumps_object(value: Mapping[str, Any]) -> str:
-    return json.dumps(dict(value), sort_keys=True, separators=(",", ":"), default=str)
+    payload = dict(value)
+    reject_secret_material(payload, label="ArcLink Chutes JSON")
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
 
 
 def _clean_money_cents(event: Mapping[str, Any]) -> int:
@@ -667,6 +670,7 @@ def evaluate_chutes_deployment_boundary(
     *,
     env: Mapping[str, str] | None = None,
     billing_state: str = "",
+    observe_unlimited_authorized: bool = False,
 ) -> ChutesDeploymentBoundary:
     """Evaluate local Chutes credential and budget state without exposing keys.
 
@@ -705,14 +709,13 @@ def evaluate_chutes_deployment_boundary(
         )
     )
     # The Operator's own Pod is observed like a Captain Pod (usage is still metered and
-    # recorded) but is effectively unlimited: it never fails closed on budget so Raven
-    # can always remedy the stack. Stamped as chutes.budget_policy=observe_only_unlimited
-    # on the operator deployment.
+    # recorded) but is effectively unlimited only when a DB-aware caller authorizes the
+    # deployment/user against operator settings. Metadata alone is never trusted.
     budget_policy = _first_text(
         chutes_meta.get("budget_policy"),
         meta.get("chutes_budget_policy"),
     ).strip().lower()
-    unlimited_budget = budget_policy in {"observe_only_unlimited", "unlimited"}
+    unlimited_budget = budget_policy in {"observe_only_unlimited", "unlimited"} and bool(observe_unlimited_authorized)
     warning_threshold_percent = _clean_percent(
         _first_text(
             chutes_meta.get("warning_threshold_percent"),
@@ -840,6 +843,53 @@ def evaluate_chutes_deployment_boundary(
     )
 
 
+def chutes_unlimited_budget_policy(metadata: Mapping[str, Any] | None = None) -> str:
+    """Return the unlimited-style Chutes budget policy claim, if present."""
+    meta = dict(metadata or {})
+    chutes_meta = _as_mapping(meta.get("chutes"))
+    budget_policy = _first_text(
+        chutes_meta.get("budget_policy"),
+        meta.get("chutes_budget_policy"),
+    ).strip().lower()
+    return budget_policy if budget_policy in {"observe_only_unlimited", "unlimited"} else ""
+
+
+def record_chutes_budget_policy_demotion(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    metadata: Mapping[str, Any] | None = None,
+    observe_unlimited_authorized: bool = False,
+    source: str = "",
+    commit: bool = True,
+) -> bool:
+    """Persist redacted evidence when an unlimited policy claim is demoted."""
+    policy = chutes_unlimited_budget_policy(metadata)
+    if not policy or bool(observe_unlimited_authorized):
+        return False
+    clean_deployment_id = _clean_text(deployment_id)
+    if not clean_deployment_id:
+        return False
+    from arclink_control import append_arclink_event
+
+    append_arclink_event(
+        conn,
+        subject_kind="deployment",
+        subject_id=clean_deployment_id,
+        event_type="llm_router:budget_policy_demoted",
+        metadata={
+            "deployment_id": clean_deployment_id,
+            "provider": "chutes",
+            "budget_policy": policy,
+            "authorized": False,
+            "action": "demoted_to_capped_lane",
+            "source": _safe_usage_text(source or "unknown", max_len=80),
+        },
+        commit=commit,
+    )
+    return True
+
+
 def record_chutes_usage_event(
     conn: sqlite3.Connection,
     *,
@@ -869,10 +919,21 @@ def record_chutes_usage_event(
     clean_user_id = _clean_text(user_id) or row_user_id
     if clean_user_id != row_user_id:
         raise PermissionError("Chutes usage event is not scoped to this deployment owner")
+    from arclink_operator_agent import observe_unlimited_authorized as _observe_unlimited_authorized
+
+    observe_authorized = _observe_unlimited_authorized(conn, clean_deployment_id, clean_user_id)
 
     event = dict(usage_event or {})
     event_id, public_usage_event_id = _usage_event_identity(clean_deployment_id, event)
     metadata = _json_loads_object(row["metadata_json"])
+    record_chutes_budget_policy_demotion(
+        conn,
+        deployment_id=clean_deployment_id,
+        metadata=metadata,
+        observe_unlimited_authorized=observe_authorized,
+        source="chutes_usage_ingest",
+        commit=False,
+    )
     chutes_meta = dict(_as_mapping(metadata.get("chutes")))
     used_cents_before = _clean_int(
         _first_text(chutes_meta.get("used_cents"), chutes_meta.get("spent_cents"), metadata.get("chutes_used_cents"))
@@ -887,7 +948,10 @@ def record_chutes_usage_event(
             metadata,
             env=env,
             billing_state=billing_state,
+            observe_unlimited_authorized=observe_authorized,
         )
+        if commit:
+            conn.commit()
         return ChutesUsageIngestionResult(
             deployment_id=clean_deployment_id,
             user_id=clean_user_id,
@@ -910,31 +974,73 @@ def record_chutes_usage_event(
     if model_id:
         chutes_meta["last_usage_model_id"] = model_id
     metadata["chutes"] = chutes_meta
-    conn.execute(
-        "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
-        (_json_dumps_object(metadata), clean_deployment_id),
-    )
-    conn.execute(
-        """
-        INSERT INTO arclink_events (event_id, subject_kind, subject_id, event_type, metadata_json, created_at)
-        VALUES (?, 'deployment', ?, 'chutes_usage_ingested', ?, ?)
-        """,
-        (
-            event_id,
-            clean_deployment_id,
-            _json_dumps_object(
-                _usage_event_metadata(
-                    event=event,
-                    public_usage_event_id=public_usage_event_id,
-                    delta_cents=delta_cents,
-                    used_cents_before=used_cents_before,
-                    used_cents_after=used_cents_after,
-                    now=now,
-                )
+    conn.execute("SAVEPOINT chutes_usage_ingest")
+    try:
+        conn.execute(
+            "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
+            (_json_dumps_object(metadata), clean_deployment_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO arclink_events (event_id, subject_kind, subject_id, event_type, metadata_json, created_at)
+            VALUES (?, 'deployment', ?, 'chutes_usage_ingested', ?, ?)
+            """,
+            (
+                event_id,
+                clean_deployment_id,
+                _json_dumps_object(
+                    _usage_event_metadata(
+                        event=event,
+                        public_usage_event_id=public_usage_event_id,
+                        delta_cents=delta_cents,
+                        used_cents_before=used_cents_before,
+                        used_cents_after=used_cents_after,
+                        now=now,
+                    )
+                ),
+                now,
             ),
-            now,
-        ),
-    )
+        )
+        conn.execute("RELEASE SAVEPOINT chutes_usage_ingest")
+    except sqlite3.IntegrityError:
+        conn.execute("ROLLBACK TO SAVEPOINT chutes_usage_ingest")
+        conn.execute("RELEASE SAVEPOINT chutes_usage_ingest")
+        existing_after = conn.execute("SELECT 1 FROM arclink_events WHERE event_id = ?", (event_id,)).fetchone()
+        if existing_after is None:
+            raise
+        latest_row = conn.execute(
+            "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?",
+            (clean_deployment_id,),
+        ).fetchone()
+        latest_metadata = _json_loads_object(latest_row["metadata_json"] if latest_row is not None else row["metadata_json"])
+        latest_chutes_meta = dict(_as_mapping(latest_metadata.get("chutes")))
+        used_cents_current = _clean_int(
+            _first_text(
+                latest_chutes_meta.get("used_cents"),
+                latest_chutes_meta.get("spent_cents"),
+                latest_metadata.get("chutes_used_cents"),
+            )
+        )
+        boundary = evaluate_chutes_deployment_boundary(
+            clean_deployment_id,
+            clean_user_id,
+            latest_metadata,
+            env=env,
+            billing_state=billing_state,
+            observe_unlimited_authorized=observe_authorized,
+        )
+        if commit:
+            conn.commit()
+        return ChutesUsageIngestionResult(
+            deployment_id=clean_deployment_id,
+            user_id=clean_user_id,
+            usage_event_id=public_usage_event_id,
+            recorded=False,
+            delta_cents=0,
+            used_cents_before=used_cents_before,
+            used_cents_after=used_cents_current,
+            boundary=boundary,
+        )
     if commit:
         conn.commit()
     boundary = evaluate_chutes_deployment_boundary(
@@ -943,6 +1049,7 @@ def record_chutes_usage_event(
         metadata,
         env=env,
         billing_state=billing_state,
+        observe_unlimited_authorized=observe_authorized,
     )
     return ChutesUsageIngestionResult(
         deployment_id=clean_deployment_id,

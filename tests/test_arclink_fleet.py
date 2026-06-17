@@ -620,4 +620,6 @@ if __name__ == "__main__":
     test_standard_unit_strategy_uses_inventory_asu_available()
     test_standard_unit_capacity_summary_uses_asu_available()
     test_fleet_inventory_orphan_reconciler_reports_without_repairing()
-    print(f"\nAll 24 fleet tests passed.")
+    test_register_existing_host_preserves_image_sync_state()
+    test_provisioning_readiness_excludes_image_sync_failed_worker()
+    print(f"\nAll 26 fleet tests passed.")

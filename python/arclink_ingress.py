@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from arclink_control import append_arclink_event, utc_now_iso
 from arclink_adapters import (
@@ -66,6 +66,8 @@ def persist_arclink_dns_records(
     deployment_id: str,
     records: Mapping[str, DnsRecord],
 ) -> None:
+    if not records:
+        return
     now = utc_now_iso()
     for role, record in records.items():
         record_id = f"dns_{deployment_id}_{role}"
@@ -120,6 +122,7 @@ def reconcile_arclink_dns(
     target: str,
     cloudflare: Any,
 ) -> list[DnsDrift]:
+    """Compatibility helper; production DNS reconciliation uses the executor seam."""
     records = desired_arclink_dns_records(prefix=prefix, base_domain=base_domain, target=target)
     persist_arclink_dns_records(conn, deployment_id=deployment_id, records=records)
     drift = [_parse_cloudflare_drift(item) for item in cloudflare.drift(list(records.values()))]
@@ -134,18 +137,47 @@ def reconcile_arclink_dns(
     return drift
 
 
+def _clean_dns_hostnames(hostnames: Sequence[str] | None) -> tuple[str, ...]:
+    if hostnames is None:
+        return ()
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for hostname in hostnames:
+        clean = str(hostname or "").strip().lower()
+        if clean and clean not in seen:
+            cleaned.append(clean)
+            seen.add(clean)
+    return tuple(cleaned)
+
+
 def _mark_dns_status(
     conn: sqlite3.Connection,
     deployment_id: str,
     status: str,
     event_type: str,
     metadata: dict[str, Any],
+    *,
+    hostnames: Sequence[str] | None = None,
 ) -> None:
     now = utc_now_iso()
-    conn.execute(
-        "UPDATE arclink_dns_records SET status = ?, updated_at = ? WHERE deployment_id = ?",
-        (status, now, deployment_id),
-    )
+    if hostnames is None:
+        conn.execute(
+            "UPDATE arclink_dns_records SET status = ?, updated_at = ? WHERE deployment_id = ?",
+            (status, now, deployment_id),
+        )
+    else:
+        clean_hostnames = _clean_dns_hostnames(hostnames)
+        if clean_hostnames:
+            placeholders = ", ".join("?" for _ in clean_hostnames)
+            conn.execute(
+                f"""
+                UPDATE arclink_dns_records
+                SET status = ?, updated_at = ?
+                WHERE deployment_id = ?
+                  AND LOWER(hostname) IN ({placeholders})
+                """,
+                (status, now, deployment_id, *clean_hostnames),
+            )
     conn.commit()
     append_arclink_event(
         conn,
@@ -156,6 +188,34 @@ def _mark_dns_status(
     )
 
 
+def mark_arclink_dns_provisioned(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    provisioned: list[str] | tuple[str, ...],
+    provider_record_ids: Sequence[str] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> None:
+    hostnames = _clean_dns_hostnames(provisioned)
+    provider_ids = tuple(str(item or "").strip() for item in (provider_record_ids or ()))
+    extra = dict(metadata or {})
+    extra["provisioned"] = list(hostnames)
+    _mark_dns_status(conn, deployment_id, "provisioned", "dns_provisioned", extra, hostnames=hostnames)
+    if provider_ids:
+        for hostname, provider_id in zip(hostnames, provider_ids):
+            if provider_id:
+                conn.execute(
+                    """
+                    UPDATE arclink_dns_records
+                    SET provider_record_id = ?
+                    WHERE deployment_id = ?
+                      AND LOWER(hostname) = ?
+                    """,
+                    (provider_id, deployment_id, hostname),
+                )
+        conn.commit()
+
+
 def mark_arclink_dns_torn_down(
     conn: sqlite3.Connection,
     *,
@@ -164,8 +224,9 @@ def mark_arclink_dns_torn_down(
     metadata: Mapping[str, Any] | None = None,
 ) -> None:
     extra = dict(metadata or {})
-    extra["removed"] = list(removed)
-    _mark_dns_status(conn, deployment_id, "torn_down", "dns_teardown", extra)
+    removed_hostnames = _clean_dns_hostnames(removed)
+    extra["removed"] = list(removed_hostnames)
+    _mark_dns_status(conn, deployment_id, "torn_down", "dns_teardown", extra, hostnames=removed_hostnames)
 
 
 def arclink_dns_records_for_teardown(conn: sqlite3.Connection, *, deployment_id: str) -> tuple[dict[str, Any], ...]:
@@ -197,9 +258,9 @@ def teardown_arclink_dns(
     base_domain: str,
     cloudflare: Any,
 ) -> list[str]:
-    """Remove all DNS records for a deployment and mark them torn down."""
+    """Compatibility helper; production DNS teardown uses the executor seam."""
     hostnames = arclink_hostnames(prefix, base_domain)
-    removed = cloudflare.teardown_records(list(hostnames.values()))
+    removed = cloudflare.teardown_records([hostnames[role] for role in ARCLINK_HOST_ROLES])
     mark_arclink_dns_torn_down(conn, deployment_id=deployment_id, removed=removed, metadata={"prefix": prefix})
     return removed
 
@@ -214,7 +275,7 @@ def provision_arclink_dns(
     cloudflare: Any,
     max_retries: int = 2,
 ) -> dict[str, DnsRecord]:
-    """Create DNS records with retry safety. Idempotent via upsert."""
+    """Compatibility helper; production DNS apply uses the executor seam."""
     records = desired_arclink_dns_records(prefix=prefix, base_domain=base_domain, target=target)
     persist_arclink_dns_records(conn, deployment_id=deployment_id, records=records)
     last_error: Exception | None = None
@@ -222,10 +283,14 @@ def provision_arclink_dns(
         try:
             for record in records.values():
                 cloudflare.upsert_record(record)
-            _mark_dns_status(conn, deployment_id, "provisioned", "dns_provisioned",
-                             {"prefix": prefix, "attempt": attempt + 1})
+            mark_arclink_dns_provisioned(
+                conn,
+                deployment_id=deployment_id,
+                provisioned=tuple(record.hostname for record in records.values()),
+                metadata={"prefix": prefix, "attempt": attempt + 1},
+            )
             return records
-        except Exception as exc:
+        except (ConnectionError, TimeoutError, OSError) as exc:
             last_error = exc
     if last_error is not None:
         raise last_error

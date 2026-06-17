@@ -8,7 +8,7 @@ Locks in:
   - undiscoverable skills stay untouched and report ``missing`` (fail closed);
   - skills.platform_disabled and unrelated config lines are preserved
     byte-for-byte;
-  - a receipt is written with effective_at=next_session;
+  - a receipt is written with reload guidance when config changes;
   - the lane is a no-op without staged intents.
 """
 from __future__ import annotations
@@ -63,6 +63,7 @@ def _seed_home(tmp: Path, *, with_intents: bool = True) -> Path:
     (hermes_home / "skills").mkdir()
     external_dir = tmp / "fleet-skills"
     (external_dir / "retrieval-and-cite").mkdir(parents=True)
+    (external_dir / "retrieval-and-cite" / "SKILL.md").write_text("# Retrieval\n", encoding="utf-8")
     (hermes_home / "config.yaml").write_text(
         _CONFIG_TEMPLATE.format(external_dir=external_dir),
         encoding="utf-8",
@@ -160,7 +161,8 @@ def test_cli_writes_receipt_and_never_fails_the_refresh_lane() -> None:
         receipt_path = hermes_home / "state" / "arclink-skill-enablement-applied.json"
         expect(receipt_path.is_file(), "receipt must be written")
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-        expect(receipt["effective_at"] == "next_session", str(receipt))
+        expect(receipt["effective_at"] == "reload_skills_or_next_session", str(receipt))
+        expect(receipt["reload_command"] == "/reload_skills", str(receipt))
         # Missing HERMES_HOME is a quiet skip, never an error.
         rc = mod.main(["--hermes-home", str(tmp / "does-not-exist")])
         expect(rc == 0, f"CLI must exit 0 for missing home, got {rc}")
@@ -183,6 +185,64 @@ def test_unsafe_skill_ids_are_rejected() -> None:
     print("PASS test_unsafe_skill_ids_are_rejected")
 
 
+def test_fleet_shared_skill_scan_requires_skill_md_and_rejects_symlink_escape() -> None:
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        hermes_home = tmp / "hermes-home"
+        (hermes_home / "state").mkdir(parents=True)
+        (hermes_home / "skills").mkdir()
+        (hermes_home / "config.yaml").write_text(
+            """skills:
+  disabled:
+  - fleet-good
+  - fleet-empty
+""",
+            encoding="utf-8",
+        )
+        (hermes_home / "state" / "arclink-academy-approved-skills.json").write_text(
+            json.dumps(
+                [
+                    {"skill_id": "fleet-good", "source_id": "src-good"},
+                    {"skill_id": "fleet-empty", "source_id": "src-empty"},
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        fleet_root = tmp / "fleet-shared"
+        good = fleet_root / "Agents_Skills" / "team-a" / "skills" / "fleet-good"
+        empty = fleet_root / "Agents_Skills" / "team-a" / "skills" / "fleet-empty"
+        good.mkdir(parents=True)
+        empty.mkdir(parents=True)
+        (good / "SKILL.md").write_text("# Fleet Good\n", encoding="utf-8")
+        outside = tmp / "outside-skills"
+        outside.mkdir()
+        symlink_skills = fleet_root / "Agents_Skills" / "team-b" / "skills"
+        symlink_skills.parent.mkdir(parents=True)
+        try:
+            symlink_skills.symlink_to(outside, target_is_directory=True)
+        except OSError:
+            symlink_skills = None
+
+        discovered = mod.discover_fleet_shared_skill_external_dirs(
+            hermes_home,
+            env={"ARCLINK_FLEET_SHARED_ROOT": str(fleet_root)},
+        )
+        expect(str(good.parent) in discovered, str(discovered))
+        if symlink_skills is not None:
+            expect(str(symlink_skills) not in discovered, str(discovered))
+        receipt = mod.apply_skill_enablement(
+            hermes_home,
+            env={"ARCLINK_FLEET_SHARED_ROOT": str(fleet_root)},
+        )
+        by_skill = {entry["skill_id"]: entry for entry in receipt["skills"]}
+        expect(by_skill["fleet-good"]["status"] == "enabled", str(receipt))
+        expect(by_skill["fleet-empty"]["status"] == "missing", str(receipt))
+        expect(receipt["removed_from_disabled"] == ["fleet-good"], str(receipt))
+    print("PASS test_fleet_shared_skill_scan_requires_skill_md_and_rejects_symlink_escape")
+
+
 def test_user_agent_refresh_invokes_enablement_lane() -> None:
     text = (REPO / "bin" / "user-agent-refresh.sh").read_text(encoding="utf-8")
     expect("arclink_skill_enablement.py" in text, "user-agent-refresh must apply skill enablement")
@@ -197,8 +257,9 @@ def main() -> int:
     test_apply_skill_enablement_without_intents_is_a_noop()
     test_cli_writes_receipt_and_never_fails_the_refresh_lane()
     test_unsafe_skill_ids_are_rejected()
+    test_fleet_shared_skill_scan_requires_skill_md_and_rejects_symlink_escape()
     test_user_agent_refresh_invokes_enablement_lane()
-    print("PASS all 7 skill enablement tests")
+    print("PASS all 8 skill enablement tests")
     return 0
 
 

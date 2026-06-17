@@ -179,20 +179,24 @@ reads `arclink-priv/config/public-hygiene-terms.txt` when present, or
 `ARCLINK_PUBLIC_HYGIENE_TERMS_FILE`; do not hard-code private operator,
 project, team, or resource names in public tests.
 
-Use `./deploy.sh upgrade` when the user asks to upgrade the live system. It:
+Use `./deploy.sh upgrade` when the user asks to upgrade the live Control Node.
+It routes through the Dockerized control lane, not the retired shared-host
+`run_root_upgrade` worker. It:
 
-1. Reads the deployed config.
-2. Fetches `ARCLINK_UPSTREAM_REPO_URL#ARCLINK_UPSTREAM_BRANCH`.
-3. Uses the configured ArcLink upstream deploy key when enabled.
-4. Syncs the public deployed repo.
-5. Preserves and seeds `arclink-priv`.
-6. Runs system bootstrap and userland bootstrap.
-7. Repairs Curator.
-8. Realigns active enrolled agents.
-9. Restarts shared services.
-10. Records `state/arclink-release.json`.
-11. Runs strict health.
-12. Runs `bin/live-agent-tool-smoke.sh` when present.
+1. Verifies the checkout is clean unless an explicit local-build override is set.
+2. Requires the configured upstream branch to be `arclink` unless the operator
+   explicitly allows a non-production branch.
+3. Fetches the current branch's upstream with the configured ArcLink upstream
+   deploy key when that key is enabled.
+4. Fast-forwards the checkout, refusing detached, no-upstream, local-ahead, or
+   diverged checkouts by default.
+5. Refreshes generated Docker runtime config.
+6. Rebuilds and recreates the Control Node Docker stack.
+7. Syncs the Control Node image to registered fleet workers when configured.
+8. Installs/refreshes control host timers, including the operator upgrade runner.
+9. Records the Docker release state.
+10. Prints ports and runs Control Node health.
+11. Ensures the operator Hermes Agent is present.
 
 If you just committed local changes and need them included in an upgrade,
 make sure they are pushed to the configured upstream first. `upgrade` consumes

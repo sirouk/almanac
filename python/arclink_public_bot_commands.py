@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import pathlib
 import json
+import logging
 import shlex
 import sqlite3
 import subprocess
@@ -26,6 +27,8 @@ from arclink_telegram import (
     register_arclink_operator_telegram_commands,
     register_arclink_public_telegram_commands,
 )
+
+logger = logging.getLogger("arclink.public_bot_commands")
 
 
 def _load_shell_env_file(path: str) -> dict[str, str]:
@@ -140,7 +143,8 @@ def _agent_commands_from_gateway_service(
             proc = subprocess.run(lookup, check=False, capture_output=True, text=True, timeout=10)
             if proc.returncode == 0:
                 container = next((line.strip() for line in str(proc.stdout or "").splitlines() if line.strip()), "")
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - fallback keeps deploy moving, but the failure should be visible.
+            logger.warning("telegram_agent_command_container_lookup_failed error=%s", str(exc)[:160])
             container = ""
     if not container:
         container = str(fallback_container or "").strip()
@@ -169,7 +173,8 @@ print(json.dumps({"commands":[{"command": n, "description": d} for n, d in cmds]
         commands = payload.get("commands")
         if isinstance(commands, list):
             return [item for item in commands if isinstance(item, dict)], container, int(payload.get("hidden") or 0)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - deploy falls back to the static safe menu.
+        logger.warning("telegram_agent_command_container_probe_failed container=%s error=%s", container, str(exc)[:160])
         return [], "fallback", 0
     return [], "fallback", 0
 

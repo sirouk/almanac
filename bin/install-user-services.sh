@@ -28,20 +28,32 @@ EOF
 fi
 
 enable_user_units() {
-  if [[ $# -gt 0 ]]; then
-    systemctl --user enable "$@"
-  fi
+  local unit
+  for unit in "$@"; do
+    run_user_systemd enable "$unit"
+  done
 }
 
 restart_user_units() {
-  if [[ $# -gt 0 ]]; then
-    systemctl --user restart "$@"
-  fi
+  local unit
+  for unit in "$@"; do
+    run_user_systemd restart "$unit"
+  done
 }
 
 start_user_units() {
-  if [[ $# -gt 0 ]]; then
-    systemctl --user start "$@"
+  local unit
+  for unit in "$@"; do
+    run_user_systemd start "$unit"
+  done
+}
+
+user_systemd_errors=0
+
+run_user_systemd() {
+  if ! systemctl --user "$@"; then
+    echo "systemctl --user $* failed" >&2
+    user_systemd_errors=1
   fi
 }
 
@@ -147,4 +159,9 @@ fi
 
 if has_curator_gateway_channels && { ! has_curator_onboarding || has_curator_non_onboarding_gateway_channels; }; then
   restart_user_units arclink-curator-gateway.service
+fi
+
+if [[ "$user_systemd_errors" -ne 0 ]]; then
+  echo "One or more systemd user unit operations failed." >&2
+  exit 1
 fi

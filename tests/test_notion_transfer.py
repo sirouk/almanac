@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
+import types
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOL_PATH = ROOT / "bin" / "notion-transfer.py"
+PDF_EXPORT_TOOL_PATH = ROOT / "bin" / "notion-page-pdf-export.py"
 
 
 def expect(condition: bool, message: str) -> None:
@@ -17,6 +20,21 @@ def expect(condition: bool, message: str) -> None:
 def load_tool():
     spec = importlib.util.spec_from_file_location("notion_transfer", TOOL_PATH)
     expect(spec is not None and spec.loader is not None, "could not load notion-transfer.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_pdf_export_tool():
+    sys.modules.setdefault("requests", types.ModuleType("requests"))
+    playwright_pkg = types.ModuleType("playwright")
+    sync_api = types.ModuleType("playwright.sync_api")
+    sync_api.sync_playwright = lambda: None
+    sync_api.TimeoutError = TimeoutError
+    sys.modules.setdefault("playwright", playwright_pkg)
+    sys.modules["playwright.sync_api"] = sync_api
+    spec = importlib.util.spec_from_file_location("notion_page_pdf_export", PDF_EXPORT_TOOL_PATH)
+    expect(spec is not None and spec.loader is not None, "could not load notion-page-pdf-export.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -115,6 +133,18 @@ def test_cli_is_token_file_only() -> None:
     print("PASS test_cli_is_token_file_only")
 
 
+def test_pdf_export_uses_unique_paths_for_slug_collisions() -> None:
+    tool = load_pdf_export_tool()
+    reserved: set[Path] = set()
+    out_dir = Path("/tmp/notion-export-test")
+    first = tool.unique_pdf_output_path(out_dir, "Roadmap", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", reserved)
+    second = tool.unique_pdf_output_path(out_dir, "Roadmap", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", reserved)
+    expect(first.name == "Roadmap.pdf", first.name)
+    expect(second.name == "Roadmap-bbbbbbbbbbbb.pdf", second.name)
+    expect(first != second and len(reserved) == 2, str(reserved))
+    print("PASS test_pdf_export_uses_unique_paths_for_slug_collisions")
+
+
 def main() -> int:
     tests = [
         test_notion_id_extracts_url_and_plain_ids,
@@ -123,6 +153,7 @@ def main() -> int:
         test_page_parent_payload_uses_plain_title_property,
         test_block_payloads_are_create_safe,
         test_cli_is_token_file_only,
+        test_pdf_export_uses_unique_paths_for_slug_collisions,
     ]
     for test in tests:
         test()

@@ -87,15 +87,7 @@ def _token_secret(access: dict[str, object], realm: str) -> bytes:
     configured = str(access.get("session_secret") or "").strip()
     if configured:
         return configured.encode("utf-8")
-    fallback = "\0".join(
-        [
-            "arclink-dashboard-session-fallback-v1",
-            str(realm or ""),
-            str(access.get("username") or ""),
-            str(access.get("password") or ""),
-        ]
-    )
-    return hashlib.sha256(fallback.encode("utf-8")).digest()
+    return b""
 
 
 def _sso_token_secret(access: dict[str, object]) -> bytes:
@@ -600,8 +592,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         return f"{signing_input}.{_b64url(signature.digest())}"
 
     def _make_token(self, access: dict[str, object], username: str) -> str:
+        secret = _token_secret(access, self.realm)
+        if not secret:
+            return ""
         return self._make_signed_token(
-            secret=_token_secret(access, self.realm),
+            secret=secret,
             subject=username,
             audience=SESSION_TOKEN_AUDIENCE,
         )
@@ -663,9 +658,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         morsel = cookie.get(self._session_cookie_name(access))
         if morsel is None:
             return False
+        secret = _token_secret(access, self.realm)
+        if not secret:
+            return False
         return self._valid_token(
             str(morsel.value or ""),
-            secret=_token_secret(access, self.realm),
+            secret=secret,
             audience=SESSION_TOKEN_AUDIENCE,
             subject=str(access.get("username") or ""),
             revoked_before=_dashboard_revoked_before(access, "dashboard_session_revoked_before"),
@@ -724,6 +722,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
     def _session_cookie_header(self, access: dict[str, object], username: str) -> str:
         value = self._make_token(access, username)
+        if not value:
+            return ""
         return f"{self._session_cookie_name(access)}={value}; HttpOnly; Path={self._cookie_path()}; SameSite=Lax; Secure"
 
     def _sso_cookie_header(self, access: dict[str, object]) -> str:
@@ -1078,6 +1078,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return
 
         _clear_login_failures(client_ip, username)
+        session_cookie = self._session_cookie_header(access, access_username)
+        if not session_cookie:
+            self._login_form(status=503, error="Dashboard session signing is not configured.", next_path=next_path)
+            return
         self.send_response(303)
         self.send_header("Location", next_path)
         for cookie_header in self._clear_session_cookie_headers(access):
@@ -1085,7 +1089,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         sso_cookie = self._sso_cookie_header(access)
         if sso_cookie:
             self.send_header("Set-Cookie", sso_cookie)
-        self.send_header("Set-Cookie", self._session_cookie_header(access, access_username))
+        self.send_header("Set-Cookie", session_cookie)
         self.send_header("Content-Length", "0")
         self.end_headers()
 

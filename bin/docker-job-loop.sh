@@ -41,8 +41,8 @@ from pathlib import Path
 path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
 patterns = [
-    re.compile(r"(?i)(\b(?:token|api[_-]?key|password|passwd|secret|cookie|authorization|jwt|oauth)[A-Z0-9_.-]*\b\s*[:=]\s*)([^\s'\";,]+)"),
-    re.compile(r"(?i)(Authorization:\s*(?:Bearer|Basic)\s+)([^\s'\";,]+)"),
+    re.compile(r"(?i)(\b[A-Z0-9_.-]*authorization[A-Z0-9_.-]*\b\s*[:=]\s*(?:(?:Bearer|Basic)\s+)?)([^\s'\";,]+)"),
+    re.compile(r"(?i)(\b[A-Z0-9_.-]*(?:token|api[_-]?key|password|passwd|secret|cookie|jwt|oauth)[A-Z0-9_.-]*\b\s*[:=]\s*)([^\s'\";,]+)"),
     re.compile(r"(?i)((?:https?|ssh)://[^/\s:]+:)([^@\s/]+)(@)"),
 ]
 for pattern in patterns:
@@ -62,15 +62,17 @@ write_status() {
   python3 - "$STATUS_FILE" "$JOB_NAME" "$status" "$rc" "$output_file" "$started_at" "$INTERVAL_SECONDS" <<'PY'
 import datetime as dt
 import json
+import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 status_file = Path(sys.argv[1])
 output = Path(sys.argv[5]).read_text(encoding="utf-8", errors="replace") if Path(sys.argv[5]).exists() else ""
 patterns = [
-    re.compile(r"(?i)(\b(?:token|api[_-]?key|password|passwd|secret|cookie|authorization|jwt|oauth)[A-Z0-9_.-]*\b\s*[:=]\s*)([^\s'\";,]+)"),
-    re.compile(r"(?i)(Authorization:\s*(?:Bearer|Basic)\s+)([^\s'\";,]+)"),
+    re.compile(r"(?i)(\b[A-Z0-9_.-]*authorization[A-Z0-9_.-]*\b\s*[:=]\s*(?:(?:Bearer|Basic)\s+)?)([^\s'\";,]+)"),
+    re.compile(r"(?i)(\b[A-Z0-9_.-]*(?:token|api[_-]?key|password|passwd|secret|cookie|jwt|oauth)[A-Z0-9_.-]*\b\s*[:=]\s*)([^\s'\";,]+)"),
     re.compile(r"(?i)((?:https?|ssh)://[^/\s:]+:)([^@\s/]+)(@)"),
 ]
 for pattern in patterns:
@@ -80,14 +82,30 @@ for pattern in patterns:
         output = pattern.sub(r"\1[REDACTED]", output)
 payload = {
     "job": sys.argv[2],
+    "job_name": sys.argv[2],
     "status": sys.argv[3],
     "returncode": int(sys.argv[4]),
+    "exit_code": int(sys.argv[4]),
     "started_at": sys.argv[6],
     "finished_at": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
     "interval_seconds": int(sys.argv[7]),
     "output_tail": output[-4000:],
 }
-status_file.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+status_file.parent.mkdir(parents=True, exist_ok=True)
+tmp_name = ""
+try:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=status_file.parent, prefix=f".{status_file.name}.", delete=False) as handle:
+        tmp_name = handle.name
+        handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp_name, status_file)
+finally:
+    if tmp_name:
+        try:
+            Path(tmp_name).unlink(missing_ok=True)
+        except OSError:
+            pass
 PY
 }
 
@@ -96,21 +114,39 @@ write_running_status() {
   python3 - "$STATUS_FILE" "$JOB_NAME" "$started_at" "$INTERVAL_SECONDS" <<'PY'
 import datetime as dt
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 status_file = Path(sys.argv[1])
 payload = {
     "job": sys.argv[2],
+    "job_name": sys.argv[2],
     "status": "running",
     "returncode": 0,
+    "exit_code": 0,
     "started_at": sys.argv[3],
     "finished_at": "",
     "interval_seconds": int(sys.argv[4]),
     "updated_at": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
     "output_tail": "",
 }
-status_file.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+status_file.parent.mkdir(parents=True, exist_ok=True)
+tmp_name = ""
+try:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=status_file.parent, prefix=f".{status_file.name}.", delete=False) as handle:
+        tmp_name = handle.name
+        handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp_name, status_file)
+finally:
+    if tmp_name:
+        try:
+            Path(tmp_name).unlink(missing_ok=True)
+        except OSError:
+            pass
 PY
 }
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import sqlite3
@@ -73,6 +74,30 @@ def config_values(root: Path) -> dict[str, str]:
         "ARCLINK_CURATOR_CHANNELS": "telegram",
         "ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED": "1",
         "ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED": "0",
+    }
+
+
+def operator_raven_authorization(
+    control,
+    *,
+    actor_id: str = "@alex",
+    action_kind: str = "upgrade",
+    target: str = "",
+    confirmation_id: str = "test-confirmation",
+    ttl_seconds: int = 900,
+) -> dict[str, object]:
+    return {
+        "kind": control.OPERATOR_ACTION_AUTH_KIND_OPERATOR_RAVEN,
+        "actor_id": actor_id,
+        "ttl_seconds": ttl_seconds,
+        "payload": {
+            "source": "operator-raven",
+            "command": action_kind.replace("-", "_"),
+            "action_kind": action_kind,
+            "target_hash": hashlib.sha256(str(target or "").encode("utf-8")).hexdigest(),
+            "confirmation_id": confirmation_id,
+            "reason": "test confirmed operator action",
+        },
     }
 
 
@@ -856,6 +881,12 @@ def test_operator_upgrade_actions_run_root_upgrade_and_notify_operator() -> None
                 requested_by="@alex",
                 request_source="operator-raven",
                 requested_target="bbbbbbbbbbbb2222222222222222222222222222",
+                authorization=operator_raven_authorization(
+                    control,
+                    actor_id="@alex",
+                    action_kind="upgrade",
+                    target="bbbbbbbbbbbb2222222222222222222222222222",
+                ),
             )
             expect(created is True, str(action_row))
 
@@ -887,7 +918,7 @@ def test_operator_upgrade_actions_run_root_upgrade_and_notify_operator() -> None
             os.environ.update(old_env)
 
 
-def test_operator_upgrade_actions_reject_unconfirmed_sources() -> None:
+def test_operator_upgrade_actions_reject_unsigned_and_forged_authorization() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
     control = load_module(CONTROL_PY, "arclink_control_operator_upgrade_source_gate_test")
@@ -904,34 +935,232 @@ def test_operator_upgrade_actions_reject_unconfirmed_sources() -> None:
         try:
             cfg = control.Config.from_env()
             conn = control.connect_db(cfg)
-            action_row, created = control.request_operator_action(
-                conn,
-                action_kind="upgrade",
-                requested_by="@alex",
-                request_source="telegram-button",
-                requested_target="bbbbbbbbbbbb2222222222222222222222222222",
+            try:
+                control.request_operator_action(
+                    conn,
+                    action_kind="upgrade",
+                    requested_by="@alex",
+                    request_source="operator-raven",
+                    requested_target="bbbbbbbbbbbb2222222222222222222222222222",
+                )
+            except PermissionError as exc:
+                expect("requires a signed authorization envelope" in str(exc), str(exc))
+            else:
+                raise AssertionError("high-authority operator actions must not be queued without authorization")
+
+            conn.execute(
+                """
+                INSERT INTO operator_actions (
+                  action_kind, requested_target, requested_by, request_source, status, note, created_at
+                ) VALUES ('upgrade', ?, '@mallory', 'operator-raven', 'pending', '', ?)
+                """,
+                ("bbbbbbbbbbbb2222222222222222222222222222", control.utc_now_iso()),
             )
-            expect(created is True, str(action_row))
+            unsigned_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+            conn.commit()
 
             def fail_if_upgrade_runs(cfg, *, log_path):
-                raise AssertionError("unconfirmed operator action source must not run an upgrade")
+                raise AssertionError("unsigned or forged operator action authorization must not run an upgrade")
 
             provisioner._run_host_upgrade = fail_if_upgrade_runs
             provisioner._run_pending_operator_actions(conn, cfg)
 
             refreshed = conn.execute(
                 "SELECT status, note, log_path FROM operator_actions WHERE id = ?",
-                (int(action_row["id"]),),
+                (unsigned_id,),
             ).fetchone()
             expect(refreshed is not None and refreshed["status"] == "failed", str(dict(refreshed) if refreshed else {}))
-            expect("unconfirmed request source telegram-button" in str(refreshed["note"] or ""), str(dict(refreshed)))
+            expect("invalid operator authorization" in str(refreshed["note"] or ""), str(dict(refreshed)))
             expect(not str(refreshed["log_path"] or "").strip(), str(dict(refreshed)))
             operator_rows = conn.execute(
                 "SELECT message FROM notification_outbox WHERE target_kind = 'operator' ORDER BY id ASC"
             ).fetchall()
             expect(len(operator_rows) == 1, str([dict(row) for row in operator_rows]))
-            expect("confirmed Operator Raven command" in str(operator_rows[0]["message"] or ""), str([dict(row) for row in operator_rows]))
-            print("PASS test_operator_upgrade_actions_reject_unconfirmed_sources")
+            expect("authorization envelope" in str(operator_rows[0]["message"] or ""), str([dict(row) for row in operator_rows]))
+
+            forged_row, forged_created = control.request_operator_action(
+                conn,
+                action_kind="upgrade",
+                requested_by="@alex",
+                request_source="operator-raven",
+                requested_target="cccccccccccc3333333333333333333333333333",
+                authorization=operator_raven_authorization(
+                    control,
+                    actor_id="@alex",
+                    action_kind="upgrade",
+                    target="cccccccccccc3333333333333333333333333333",
+                    confirmation_id="forged-mac-test",
+                ),
+            )
+            expect(forged_created is True, str(forged_row))
+            conn.execute(
+                "UPDATE operator_actions SET authorization_mac = ? WHERE id = ?",
+                ("sha256=" + "0" * 64, int(forged_row["id"])),
+            )
+            conn.commit()
+            provisioner._run_pending_operator_actions(conn, cfg)
+            forged_refreshed = conn.execute(
+                "SELECT status, note, log_path FROM operator_actions WHERE id = ?",
+                (int(forged_row["id"]),),
+            ).fetchone()
+            expect(forged_refreshed is not None and forged_refreshed["status"] == "failed", str(dict(forged_refreshed) if forged_refreshed else {}))
+            expect("MAC mismatch" in str(forged_refreshed["note"] or ""), str(dict(forged_refreshed)))
+            expect(not str(forged_refreshed["log_path"] or "").strip(), str(dict(forged_refreshed)))
+            print("PASS test_operator_upgrade_actions_reject_unsigned_and_forged_authorization")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_operator_upgrade_actions_reject_authorization_target_and_actor_tampering() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_operator_upgrade_tamper_gate_test")
+    provisioner = load_module(PROVISIONER_PY, "arclink_enrollment_provisioner_operator_upgrade_tamper_gate_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        values = config_values(root)
+        values["OPERATOR_NOTIFY_CHANNEL_PLATFORM"] = "telegram"
+        values["OPERATOR_NOTIFY_CHANNEL_ID"] = "1000000001"
+        write_config(config_path, values)
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+
+            def fail_if_upgrade_runs(cfg, *, log_path):
+                raise AssertionError("tampered operator action authorization must not run an upgrade")
+
+            provisioner._run_host_upgrade = fail_if_upgrade_runs
+
+            target_row, target_created = control.request_operator_action(
+                conn,
+                action_kind="upgrade",
+                requested_by="@alex",
+                request_source="operator-raven",
+                requested_target="aaaaaaaaaaaa1111111111111111111111111111",
+                authorization=operator_raven_authorization(
+                    control,
+                    actor_id="@alex",
+                    action_kind="upgrade",
+                    target="aaaaaaaaaaaa1111111111111111111111111111",
+                    confirmation_id="target-tamper-test",
+                ),
+            )
+            expect(target_created is True, str(target_row))
+            conn.execute(
+                "UPDATE operator_actions SET requested_target = ? WHERE id = ?",
+                ("bbbbbbbbbbbb2222222222222222222222222222", int(target_row["id"])),
+            )
+            conn.commit()
+            provisioner._run_pending_operator_actions(conn, cfg)
+            target_refreshed = conn.execute(
+                "SELECT status, note, log_path FROM operator_actions WHERE id = ?",
+                (int(target_row["id"]),),
+            ).fetchone()
+            expect(target_refreshed is not None and target_refreshed["status"] == "failed", str(dict(target_refreshed) if target_refreshed else {}))
+            expect("MAC mismatch" in str(target_refreshed["note"] or ""), str(dict(target_refreshed)))
+            expect(not str(target_refreshed["log_path"] or "").strip(), str(dict(target_refreshed)))
+
+            actor_row, actor_created = control.request_operator_action(
+                conn,
+                action_kind="upgrade",
+                requested_by="@alex",
+                request_source="operator-raven",
+                requested_target="cccccccccccc3333333333333333333333333333",
+                authorization=operator_raven_authorization(
+                    control,
+                    actor_id="@alex",
+                    action_kind="upgrade",
+                    target="cccccccccccc3333333333333333333333333333",
+                    confirmation_id="actor-tamper-test",
+                ),
+            )
+            expect(actor_created is True, str(actor_row))
+            conn.execute(
+                "UPDATE operator_actions SET actor_id = ? WHERE id = ?",
+                ("@mallory", int(actor_row["id"])),
+            )
+            conn.commit()
+            provisioner._run_pending_operator_actions(conn, cfg)
+            actor_refreshed = conn.execute(
+                "SELECT status, note, log_path FROM operator_actions WHERE id = ?",
+                (int(actor_row["id"]),),
+            ).fetchone()
+            expect(actor_refreshed is not None and actor_refreshed["status"] == "failed", str(dict(actor_refreshed) if actor_refreshed else {}))
+            expect("MAC mismatch" in str(actor_refreshed["note"] or ""), str(dict(actor_refreshed)))
+            expect(not str(actor_refreshed["log_path"] or "").strip(), str(dict(actor_refreshed)))
+            print("PASS test_operator_upgrade_actions_reject_authorization_target_and_actor_tampering")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_operator_upgrade_actions_reject_pre_migration_authless_rows() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_operator_upgrade_premigration_auth_test")
+    provisioner = load_module(PROVISIONER_PY, "arclink_enrollment_provisioner_operator_upgrade_premigration_auth_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        values = config_values(root)
+        values["OPERATOR_NOTIFY_CHANNEL_PLATFORM"] = "telegram"
+        values["OPERATOR_NOTIFY_CHANNEL_ID"] = "1000000001"
+        write_config(config_path, values)
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            cfg.db_path.parent.mkdir(parents=True, exist_ok=True)
+            old_conn = sqlite3.connect(cfg.db_path)
+            old_conn.execute(
+                """
+                CREATE TABLE operator_actions (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  action_kind TEXT NOT NULL,
+                  requested_target TEXT NOT NULL DEFAULT '',
+                  requested_by TEXT NOT NULL,
+                  request_source TEXT NOT NULL DEFAULT '',
+                  status TEXT NOT NULL,
+                  note TEXT NOT NULL DEFAULT '',
+                  created_at TEXT NOT NULL,
+                  started_at TEXT,
+                  finished_at TEXT,
+                  log_path TEXT NOT NULL DEFAULT ''
+                )
+                """
+            )
+            old_conn.execute(
+                """
+                INSERT INTO operator_actions (
+                  action_kind, requested_target, requested_by, request_source, status, note, created_at
+                ) VALUES ('upgrade', 'dddddddddddd4444444444444444444444444444', '@alex', 'operator-raven', 'pending', '', ?)
+                """,
+                (control.utc_now_iso(),),
+            )
+            old_conn.commit()
+            old_conn.close()
+
+            conn = control.connect_db(cfg)
+            row = conn.execute("SELECT * FROM operator_actions WHERE action_kind = 'upgrade'").fetchone()
+            expect(row is not None and str(row["authorization_kind"] or "") == "", str(dict(row) if row else {}))
+
+            def fail_if_upgrade_runs(cfg, *, log_path):
+                raise AssertionError("pre-migration authless operator action must not run an upgrade")
+
+            provisioner._run_host_upgrade = fail_if_upgrade_runs
+            provisioner._run_pending_operator_actions(conn, cfg)
+            refreshed = conn.execute(
+                "SELECT status, note, log_path FROM operator_actions WHERE id = ?",
+                (int(row["id"]),),
+            ).fetchone()
+            expect(refreshed is not None and refreshed["status"] == "failed", str(dict(refreshed) if refreshed else {}))
+            expect("missing or unsupported authorization_kind" in str(refreshed["note"] or ""), str(dict(refreshed)))
+            expect(not str(refreshed["log_path"] or "").strip(), str(dict(refreshed)))
+            print("PASS test_operator_upgrade_actions_reject_pre_migration_authless_rows")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -1004,6 +1233,13 @@ def test_operator_pin_upgrade_actions_run_component_upgrade_and_notify_operator(
                 request_source="operator-raven",
                 requested_target=token,
                 dedupe_by_target=True,
+                authorization=operator_raven_authorization(
+                    control,
+                    actor_id="@alex",
+                    action_kind="pin-upgrade",
+                    target=token,
+                    confirmation_id="pin-upgrade-test",
+                ),
             )
             expect(created is True, str(action_row))
 
@@ -1250,8 +1486,15 @@ def test_operator_upgrade_stale_running_action_fails_closed() -> None:
                 conn,
                 action_kind="upgrade",
                 requested_by="@alex",
-                request_source="telegram-button",
+                request_source="operator-raven",
                 requested_target="bbbbbbbbbbbb2222222222222222222222222222",
+                authorization=operator_raven_authorization(
+                    control,
+                    actor_id="@alex",
+                    action_kind="upgrade",
+                    target="bbbbbbbbbbbb2222222222222222222222222222",
+                    confirmation_id="stale-running-test",
+                ),
             )
             expect(created is True, str(action_row))
             action_id = int(action_row["id"])
@@ -1306,7 +1549,13 @@ def test_operator_action_finish_retries_transient_sqlite_lock() -> None:
                 conn,
                 action_kind="upgrade",
                 requested_by="@alex",
-                request_source="telegram-command",
+                request_source="operator-raven",
+                authorization=operator_raven_authorization(
+                    control,
+                    actor_id="@alex",
+                    action_kind="upgrade",
+                    confirmation_id="finish-retry-test",
+                ),
             )
             expect(created is True, str(action_row))
             calls = {"count": 0}
@@ -1487,6 +1736,18 @@ def test_run_host_upgrade_fails_closed_without_operator_upgrade_broker_token_in_
             os.environ.update(old_env)
 
 
+def test_docker_mode_accepts_on_truthy_value() -> None:
+    provisioner = load_module(PROVISIONER_PY, "arclink_enrollment_provisioner_docker_mode_on_test")
+    old_env = os.environ.copy()
+    os.environ["ARCLINK_DOCKER_MODE"] = "on"
+    try:
+        expect(provisioner._docker_mode() is True, "ARCLINK_DOCKER_MODE=on should match the shared truthy set")
+        print("PASS test_docker_mode_accepts_on_truthy_value")
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+
+
 def test_run_pin_upgrade_action_uses_operator_upgrade_broker_in_docker_mode() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -1572,9 +1833,12 @@ def test_operator_upgrade_broker_requests_are_signed_and_nonce_bound() -> None:
             timeout_seconds=60,
         )
         expect(result["status"] == "queued", str(result))
+        expect(captured["timeout"] == 95, str(captured))
         headers = {str(key).lower(): str(value) for key, value in dict(captured["headers"]).items()}
         body_bytes = captured["data"]
         expect(isinstance(body_bytes, bytes), str(captured))
+        body = json.loads(body_bytes.decode("utf-8"))
+        expect(body.get("timeout_seconds") == 60, str(body))
         timestamp = headers.get("x-arclink-operator-upgrade-timestamp", "")
         nonce = headers.get("x-arclink-operator-upgrade-nonce", "")
         signature = headers.get("x-arclink-operator-upgrade-signature", "")
@@ -1599,6 +1863,81 @@ def test_operator_upgrade_broker_requests_are_signed_and_nonce_bound() -> None:
         os.environ.update(old_env)
 
 
+def test_operator_upgrade_broker_request_normalizes_decode_and_error_bodies() -> None:
+    provisioner = load_module(PROVISIONER_PY, "arclink_enrollment_provisioner_broker_decode_test")
+    old_env = os.environ.copy()
+    old_urlopen = provisioner.urllib.request.urlopen
+
+    class InvalidUtf8Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return b"\xff"
+
+    class ListBodyHTTPError(provisioner.urllib.error.HTTPError):
+        def __init__(self):
+            super().__init__("http://operator-upgrade-broker.test/v1/operator-upgrade", 400, "Bad Request", {}, None)
+
+        def read(self) -> bytes:
+            return b'["bad request"]'
+
+    try:
+        os.environ["ARCLINK_OPERATOR_UPGRADE_BROKER_URL"] = "http://operator-upgrade-broker.test"
+        os.environ["ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN"] = "test-broker-token"
+
+        provisioner.urllib.request.urlopen = lambda *args, **kwargs: InvalidUtf8Response()
+        try:
+            provisioner._operator_upgrade_broker_request(
+                "run_operator_upgrade",
+                {"log_path": "/var/lib/arclink/operator-actions/upgrade.log"},
+                timeout_seconds=60,
+            )
+        except RuntimeError as exc:
+            expect("broker request failed" in str(exc), str(exc))
+        else:
+            raise AssertionError("invalid UTF-8 broker body should be normalized to RuntimeError")
+
+        def raise_http_error(*args, **kwargs):
+            raise ListBodyHTTPError()
+
+        provisioner.urllib.request.urlopen = raise_http_error
+        try:
+            provisioner._operator_upgrade_broker_request(
+                "run_operator_upgrade",
+                {"log_path": "/var/lib/arclink/operator-actions/upgrade.log"},
+                timeout_seconds=60,
+            )
+        except RuntimeError as exc:
+            expect("bad request" in str(exc), str(exc))
+        else:
+            raise AssertionError("non-object HTTPError body should be normalized to RuntimeError")
+        print("PASS test_operator_upgrade_broker_request_normalizes_decode_and_error_bodies")
+    finally:
+        provisioner.urllib.request.urlopen = old_urlopen
+        os.environ.clear()
+        os.environ.update(old_env)
+
+
+def test_non_docker_pin_upgrade_rejects_non_allowlisted_components() -> None:
+    provisioner = load_module(PROVISIONER_PY, "arclink_enrollment_provisioner_pin_allowlist_test")
+    cfg = type("Cfg", (), {"repo_dir": REPO})()
+    try:
+        provisioner._pin_upgrade_command_args(
+            cfg,
+            {"component": "hermes-docs", "kind": "git-commit", "target": "abc123"},
+            skip_upgrade=True,
+        )
+    except ValueError as exc:
+        expect("not allowlisted" in str(exc), str(exc))
+    else:
+        raise AssertionError("non-Docker pin upgrade must reject components outside broker/runner allowlist")
+    print("PASS test_non_docker_pin_upgrade_rejects_non_allowlisted_components")
+
+
 def test_install_system_services_seeds_home_in_root_units() -> None:
     install_script = REPO / "bin" / "install-system-services.sh"
     text = install_script.read_text(encoding="utf-8")
@@ -1621,9 +1960,8 @@ def test_install_system_services_does_not_self_deadlock_on_active_oneshots() -> 
     install_script = REPO / "bin" / "install-system-services.sh"
     text = install_script.read_text(encoding="utf-8")
     expect("start_system_service_if_idle()" in text, text)
-    expect("systemctl show -p ActiveState --value" in text, text)
-    for state in ("active", "activating", "reloading", "deactivating"):
-        expect(state in text, f"missing guarded state {state!r}")
+    expect("systemctl show -p ActiveState --value" not in text, text)
+    expect('systemctl start "$unit" >/dev/null 2>&1 || true' in text, text)
     expect(
         "start_system_service_if_idle arclink-enrollment-provision.service" in text,
         text,
@@ -1635,7 +1973,7 @@ def test_install_system_services_does_not_self_deadlock_on_active_oneshots() -> 
     expect(
         "systemctl start arclink-enrollment-provision.service >/dev/null 2>&1 || true"
         not in text,
-        "enrollment service start must go through the idle guard",
+        "enrollment service start must go through the systemd start helper",
     )
     print("PASS test_install_system_services_does_not_self_deadlock_on_active_oneshots")
 
@@ -1670,7 +2008,9 @@ def main() -> int:
     test_gateway_failures_notify_user_with_provision_error_status()
     test_completed_backup_setup_prompt_backfill_is_idempotent_for_chat_onboarding()
     test_operator_upgrade_actions_run_root_upgrade_and_notify_operator()
-    test_operator_upgrade_actions_reject_unconfirmed_sources()
+    test_operator_upgrade_actions_reject_unsigned_and_forged_authorization()
+    test_operator_upgrade_actions_reject_authorization_target_and_actor_tampering()
+    test_operator_upgrade_actions_reject_pre_migration_authless_rows()
     test_operator_pin_upgrade_actions_run_component_upgrade_and_notify_operator()
     test_run_pin_upgrade_action_pins_targets_then_runs_deploy_upgrade()
     test_run_pin_upgrade_action_skips_deploy_when_component_upgrade_noops()
@@ -1680,12 +2020,15 @@ def main() -> int:
     test_run_host_upgrade_routes_to_operator_upgrade_broker_in_docker_mode()
     test_entrypoint_root_requirement_allows_docker_supervisor()
     test_run_host_upgrade_fails_closed_without_operator_upgrade_broker_token_in_docker_mode()
+    test_docker_mode_accepts_on_truthy_value()
     test_run_pin_upgrade_action_uses_operator_upgrade_broker_in_docker_mode()
     test_operator_upgrade_broker_requests_are_signed_and_nonce_bound()
+    test_operator_upgrade_broker_request_normalizes_decode_and_error_bodies()
+    test_non_docker_pin_upgrade_rejects_non_allowlisted_components()
     test_install_system_services_seeds_home_in_root_units()
     test_install_system_services_does_not_self_deadlock_on_active_oneshots()
     test_auto_provision_dashboard_probe_allows_cold_start_window()
-    print("PASS all 29 enrollment provisioner regression tests")
+    print("PASS all 35 enrollment provisioner regression tests")
     return 0
 
 

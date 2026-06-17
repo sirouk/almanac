@@ -71,13 +71,12 @@ if [[ ! -r "$TOKEN_FILE" ]]; then
   echo "curate-notion: cannot read bootstrap token at $TOKEN_FILE" >&2
   exit 2
 fi
-TOKEN="$(tr -d '[:space:]' <"$TOKEN_FILE")"
 RPC=(python3 "$REPO_DIR/python/arclink_rpc_client.py" --url "$MCP_URL")
 
 call_tool() {
   local tool_name="$1"
   local payload_json="$2"
-  "${RPC[@]}" --tool "$tool_name" --json-args "$payload_json"
+  printf '%s' "$payload_json" | "${RPC[@]}" --tool "$tool_name" --json-args-file -
 }
 
 if [[ "$COMMAND" == "search" ]]; then
@@ -87,11 +86,14 @@ if [[ "$COMMAND" == "search" ]]; then
     exit 2
   fi
   payload="$(
-    python3 - "$TOKEN" "$QUERY" "$RERANK_MODE" <<'PY'
+    python3 - "$TOKEN_FILE" "$QUERY" "$RERANK_MODE" <<'PY'
 import json
 import sys
+from pathlib import Path
+
+token = "".join(Path(sys.argv[1]).read_text(encoding="utf-8").split())
 print(json.dumps({
-    "token": sys.argv[1],
+    "token": token,
     "query": sys.argv[2],
     "limit": 5,
     "rerank": sys.argv[3] == "1",
@@ -131,10 +133,13 @@ if [[ "$COMMAND" == "fetch" ]]; then
     exit 2
   fi
   payload="$(
-    python3 - "$TOKEN" "$TARGET" <<'PY'
+    python3 - "$TOKEN_FILE" "$TARGET" <<'PY'
 import json
 import sys
-print(json.dumps({"token": sys.argv[1], "target_id": sys.argv[2]}))
+from pathlib import Path
+
+token = "".join(Path(sys.argv[1]).read_text(encoding="utf-8").split())
+print(json.dumps({"token": token, "target_id": sys.argv[2]}))
 PY
   )"
   result="$(call_tool "notion.fetch" "$payload")"
@@ -175,11 +180,14 @@ if [[ "$COMMAND" == "query" ]]; then
     exit 2
   fi
   payload="$(
-    python3 - "$TOKEN" "$TARGET" "$QUERY_JSON" <<'PY'
+    python3 - "$TOKEN_FILE" "$TARGET" "$QUERY_JSON" <<'PY'
 import json
 import sys
+from pathlib import Path
+
+token = "".join(Path(sys.argv[1]).read_text(encoding="utf-8").split())
 query = json.loads(sys.argv[3]) if sys.argv[3].strip() else {}
-print(json.dumps({"token": sys.argv[1], "target_id": sys.argv[2], "query": query, "limit": 25}))
+print(json.dumps({"token": token, "target_id": sys.argv[2], "query": query, "limit": 25}))
 PY
   )"
   result="$(call_tool "notion.query" "$payload")"

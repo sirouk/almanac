@@ -3608,6 +3608,7 @@ def _credentials_reply(
     channel_identity: str,
     session: Mapping[str, Any] | None,
     deployment: Mapping[str, Any] | None,
+    private_delivery: bool,
 ) -> ArcLinkPublicBotTurn:
     if deployment is None or str(deployment.get("status") or "") not in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
         return _turn(
@@ -3661,6 +3662,19 @@ def _credentials_reply(
             reply=(
                 "That credential handoff is no longer revealable. "
                 "Use the saved password, or ask Raven or ArcLink support to rotate/reissue dashboard access."
+            ),
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Check Status", command="/status", style="secondary"),),
+        )
+    if not private_delivery:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="credentials_private_channel_required",
+            reply=(
+                "Dashboard credentials can only be revealed in a private chat or ephemeral Discord response. "
+                "Open a direct message with Raven, or use the Discord slash command where Raven can answer ephemerally, then try `/credentials` again."
             ),
             session=session,
             deployment=deployment,
@@ -3749,6 +3763,16 @@ def _credentials_reply(
         telegram_reply=telegram_reply,
         telegram_entities=_telegram_code_entities(telegram_reply, (username, raw_secret)),
     )
+
+
+def _credential_delivery_is_private(channel: str, metadata: Mapping[str, Any]) -> bool:
+    clean_channel = str(channel or "").strip().lower()
+    if clean_channel == "telegram":
+        return str(metadata.get("telegram_chat_type") or "").strip().lower() == "private"
+    if clean_channel == "discord":
+        chat_type = str(metadata.get("discord_chat_type") or "").strip().lower()
+        return chat_type == "dm" or bool(metadata.get("discord_ephemeral_supported"))
+    return False
 
 
 def _credentials_stored_reply(
@@ -3921,6 +3945,7 @@ def _queue_public_agent_turn(
         "prefix": str(deployment.get("prefix") or ""),
         "user_id": str(deployment.get("user_id") or ""),
         "agent_label": agent_label,
+        "display_name": agent_label,
         "raven_display_name": raven_display_name,
         "helm_url": helm_url,
         "source_kind": source_kind,
@@ -3937,6 +3962,7 @@ def _queue_public_agent_turn(
             "telegram_update_kind",
             "telegram_update_json",
             "telegram_native_callback",
+            "telegram_callback_family",
         ):
             value = turn_metadata.get(key)
             if value not in (None, ""):
@@ -7619,6 +7645,7 @@ def handle_arclink_public_bot_turn(
             channel_identity=clean_identity,
             session=session,
             deployment=deployment,
+            private_delivery=_credential_delivery_is_private(clean_channel, turn_metadata),
         )
 
     credential_ack_target = _target_from_command(

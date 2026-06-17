@@ -9,8 +9,8 @@ helper is the per-agent application lane (invoked by
 signals). It:
 
   1. reads the approved-skill intents staged in this HERMES_HOME,
-  2. checks whether each skill is locally discoverable (``$HERMES_HOME/skills``
-     or any ``skills.external_dirs`` library),
+  2. checks whether each skill is locally discoverable (``$HERMES_HOME/skills``,
+     any ``skills.external_dirs`` library, or guarded fleet-shared skill roots),
   3. removes discoverable approved skills from ``config.yaml`` ``skills.disabled``
      using targeted line surgery (never a YAML re-dump, so user formatting and
      unrelated keys are preserved),
@@ -23,19 +23,22 @@ Hermes precedence rules are honored by construction:
   - entries are only ever REMOVED from ``skills.disabled`` and only for skills
     the control plane approved AND that are actually discoverable (fail
     closed: a missing skill stays untouched and is reported as ``missing``);
-  - new skills enter the Hermes system-prompt index at next session start
-    (``effective_at: next_session`` in the receipt).
+  - new skills enter the Hermes system-prompt index after Hermes reloads skills
+    or at next session start (``effective_at: reload_skills_or_next_session`` in
+    receipts that change config).
 """
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import fcntl
 import json
 import os
 import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 APPROVED_SKILLS_STATE_NAME = "arclink-academy-approved-skills.json"
 RECEIPT_STATE_NAME = "arclink-skill-enablement-applied.json"
@@ -43,6 +46,28 @@ RECEIPT_STATE_NAME = "arclink-skill-enablement-applied.json"
 _TOP_LEVEL_KEY_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]*\s*:")
 _CHILD_KEY_RE = re.compile(r"^(\s+)([A-Za-z0-9_][A-Za-z0-9_-]*)\s*:")
 _SKILLS_KEY_RE = re.compile(r"^skills\s*:\s*(?:#.*)?$")
+_SAFE_SKILL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_FLEET_SHARED_ROOT_ENV_KEYS = (
+    "ARCLINK_FLEET_SHARED_ROOT",
+    "DRIVE_FLEET_SHARED_ROOT",
+    "CODE_FLEET_SHARED_ROOT",
+)
+
+
+def _config_yaml_lock_path(hermes_home: Path) -> Path:
+    return Path(hermes_home).expanduser() / ".arclink-config.yaml.lock"
+
+
+@contextmanager
+def _config_yaml_lock(hermes_home: Path):
+    lock_path = _config_yaml_lock_path(hermes_home)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _utc_now_iso() -> str:
@@ -175,13 +200,85 @@ def _expand_dir(value: str, hermes_home: Path) -> Path:
     return path
 
 
+def _skill_id_safe(skill_id: str) -> bool:
+    value = str(skill_id or "")
+    return bool(_SAFE_SKILL_ID_RE.fullmatch(value)) and ".." not in value
+
+
+def _skill_dir_usable(path: Path) -> bool:
+    try:
+        return path.is_dir() and not path.is_symlink() and (path / "SKILL.md").is_file()
+    except OSError:
+        return False
+
+
+def _path_has_symlink_between(base: Path, path: Path) -> bool:
+    try:
+        relative = path.relative_to(base)
+    except ValueError:
+        return True
+    current = base
+    for part in relative.parts:
+        current = current / part
+        try:
+            if current.is_symlink():
+                return True
+        except OSError:
+            return True
+    return False
+
+
+def _agents_skill_bases(root: Path) -> list[Path]:
+    bases = [root]
+    if root.name != "Agents_Skills":
+        bases.append(root / "Agents_Skills")
+    return bases
+
+
+def discover_fleet_shared_skill_external_dirs(
+    hermes_home: Path,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> list[str]:
+    """Return guarded ``Agents_Skills/*/skills`` libraries visible to an agent."""
+    source_env = env or os.environ
+    roots: list[Path] = [hermes_home / "ArcLink" / "Agents_Skills"]
+    for key in _FLEET_SHARED_ROOT_ENV_KEYS:
+        raw = str(source_env.get(key) or "").strip()
+        if raw:
+            roots.extend(_agents_skill_bases(_expand_dir(raw, hermes_home)))
+    discovered: list[str] = []
+    seen: set[str] = set()
+    for base in roots:
+        try:
+            if not base.is_dir() or base.is_symlink():
+                continue
+        except OSError:
+            continue
+        for team_dir in sorted(base.iterdir(), key=lambda item: item.name):
+            skills_dir = team_dir / "skills"
+            if not skills_dir.is_dir() or _path_has_symlink_between(base, skills_dir):
+                continue
+            try:
+                has_skill = any(_skill_dir_usable(item) for item in skills_dir.iterdir())
+            except OSError:
+                has_skill = False
+            if not has_skill:
+                continue
+            value = str(skills_dir)
+            if value not in seen:
+                seen.add(value)
+                discovered.append(value)
+    return discovered
+
+
 def _skill_available(skill_id: str, *, hermes_home: Path, external_dirs: list[str]) -> str:
     local_dir = hermes_home / "skills" / skill_id
-    if local_dir.is_dir():
+    if _skill_dir_usable(local_dir):
         return str(local_dir)
     for raw_dir in external_dirs:
         candidate = _expand_dir(raw_dir, hermes_home) / skill_id
-        if candidate.is_dir():
+        if _skill_dir_usable(candidate):
             return str(candidate)
     return ""
 
@@ -207,7 +304,7 @@ def _load_approved_skill_ids(state_path: Path) -> tuple[list[str], list[str]]:
         if not skill_id:
             problems.append(f"intent without skill id: {str(intent.get('source_id') or 'unknown')}")
             continue
-        if "/" in skill_id or "\\" in skill_id or ".." in skill_id:
+        if not _skill_id_safe(skill_id):
             problems.append(f"rejected unsafe skill id: {skill_id}")
             continue
         if skill_id in seen:
@@ -217,7 +314,7 @@ def _load_approved_skill_ids(state_path: Path) -> tuple[list[str], list[str]]:
     return skill_ids, problems
 
 
-def apply_skill_enablement(hermes_home: Path) -> dict[str, Any]:
+def apply_skill_enablement(hermes_home: Path, *, env: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Apply staged enablement intents and return the receipt payload."""
     hermes_home = Path(hermes_home).expanduser()
     state_dir = hermes_home / "state"
@@ -229,44 +326,50 @@ def apply_skill_enablement(hermes_home: Path) -> dict[str, Any]:
         "intents_file": str(intents_path),
         "config_file": str(config_path),
         "effective_at": "next_session",
+        "reload_command": "/reload_skills",
         "skills": [],
         "problems": problems,
         "config_changed": False,
+        "discovered_external_dirs": [],
     }
     if not skill_ids:
         receipt["status"] = "no_intents" if not problems else "invalid_intents"
         return receipt
 
-    try:
-        config_text = config_path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        config_text = ""
-    except OSError as exc:
-        receipt["status"] = "config_unreadable"
-        receipt["problems"].append(f"unreadable config.yaml: {exc}")
-        return receipt
-    skills_cfg = parse_skills_config(config_text)
-    disabled = set(skills_cfg["disabled"])
-    external_dirs = skills_cfg["external_dirs"]
+    with _config_yaml_lock(hermes_home):
+        try:
+            config_text = config_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            config_text = ""
+        except OSError as exc:
+            receipt["status"] = "config_unreadable"
+            receipt["problems"].append(f"unreadable config.yaml: {exc}")
+            return receipt
+        skills_cfg = parse_skills_config(config_text)
+        disabled = set(skills_cfg["disabled"])
+        discovered_external_dirs = discover_fleet_shared_skill_external_dirs(hermes_home, env=env)
+        receipt["discovered_external_dirs"] = discovered_external_dirs
+        external_dirs = [*skills_cfg["external_dirs"], *discovered_external_dirs]
 
-    to_remove: set[str] = set()
-    for skill_id in skill_ids:
-        location = _skill_available(skill_id, hermes_home=hermes_home, external_dirs=external_dirs)
-        if not location:
-            receipt["skills"].append({"skill_id": skill_id, "status": "missing"})
-            continue
-        if skill_id in disabled:
-            to_remove.add(skill_id)
-            receipt["skills"].append({"skill_id": skill_id, "status": "enabled", "location": location})
-        else:
-            receipt["skills"].append({"skill_id": skill_id, "status": "already_enabled", "location": location})
+        to_remove: set[str] = set()
+        for skill_id in skill_ids:
+            location = _skill_available(skill_id, hermes_home=hermes_home, external_dirs=external_dirs)
+            if not location:
+                receipt["skills"].append({"skill_id": skill_id, "status": "missing"})
+                continue
+            if skill_id in disabled:
+                to_remove.add(skill_id)
+                receipt["skills"].append({"skill_id": skill_id, "status": "enabled", "location": location})
+            else:
+                receipt["skills"].append({"skill_id": skill_id, "status": "already_enabled", "location": location})
 
-    if to_remove and config_text:
-        new_text, removed = remove_skills_from_disabled(config_text, to_remove)
-        if removed:
-            _atomic_write_text(config_path, new_text)
-            receipt["config_changed"] = True
-            receipt["removed_from_disabled"] = sorted(removed)
+        if to_remove and config_text:
+            new_text, removed = remove_skills_from_disabled(config_text, to_remove)
+            if removed:
+                _atomic_write_text(config_path, new_text)
+                receipt["config_changed"] = True
+                receipt["removed_from_disabled"] = sorted(removed)
+                receipt["effective_at"] = "reload_skills_or_next_session"
     statuses = {entry["status"] for entry in receipt["skills"]}
     receipt["status"] = "applied" if statuses <= {"enabled", "already_enabled"} else "partial"
     return receipt

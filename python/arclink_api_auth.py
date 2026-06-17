@@ -22,6 +22,7 @@ from arclink_control import (
     arclink_refuel_topup_options,
     append_arclink_audit,
     append_arclink_event,
+    config_env_value,
     parse_utc_iso,
     quote_arclink_refuel_topup,
     queue_notification,
@@ -38,6 +39,7 @@ from arclink_dashboard import (
     request_arclink_backup_write_check,
 )
 from arclink_onboarding import (
+    ARCLINK_ONBOARDING_CANCEL_IMMUTABLE_STATUSES,
     answer_arclink_onboarding_question,
     cancel_arclink_onboarding_session,
     create_or_resume_arclink_onboarding_session,
@@ -53,6 +55,7 @@ from arclink_chutes import (
     evaluate_chutes_deployment_boundary,
     renewal_lifecycle_for_billing_state,
 )
+from arclink_operator_agent import observe_unlimited_authorized
 from arclink_crew_recipes import (
     apply_crew_recipe,
     crew_academy_status,
@@ -108,6 +111,7 @@ ARCLINK_ADMIN_PASSWORD_ALGORITHM = ARCLINK_PASSWORD_ALGORITHM
 ARCLINK_ADMIN_PASSWORD_ITERATIONS = ARCLINK_PASSWORD_ITERATIONS
 ARCLINK_SESSION_HASH_ALGORITHM = "hmac_sha256_v1"
 ARCLINK_LEGACY_SESSION_HASH_ALGORITHM = "sha256_legacy"
+LOCAL_DEV_DOMAINS = {"localhost", "127.0.0.1", "::1", "example.test"}
 ARCLINK_ONBOARDING_CLAIM_REPLAY_SECONDS = 10 * 60
 
 
@@ -245,14 +249,16 @@ def _hash_proof_token(token: str) -> str:
     return f"{ARCLINK_SESSION_HASH_ALGORITHM}${digest}"
 
 
-def _verify_proof_token_hash(token: str, stored_hash: str) -> bool:
-    """Verify a proof token hash, accepting both HMAC-peppered and legacy SHA-256."""
+def _verify_proof_token_hash(token: str, stored_hash: str, *, allow_legacy: bool = True) -> bool:
+    """Verify a proof token hash, optionally accepting legacy plain SHA-256."""
     stored = str(stored_hash or "").strip()
     if not stored:
         return False
     current = _hash_proof_token(token)
     if stored.startswith(f"{ARCLINK_SESSION_HASH_ALGORITHM}$"):
         return hmac.compare_digest(stored, current)
+    if not allow_legacy:
+        return False
     legacy = _hash_token(token)
     return hmac.compare_digest(stored, legacy)
 
@@ -265,20 +271,18 @@ def hash_share_request_broker_token(token: str) -> str:
 
 
 def _truthy_env(name: str) -> bool:
-    return str(os.environ.get(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+    return str(config_env_value(name, "")).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _session_hash_pepper() -> str:
-    pepper = str(os.environ.get("ARCLINK_SESSION_HASH_PEPPER") or "").strip()
+    pepper = str(config_env_value("ARCLINK_SESSION_HASH_PEPPER", "") or "").strip()
     if pepper:
         return pepper
-    base_domain = str(os.environ.get("ARCLINK_BASE_DOMAIN") or "").strip().lower()
-    production_domain = bool(
-        base_domain
-        and base_domain not in {"localhost", "127.0.0.1", "example.test"}
-        and not base_domain.endswith(".test")
+    base_domain = str(config_env_value("ARCLINK_BASE_DOMAIN", "") or "").strip().lower()
+    is_local_dev = bool(
+        base_domain and (base_domain in LOCAL_DEV_DOMAINS or base_domain.endswith(".test"))
     )
-    if _truthy_env("ARCLINK_SESSION_HASH_PEPPER_REQUIRED") or production_domain:
+    if _truthy_env("ARCLINK_SESSION_HASH_PEPPER_REQUIRED") or not is_local_dev:
         raise ArcLinkApiAuthError("ArcLink session hash pepper is not configured")
     return "arclink-dev-session-hash-pepper"
 
@@ -404,31 +408,42 @@ def check_arclink_rate_limit(
     clean_subject = str(subject or "").strip().lower()
     if clean_scope == "arclink:" or not clean_subject:
         raise ArcLinkApiAuthError("ArcLink rate limit scope and subject are required")
+    started_transaction = False
+    if commit and not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+        started_transaction = True
     cutoff = (utc_now() - dt.timedelta(seconds=max(1, int(window_seconds or 1)))).replace(microsecond=0).isoformat()
-    count = conn.execute(
-        """
-        SELECT COUNT(*) AS n
-        FROM rate_limits
-        WHERE scope = ? AND subject = ? AND observed_at >= ?
-        """,
-        (clean_scope, clean_subject, cutoff),
-    ).fetchone()["n"]
-    effective_limit = max(1, int(limit or 1))
-    current_count = int(count)
-    if current_count >= effective_limit:
-        raise ArcLinkRateLimitError(
-            "ArcLink rate limit exceeded",
-            limit=effective_limit,
-            remaining=0,
-            reset_seconds=max(1, int(window_seconds or 1)),
+    try:
+        count = conn.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM rate_limits
+            WHERE scope = ? AND subject = ? AND observed_at >= ?
+            """,
+            (clean_scope, clean_subject, cutoff),
+        ).fetchone()["n"]
+        effective_limit = max(1, int(limit or 1))
+        current_count = int(count)
+        if current_count >= effective_limit:
+            if started_transaction:
+                conn.rollback()
+            raise ArcLinkRateLimitError(
+                "ArcLink rate limit exceeded",
+                limit=effective_limit,
+                remaining=0,
+                reset_seconds=max(1, int(window_seconds or 1)),
+            )
+        conn.execute(
+            "INSERT INTO rate_limits (scope, subject, observed_at) VALUES (?, ?, ?)",
+            (clean_scope, clean_subject, utc_now_iso()),
         )
-    conn.execute(
-        "INSERT INTO rate_limits (scope, subject, observed_at) VALUES (?, ?, ?)",
-        (clean_scope, clean_subject, utc_now_iso()),
-    )
-    if commit:
-        conn.commit()
-    return {"scope": clean_scope, "subject": clean_subject, "remaining": max(0, int(limit) - int(count) - 1)}
+        if commit:
+            conn.commit()
+        return {"scope": clean_scope, "subject": clean_subject, "remaining": max(0, int(limit) - int(count) - 1)}
+    except Exception:
+        if started_transaction and conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 def _login_audit_subject(login_subject: str, clean_email: str) -> str:
@@ -476,29 +491,40 @@ def _check_login_rate_limits(
         )
     window = max(1, int(window_seconds or 1))
     cutoff = (utc_now() - dt.timedelta(seconds=window)).replace(microsecond=0).isoformat()
-    for bucket_scope, bucket_subject, bucket_limit in bucket_specs:
-        effective_limit = max(1, int(bucket_limit or 1))
-        count = conn.execute(
-            """
-            SELECT COUNT(*) AS n
-            FROM rate_limits
-            WHERE scope = ? AND subject = ? AND observed_at >= ?
-            """,
-            (bucket_scope, bucket_subject, cutoff),
-        ).fetchone()["n"]
-        if int(count) >= effective_limit:
-            raise ArcLinkRateLimitError(
-                "ArcLink rate limit exceeded",
-                limit=effective_limit,
-                remaining=0,
-                reset_seconds=window,
-            )
-    now = utc_now_iso()
-    conn.executemany(
-        "INSERT INTO rate_limits (scope, subject, observed_at) VALUES (?, ?, ?)",
-        [(bucket_scope, bucket_subject, now) for bucket_scope, bucket_subject, _limit in bucket_specs],
-    )
-    conn.commit()
+    started_transaction = False
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+        started_transaction = True
+    try:
+        for bucket_scope, bucket_subject, bucket_limit in bucket_specs:
+            effective_limit = max(1, int(bucket_limit or 1))
+            count = conn.execute(
+                """
+                SELECT COUNT(*) AS n
+                FROM rate_limits
+                WHERE scope = ? AND subject = ? AND observed_at >= ?
+                """,
+                (bucket_scope, bucket_subject, cutoff),
+            ).fetchone()["n"]
+            if int(count) >= effective_limit:
+                if started_transaction:
+                    conn.rollback()
+                raise ArcLinkRateLimitError(
+                    "ArcLink rate limit exceeded",
+                    limit=effective_limit,
+                    remaining=0,
+                    reset_seconds=window,
+                )
+        now = utc_now_iso()
+        conn.executemany(
+            "INSERT INTO rate_limits (scope, subject, observed_at) VALUES (?, ?, ?)",
+            [(bucket_scope, bucket_subject, now) for bucket_scope, bucket_subject, _limit in bucket_specs],
+        )
+        conn.commit()
+    except Exception:
+        if started_transaction and conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 def upsert_arclink_admin(
@@ -2474,7 +2500,7 @@ def _authenticate_share_request_broker(
     if broker.get("enabled") is False:
         raise ArcLinkApiAuthError("ArcLink share-request broker is disabled")
     token_hash = str(broker.get("token_hash") or "").strip()
-    if not token_hash or not _verify_proof_token_hash(clean_token, token_hash):
+    if not token_hash or not _verify_proof_token_hash(clean_token, token_hash, allow_legacy=False):
         raise ArcLinkApiAuthError("ArcLink share-request broker token is invalid")
     return {
         "deployment_id": str(deployment.get("deployment_id") or ""),
@@ -4785,12 +4811,15 @@ def read_provider_state_api(
         model_id = str(meta.get("selected_model_id") or meta.get("model_id") or default_model)
         item = {"deployment_id": row["deployment_id"], "user_id": row["user_id"], "model_id": model_id}
         if provider == "chutes":
+            deployment_id = str(row["deployment_id"] or "")
+            user_id_for_boundary = str(row["user_id"] or "")
             boundary = evaluate_chutes_deployment_boundary(
-                str(row["deployment_id"] or ""),
-                str(row["user_id"] or ""),
+                deployment_id,
+                user_id_for_boundary,
                 meta,
                 env=env_source,
                 billing_state=str(row["entitlement_state"] or "none"),
+                observe_unlimited_authorized=observe_unlimited_authorized(conn, deployment_id, user_id_for_boundary),
             )
             public_boundary = boundary.to_public(include_user_id=session_kind == "admin", include_admin_fields=session_kind == "admin")
             item["credential_state"] = boundary.credential_state
@@ -5036,7 +5065,7 @@ def cancel_onboarding_session_api(
     if row is None:
         return ArcLinkApiResponse(status=404, payload={"error": "session_not_found"})
     current_status = str(row["status"] or "").strip()
-    if current_status in {"completed", "payment_cancelled", "payment_expired", "payment_failed", "abandoned", "expired"}:
+    if current_status in ARCLINK_ONBOARDING_CANCEL_IMMUTABLE_STATUSES:
         return ArcLinkApiResponse(status=200, payload={
             "session_id": clean_id,
             "status": current_status,

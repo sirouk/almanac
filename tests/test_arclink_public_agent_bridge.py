@@ -67,6 +67,9 @@ def test_bridge_replay_dispatch_uses_known_handler_names() -> None:
     expect("telegram_update_json_list" in body, "bridge must support album update lists")
     # Discord sends must pin default-deny mentions.
     expect('"allowed_mentions"' in body, "bridge Discord sends must pin allowed_mentions default-deny")
+    expect("discord_components" in body, "bridge Discord sends must preserve component metadata")
+    expect("discord_embeds" in body, "bridge Discord sends must preserve embed metadata")
+    expect("discord_attachments" in body, "bridge Discord sends must preserve attachment metadata")
     print("PASS test_bridge_replay_dispatch_uses_known_handler_names")
 
 

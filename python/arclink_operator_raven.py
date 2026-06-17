@@ -32,6 +32,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
+from arclink_secrets_regex import redact_secret_material
 from arclink_upgrade_policy import PIN_UPGRADE_COMPONENTS, STATEFUL_PIN_UPGRADE_COMPONENTS
 
 
@@ -1290,11 +1291,43 @@ def _pending_pin_payloads(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return list_pin_upgrade_action_payloads(conn, active_only=True)
 
 
+def _operator_action_authorization(
+    *,
+    actor_id: str,
+    action_kind: str,
+    target: str,
+    command_name: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    from arclink_control import OPERATOR_ACTION_AUTH_KIND_OPERATOR_RAVEN, OPERATOR_ACTION_AUTH_TTL_SECONDS
+
+    clean_target = str(target or "").strip()
+    confirmation_id = _action_idempotency_key(
+        idempotency_key,
+        kind=f"operator-action-{action_kind}",
+        target=clean_target or command_name,
+    )
+    return {
+        "kind": OPERATOR_ACTION_AUTH_KIND_OPERATOR_RAVEN,
+        "actor_id": str(actor_id or "").strip(),
+        "ttl_seconds": OPERATOR_ACTION_AUTH_TTL_SECONDS,
+        "payload": {
+            "source": "operator-raven",
+            "command": command_name,
+            "action_kind": action_kind,
+            "target_hash": hashlib.sha256(clean_target.encode("utf-8")).hexdigest(),
+            "confirmation_id": confirmation_id,
+            "reason": f"Operator Raven confirmed {command_name}",
+        },
+    }
+
+
 def _queue_pin_upgrade_payloads(
     conn: sqlite3.Connection,
     *,
     payloads: Sequence[Mapping[str, Any]],
     actor_id: str,
+    idempotency_key: str = "",
 ) -> tuple[list[dict[str, Any]], int]:
     from arclink_control import request_operator_action
 
@@ -1311,6 +1344,13 @@ def _queue_pin_upgrade_payloads(
             request_source="operator-raven",
             requested_target=token,
             dedupe_by_target=True,
+            authorization=_operator_action_authorization(
+                actor_id=actor_id,
+                action_kind="pin-upgrade",
+                target=token,
+                command_name="pin_upgrade",
+                idempotency_key=idempotency_key,
+            ),
         )
         queued.append(action_row)
         if created:
@@ -1371,28 +1411,51 @@ def mint_operator_button_nonce(conn: sqlite3.Connection, *, command: str) -> str
 
 def consume_operator_button_nonce(conn: sqlite3.Connection, raw_nonce: str) -> str:
     """Validate and burn a button nonce; returns the mapped command or ''."""
-    from arclink_control import parse_utc_iso, upsert_setting, utc_now, utc_now_iso
+    from arclink_control import parse_utc_iso, utc_now, utc_now_iso
 
     clean = str(raw_nonce or "").strip()
     if not clean:
         return ""
     digest = hashlib.sha256(clean.encode("utf-8")).hexdigest()
     key = _OPERATOR_BUTTON_NONCE_PREFIX + digest
-    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-    if row is None:
-        return ""
+    own_txn = not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
     try:
-        payload = json.loads(str(row["value"] or "{}"))
-    except ValueError:
-        return ""
-    if str(payload.get("used_at") or "").strip():
-        return ""
-    expires = parse_utc_iso(str(payload.get("expires_at") or ""))
-    if expires is None or expires.timestamp() <= utc_now().timestamp():
-        return ""
-    payload["used_at"] = utc_now_iso()
-    upsert_setting(conn, key, json.dumps(payload, sort_keys=True))
-    return str(payload.get("command") or "").strip()
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        if row is None:
+            if own_txn:
+                conn.commit()
+            return ""
+        original_value = str(row["value"] or "{}")
+        try:
+            payload = json.loads(original_value)
+        except ValueError:
+            if own_txn:
+                conn.commit()
+            return ""
+        if str(payload.get("used_at") or "").strip():
+            if own_txn:
+                conn.commit()
+            return ""
+        expires = parse_utc_iso(str(payload.get("expires_at") or ""))
+        if expires is None or expires.timestamp() <= utc_now().timestamp():
+            if own_txn:
+                conn.commit()
+            return ""
+        command = str(payload.get("command") or "").strip()
+        payload["used_at"] = utc_now_iso()
+        cursor = conn.execute(
+            "UPDATE settings SET value = ?, updated_at = ? WHERE key = ? AND value = ?",
+            (json.dumps(payload, sort_keys=True), payload["used_at"], key, original_value),
+        )
+        if own_txn:
+            conn.commit()
+        return command if cursor.rowcount == 1 else ""
+    except Exception:
+        if own_txn and conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 def _upgrade_one_tap_button(
@@ -1561,6 +1624,13 @@ def _handle_host_upgrade(
             requested_by=actor_id,
             request_source="operator-raven",
             requested_target="",
+            authorization=_operator_action_authorization(
+                actor_id=actor_id,
+                action_kind="upgrade",
+                target="",
+                command_name="upgrade",
+                idempotency_key=idempotency_key,
+            ),
         )
     except Exception as exc:  # noqa: BLE001
         return {"message": f"Could not queue ArcLink upgrade: {exc}"}
@@ -1636,7 +1706,12 @@ def _handle_pin_upgrade(
             ]
         return needs_confirm
     try:
-        queued, created_count = _queue_pin_upgrade_payloads(conn, payloads=[payload], actor_id=actor_id)
+        queued, created_count = _queue_pin_upgrade_payloads(
+            conn,
+            payloads=[payload],
+            actor_id=actor_id,
+            idempotency_key=idempotency_key,
+        )
     except Exception as exc:  # noqa: BLE001
         return {"message": f"Could not queue pinned-component upgrade: {exc}"}
     action_row = queued[0] if queued else {}
@@ -1730,7 +1805,12 @@ def _handle_upgrade_sweep(
     if needs_confirm is not None:
         return needs_confirm
     try:
-        queued, created_count = _queue_pin_upgrade_payloads(conn, payloads=selected, actor_id=actor_id)
+        queued, created_count = _queue_pin_upgrade_payloads(
+            conn,
+            payloads=selected,
+            actor_id=actor_id,
+            idempotency_key=idempotency_key,
+        )
     except Exception as exc:  # noqa: BLE001
         return {"message": f"Could not queue upgrade sweep: {exc}"}
     lines.append("")
@@ -2415,7 +2495,10 @@ def _find_deployment(conn: sqlite3.Connection, deployment_id: str) -> dict[str, 
 def _redact_text(text: str) -> str:
     lines = []
     for line in str(text or "").splitlines():
-        if _SECRETISH_RE.search(line) and "=" in line:
+        redacted = redact_secret_material(line)
+        if redacted != line:
+            lines.append(redacted)
+        elif _SECRETISH_RE.search(line) and "=" in line:
             key, _, _value = line.partition("=")
             lines.append(f"{key}=<redacted>")
         else:

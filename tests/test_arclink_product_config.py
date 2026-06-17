@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -161,13 +162,21 @@ def test_existing_arclink_config_helper_still_reads_legacy_env() -> None:
     print("PASS test_existing_arclink_config_helper_still_reads_legacy_env")
 
 
+def test_live_env_example_template_is_not_ignored() -> None:
+    expect((REPO / ".env.live.example").is_file(), ".env.live.example template must exist")
+    result = subprocess.run(["git", "check-ignore", "-q", ".env.live.example"], cwd=REPO)
+    expect(result.returncode == 1, ".env.live.example must not be ignored by git")
+    print("PASS test_live_env_example_template_is_not_ignored")
+
+
 def main() -> int:
     test_arclink_env_overrides_explicit_alias_without_exposing_values()
     test_blank_arclink_value_falls_back_to_explicit_alias()
     test_arclink_defaults_are_chutes_first()
     test_plan_pricing_is_consistent_across_public_surfaces()
     test_existing_arclink_config_helper_still_reads_legacy_env()
-    print("PASS all 5 ArcLink product/config tests")
+    test_live_env_example_template_is_not_ignored()
+    print("PASS all 6 ArcLink product/config tests")
     return 0
 
 

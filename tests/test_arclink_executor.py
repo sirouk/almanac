@@ -772,6 +772,52 @@ def test_live_cloudflare_dns_apply_accepts_secret_ref_token_and_cleans_copy() ->
     print("PASS test_live_cloudflare_dns_apply_accepts_secret_ref_token_and_cleans_copy")
 
 
+def test_live_cloudflare_dns_teardown_reports_only_deleted_records() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_cloudflare_teardown_deleted_test")
+    original_find = mod._cloudflare_find_dns_record
+    original_request = mod._cloudflare_request
+    old_env = os.environ.copy()
+    calls: list[tuple[str, str]] = []
+    try:
+        os.environ["CLOUDFLARE_API_TOKEN"] = "cf_token"
+
+        def fake_find(*, zone_id, token, record):
+            calls.append(("find", record["hostname"]))
+            if record["hostname"] == "found.example.test":
+                return {"id": "cf_found"}
+            return {}
+
+        def fake_request(method, path, *, token, body=None):
+            calls.append((method, path))
+            return {"result": {"id": path.rsplit("/", 1)[-1]}}
+
+        mod._cloudflare_find_dns_record = fake_find
+        mod._cloudflare_request = fake_request
+        executor = mod.ArcLinkExecutor(config=mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="local"))
+        result = executor.cloudflare_dns_teardown(
+            mod.CloudflareDnsTeardownRequest(
+                deployment_id="dep_tear",
+                zone_id="zone_test",
+                records=(
+                    {"hostname": "deleted.example.test", "record_type": "CNAME", "provider_record_id": "cf_delete"},
+                    {"hostname": "found.example.test", "record_type": "CNAME", "provider_record_id": ""},
+                    {"hostname": "missing.example.test", "record_type": "CNAME", "provider_record_id": ""},
+                ),
+            )
+        )
+        expect(result.records == ("deleted.example.test", "found.example.test"), str(result))
+        expect(result.metadata["provider_record_ids"] == ("cf_delete", "cf_found"), str(result.metadata))
+        expect(("DELETE", "/zones/zone_test/dns_records/cf_delete") in calls, str(calls))
+        expect(("DELETE", "/zones/zone_test/dns_records/cf_found") in calls, str(calls))
+        expect(all("missing" not in call[1] for call in calls if call[0] == "DELETE"), str(calls))
+    finally:
+        mod._cloudflare_find_dns_record = original_find
+        mod._cloudflare_request = original_request
+        os.environ.clear()
+        os.environ.update(old_env)
+    print("PASS test_live_cloudflare_dns_teardown_reports_only_deleted_records")
+
+
 def test_fake_rollback_executor_is_idempotent_and_preserves_state_roots() -> None:
     mod = load_module("arclink_executor.py", "arclink_executor_fake_rollback_test")
     executor = mod.ArcLinkExecutor(config=mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="fake"))
@@ -2152,6 +2198,7 @@ def main() -> int:
     test_live_stripe_client_missing_fails_closed()
     test_cloudflare_dns_apply_rejects_unsupported_record_types()
     test_live_cloudflare_dns_apply_accepts_secret_ref_token_and_cleans_copy()
+    test_live_cloudflare_dns_teardown_reports_only_deleted_records()
     test_fake_rollback_executor_is_idempotent_and_preserves_state_roots()
     test_fake_rollback_rejects_idempotency_key_reuse_with_changed_plan()
     test_fake_docker_compose_rejects_missing_depends_on_service()
@@ -2182,7 +2229,9 @@ def main() -> int:
     test_fake_docker_compose_lifecycle_operations()
     test_live_docker_compose_lifecycle_invokes_runner()
     test_live_docker_compose_lifecycle_transport_failure_is_not_downgraded()
-    print("PASS all 41 ArcLink executor tests")
+    test_ssh_docker_runner_read_without_allowed_root_raises_on_failure()
+    test_ssh_docker_runner_write_text_file_shell_quotes_remote_command()
+    print("PASS all 44 ArcLink executor tests")
     return 0
 
 

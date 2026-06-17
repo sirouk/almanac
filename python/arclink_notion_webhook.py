@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -35,10 +36,9 @@ def _spawn_batcher_now() -> None:
     try:
         # `start_new_session=True` puts the child in its own session+process
         # group, so it survives webhook restarts and doesn't hold onto the
-        # parent's ttys. systemctl --no-block returns immediately, so the
-        # child exits quickly; Python's subprocess auto-reaper handles the
-        # zombie via the discarded Popen object's destructor. close_fds
-        # prevents the child from inheriting webhook fds.
+        # parent's ttys. systemctl --no-block returns immediately, so the child
+        # normally exits quickly. close_fds prevents the child from inheriting
+        # webhook fds.
         subprocess.Popen(
             [
                 "systemctl",
@@ -53,10 +53,13 @@ def _spawn_batcher_now() -> None:
             close_fds=True,
             start_new_session=True,
         )
-    except Exception:
+    except Exception as exc:
         # Timer fallback still fires every minute; never let kick failures
         # surface to Notion.
-        pass
+        print(
+            f"arclink-notion-webhook: failed to kick ssot batcher; timer fallback remains active: {exc}",
+            file=sys.stderr,
+        )
 
 
 def _kick_ssot_batcher() -> None:
@@ -104,6 +107,17 @@ def _verification_token_install_armed(conn) -> tuple[bool, str]:
         upsert_setting(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_ARMED_UNTIL_KEY, "")
         return False, ""
     return True, armed_until
+
+
+def _upsert_setting_without_commit(conn, key: str, value: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO settings (key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+        """,
+        (key, value, utc_now_iso()),
+    )
 
 
 def arm_verification_token_install(conn, *, ttl_seconds: int, actor: str) -> dict:
@@ -206,33 +220,46 @@ def handle_verification_token_post(conn, candidate_token: str) -> tuple[int, dic
     candidate = str(candidate_token or "").strip()
     if not candidate:
         return HTTPStatus.BAD_REQUEST, {"error": "verification_token is required"}
-    stored = str(get_setting(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY, "") or "").strip()
-    if stored:
-        return (
-            HTTPStatus.CONFLICT,
-            {
-                "error": (
-                    "verification token already configured; rotate via "
-                    "`arclink-ctl notion webhook-reset-token` before re-handshaking"
-                )
-            },
-        )
-    armed, armed_until = _verification_token_install_armed(conn)
-    if not armed:
-        return (
-            HTTPStatus.PRECONDITION_FAILED,
-            {
-                "error": (
-                    "verification token install is not armed; an operator must run "
-                    "`arclink-ctl notion webhook-arm-install` before the Notion handshake arrives"
-                )
-            },
-        )
-    upsert_setting(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY, candidate)
-    upsert_setting(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_INSTALLED_AT_KEY, utc_now_iso())
-    upsert_setting(conn, NOTION_WEBHOOK_VERIFIED_AT_KEY, "")
-    upsert_setting(conn, NOTION_WEBHOOK_VERIFIED_BY_KEY, "")
-    upsert_setting(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_ARMED_UNTIL_KEY, "")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        stored = str(get_setting(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY, "") or "").strip()
+        if stored:
+            conn.commit()
+            return (
+                HTTPStatus.CONFLICT,
+                {
+                    "error": (
+                        "verification token already configured; rotate via "
+                        "`arclink-ctl notion webhook-reset-token` before re-handshaking"
+                    )
+                },
+            )
+        armed_until = str(get_setting(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_ARMED_UNTIL_KEY, "") or "").strip()
+        parsed_armed_until = parse_utc_iso(armed_until) if armed_until else None
+        if parsed_armed_until is None or parsed_armed_until < utc_now():
+            if armed_until:
+                _upsert_setting_without_commit(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_ARMED_UNTIL_KEY, "")
+            conn.commit()
+            return (
+                HTTPStatus.PRECONDITION_FAILED,
+                {
+                    "error": (
+                        "verification token install is not armed; an operator must run "
+                        "`arclink-ctl notion webhook-arm-install` before the Notion handshake arrives"
+                    )
+                },
+            )
+        installed_at = utc_now_iso()
+        _upsert_setting_without_commit(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY, candidate)
+        _upsert_setting_without_commit(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_INSTALLED_AT_KEY, installed_at)
+        _upsert_setting_without_commit(conn, NOTION_WEBHOOK_VERIFIED_AT_KEY, "")
+        _upsert_setting_without_commit(conn, NOTION_WEBHOOK_VERIFIED_BY_KEY, "")
+        _upsert_setting_without_commit(conn, NOTION_WEBHOOK_VERIFICATION_TOKEN_ARMED_UNTIL_KEY, "")
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
     note_refresh_job(
         conn,
         job_name="notion-webhook-token",
@@ -347,6 +374,13 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if not notion_verify_signature(raw_body, signature, stored_token):
                 self._send_json({"error": "signature verification failed"}, status=HTTPStatus.FORBIDDEN)
+                return
+            verified_at = str(get_setting(conn, NOTION_WEBHOOK_VERIFIED_AT_KEY, "") or "").strip()
+            if not verified_at:
+                self._send_json(
+                    {"error": "webhook not operator-confirmed; run arclink-ctl notion webhook-confirm-verified"},
+                    status=HTTPStatus.PRECONDITION_FAILED,
+                )
                 return
 
             event_id = str(payload.get("id") or payload.get("event_id") or payload.get("entity", {}).get("id") or "")

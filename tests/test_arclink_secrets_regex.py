@@ -49,7 +49,11 @@ def test_safe_secret_reference_exceptions_and_path_checks() -> None:
     expect(not secrets_regex.contains_secret_material("/run/secrets/chutes_api_key"), "run secret path detected")
     expect(secrets_regex.path_requires_secret_ref("$.secret_refs.chutes_api_key"), "secret_refs key not detected")
     expect(secrets_regex.path_requires_secret_ref("$.environment.TELEGRAM_BOT_TOKEN_REF"), "token ref key not detected")
+    expect(secrets_regex.path_requires_secret_ref("$.environment.TELEGRAM_BOT_TOKEN"), "token key not detected")
     expect(not secrets_regex.path_requires_secret_ref("$.integrations.notion.callback_url"), "webhook callback overmatched")
+    expect(not secrets_regex.path_requires_secret_ref("$.event.credential_handoff_status"), "status field overmatched")
+    expect(not secrets_regex.path_requires_secret_ref("$.usage.prompt_tokens"), "token counter overmatched")
+    expect(not secrets_regex.path_requires_secret_ref("$.memory.token_estimate"), "token estimate overmatched")
     expect(
         secrets_regex.path_allows_compose_secret_source("$.compose.secrets.chutes_api_key.source", "chutes_api_key"),
         "compose secret source not allowed",

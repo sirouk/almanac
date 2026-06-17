@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { api, safeNavigationHref } from "@/lib/api";
 import Link from "next/link";
 import { ErrorAlert } from "@/components/ui";
 
@@ -73,6 +73,7 @@ export default function OnboardingPage() {
   const [checkoutUrl, setCheckoutUrl] = useState("");
   const [resumed, setResumed] = useState(false);
   const [fakeMode, setFakeMode] = useState<boolean | null>(null);
+  const safeCheckoutUrl = safeNavigationHref(checkoutUrl);
 
   useEffect(() => {
     api.adapterMode().then((r) => {
@@ -109,7 +110,7 @@ export default function OnboardingPage() {
         if (parsed.agentTitle) setAgentTitle(parsed.agentTitle);
         if (parsed.email) setEmail(parsed.email);
         if (parsed.planId === "founders" || parsed.planId === "sovereign" || parsed.planId === "scale") setPlanId(parsed.planId);
-        if (parsed.checkoutUrl) setCheckoutUrl(parsed.checkoutUrl);
+        if (parsed.checkoutUrl) setCheckoutUrl(safeNavigationHref(parsed.checkoutUrl));
         if (parsed.step && parsed.step !== "start") {
           const isCheckoutResume = new URLSearchParams(window.location.search).get("resume") === "1";
           setStep(isCheckoutResume && parsed.step === "done" ? "checkout" : parsed.step);
@@ -204,10 +205,17 @@ export default function OnboardingPage() {
       if (res.status === 200) {
         const session = (res.data as Record<string, Record<string, string>>).session;
         const url = session?.checkout_url || (res.data as Record<string, string>).checkout_url;
-        if (url) {
-          setCheckoutUrl(url);
+        const safeUrl = safeNavigationHref(url);
+        if (safeUrl) {
+          setCheckoutUrl(safeUrl);
           setStep("done");
           return true;
+        }
+        if (url) {
+          setCheckoutUrl("");
+          setStep("checkout");
+          setError("Stripe returned an unsupported checkout link. Try again.");
+          return false;
         }
         setStep("checkout");
         setError("Stripe did not return a checkout link. Try again.");
@@ -480,13 +488,13 @@ export default function OnboardingPage() {
 
           {step === "done" && (
             <div className="mt-6 space-y-4">
-              {checkoutUrl ? (
+              {safeCheckoutUrl ? (
                 <>
                   <p className="font-body text-sm text-[#E7E6E6]/55">
                     Stage 1 is ready: finish the Stripe handoff. When payment clears, Raven starts provisioning and reports the result with your working links.
                   </p>
                   <a
-                    href={checkoutUrl}
+                    href={safeCheckoutUrl}
                     className="block w-full rounded bg-[#FB5005] px-4 py-3 text-center font-body font-semibold text-white transition hover:bg-[#e04504]"
                   >
                     Finish Stripe Checkout

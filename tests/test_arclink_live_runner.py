@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -19,6 +20,7 @@ _BASE_ENV: dict[str, str] = {
     "ARCLINK_PRODUCT_NAME": "test",
     "ARCLINK_BASE_DOMAIN": "test.local",
     "ARCLINK_PRIMARY_PROVIDER": "chutes",
+    "ARCLINK_STATE_ROOT": "/tmp",
 }
 
 # All journey env vars present
@@ -33,6 +35,7 @@ _FULL_ENV: dict[str, str] = {
     "CHUTES_API_KEY": "chutes_fake_key_123",
     "TELEGRAM_BOT_TOKEN": "123456:ABCfake",
     "DISCORD_BOT_TOKEN": "discord_fake_token",
+    "DISCORD_APP_ID": "discord-app-id",
 }
 
 _TAILSCALE_HOSTED_ENV: dict[str, str] = {
@@ -46,6 +49,7 @@ _TAILSCALE_HOSTED_ENV: dict[str, str] = {
     "CHUTES_API_KEY": "chutes_fake_key_123",
     "TELEGRAM_BOT_TOKEN": "123456:ABCfake",
     "DISCORD_BOT_TOKEN": "discord_fake_token",
+    "DISCORD_APP_ID": "discord-app-id",
 }
 
 _WORKSPACE_ENV: dict[str, str] = {
@@ -138,6 +142,46 @@ class TestCredentialPresentDryRun(unittest.TestCase):
             self.assertEqual(result.status, "dry_run_ready")
             self.assertEqual(result.missing_env, [])
             self.assertEqual(result.exit_code, 0)
+
+    def test_dry_run_ready_exit_nonzero_when_readiness_or_diagnostics_fail(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bad_env = {**_FULL_ENV, "ARCLINK_STATE_ROOT": os.path.join(tmpdir, "missing-state")}
+            result = run_live_proof(env=bad_env, skip_ports=True, live=False, artifact_dir=tmpdir)
+            self.assertEqual(result.status, "dry_run_ready")
+            self.assertEqual(result.missing_env, [])
+            self.assertEqual(result.exit_code, 1)
+
+    def test_evidence_artifact_write_failure_does_not_crash(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            artifact_file = os.path.join(tmpdir, "not-a-directory")
+            with open(artifact_file, "w", encoding="utf-8") as handle:
+                handle.write("already a file")
+            result = run_live_proof(env=_FULL_ENV, skip_ports=True, live=False, artifact_dir=artifact_file)
+            self.assertEqual(result.status, "dry_run_ready")
+            self.assertEqual(result.evidence_path, "")
+            self.assertEqual(result.exit_code, 1)
+
+    def test_evidence_run_persists_to_configured_db(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "state", "arclink-control.sqlite3")
+            result = run_live_proof(
+                env={**_FULL_ENV, "ARCLINK_DB_PATH": db_path, "ARCLINK_DEPLOYMENT_ID": "arcdep_live_proof"},
+                skip_ports=True,
+                live=False,
+                artifact_dir=tmpdir,
+            )
+            self.assertEqual(result.status, "dry_run_ready")
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            try:
+                row = conn.execute("SELECT * FROM arclink_evidence_runs").fetchone()
+            finally:
+                conn.close()
+            self.assertIsNotNone(row)
+            self.assertEqual(row["deployment_id"], "arcdep_live_proof")
+            self.assertEqual(row["journey"], "hosted")
+            self.assertEqual(row["status"], "pending")
+            self.assertEqual(row["evidence_path"], result.evidence_path)
 
     def test_no_live_claim_without_live_flag(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -281,9 +325,13 @@ class TestWorkspaceProofJourney(unittest.TestCase):
         browser_calls = [args for args in called_args if args and args[0] == "node"]
         self.assertEqual(len(browser_calls), 6)
         web_root = os.path.realpath(str(live_runner_mod._REPO_ROOT / "web"))
+        tmp_root = os.path.realpath(tempfile.gettempdir())
         for args in browser_calls:
             script_path = os.path.realpath(args[1])
-            self.assertEqual(os.path.commonpath([web_root, script_path]), web_root)
+            if os.access(web_root, os.W_OK):
+                self.assertEqual(os.path.commonpath([web_root, script_path]), web_root)
+            else:
+                self.assertEqual(os.path.commonpath([tmp_root, script_path]), tmp_root)
         raw_args = json.dumps(called_args)
         self.assertNotIn(_WORKSPACE_ENV["ARCLINK_WORKSPACE_PROOF_AUTH"], raw_args)
         proof_calls = [
@@ -453,6 +501,26 @@ class TestFakeRunners(unittest.TestCase):
             self.assertTrue(len(data["records"]) > 0)
             for rec in data["records"]:
                 self.assertEqual(rec["status"], "passed")
+
+    def test_live_execution_does_not_patch_process_environ(self):
+        runners = self._make_fake_runners()
+        old_env = os.environ.copy()
+        try:
+            os.environ.clear()
+            os.environ["PATH"] = old_env.get("PATH", "")
+            with tempfile.TemporaryDirectory() as tmpdir:
+                result = run_live_proof(
+                    env=_FULL_ENV,
+                    skip_ports=True,
+                    live=True,
+                    runners=runners,
+                    artifact_dir=tmpdir,
+                )
+            self.assertEqual(result.status, "live_executed")
+            self.assertNotEqual(os.environ.get("ARCLINK_E2E_LIVE"), "1")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
 
     def test_failing_runner_produces_nonzero(self):
         def failing_runner(step):

@@ -322,6 +322,7 @@ def complete_chutes_oauth_callback(
     if plan.user_id != clean_user_id or plan.session_id != clean_session_id:
         raise ChutesOAuthError("Chutes OAuth callback is not scoped to this user session")
     if not secrets.compare_digest(plan.csrf_token, _clean_text(csrf_token)):
+        state_store.pop(clean_state)
         raise ChutesOAuthError("Chutes OAuth CSRF token mismatch")
     if float(now if now is not None else time.time()) > plan.expires_at:
         state_store.pop(clean_state)

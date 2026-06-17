@@ -10,6 +10,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 SOURCE_SCRIPT = REPO / "skills" / "arclink-vaults" / "scripts" / "curate-vaults.sh"
 SKILL = REPO / "skills" / "arclink-vaults" / "SKILL.md"
+FIRST_CONTACT_SCRIPT = REPO / "skills" / "arclink-first-contact" / "scripts" / "run-first-contact.sh"
+NOTION_CURATE_SCRIPT = REPO / "skills" / "arclink-notion-knowledge" / "scripts" / "curate-notion.sh"
 
 
 def expect(condition: bool, message: str) -> None:
@@ -23,12 +25,14 @@ def write_fake_rpc_client(repo_dir: Path) -> None:
     target.write_text(
         "#!/usr/bin/env python3\n"
         "from __future__ import annotations\n"
-        "import argparse, json\n"
+        "import argparse, json, sys\n"
         "parser = argparse.ArgumentParser()\n"
         "parser.add_argument('--url')\n"
         "parser.add_argument('--tool')\n"
         "parser.add_argument('--json-args')\n"
+        "parser.add_argument('--json-args-file')\n"
         "args = parser.parse_args()\n"
+        "raw_args = open(args.json_args_file, encoding='utf-8').read() if args.json_args_file and args.json_args_file != '-' else (sys.stdin.read() if args.json_args_file == '-' else (args.json_args or '{}'))\n"
         "if args.tool == 'catalog.vaults':\n"
         "    print(json.dumps({'vaults': [{'vault_name': 'Projects', 'subscribed': True, 'default_subscribed': True, 'description': 'Active project workspaces'}]}))\n"
         "elif args.tool == 'vaults.refresh':\n"
@@ -36,7 +40,7 @@ def write_fake_rpc_client(repo_dir: Path) -> None:
         "elif args.tool == 'agents.managed-memory':\n"
         "    print(json.dumps({'agent_id': 'agent-test', 'vault-topology': '+ Projects', 'arclink-skill-ref': 'ok', 'vault-ref': 'ok', 'qmd-ref': 'ok'}))\n"
         "elif args.tool == 'vaults.subscribe':\n"
-        "    payload = json.loads(args.json_args)\n"
+        "    payload = json.loads(raw_args)\n"
         "    print(json.dumps({'agent_id': 'agent-test', 'vault_name': payload['vault_name'], 'subscribed': payload['subscribed']}))\n"
         "else:\n"
         "    raise SystemExit(f'unsupported tool: {args.tool}')\n",
@@ -97,10 +101,20 @@ def test_vaults_skill_prefers_mcp_recipe_over_shell_wrapper() -> None:
     print("PASS test_vaults_skill_prefers_mcp_recipe_over_shell_wrapper")
 
 
+def test_skill_helpers_keep_bootstrap_token_out_of_rpc_argv() -> None:
+    for script in (SOURCE_SCRIPT, FIRST_CONTACT_SCRIPT, NOTION_CURATE_SCRIPT):
+        body = script.read_text(encoding="utf-8")
+        expect("--json-args-file" in body, f"{script} should use --json-args-file")
+        expect('--json-args "$payload_json"' not in body, f"{script} still passes payload JSON on argv")
+        expect('python3 - "$TOKEN"' not in body, f"{script} still passes bootstrap token to helper argv")
+    print("PASS test_skill_helpers_keep_bootstrap_token_out_of_rpc_argv")
+
+
 def main() -> int:
     test_installed_curate_vaults_uses_repo_env_fallback()
     test_vaults_skill_prefers_mcp_recipe_over_shell_wrapper()
-    print("PASS all 2 arclink-vaults skill regression tests")
+    test_skill_helpers_keep_bootstrap_token_out_of_rpc_argv()
+    print("PASS all 3 arclink-vaults skill regression tests")
     return 0
 
 

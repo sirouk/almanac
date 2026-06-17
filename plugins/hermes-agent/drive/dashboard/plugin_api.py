@@ -1186,8 +1186,7 @@ def _resolve_local(root: Path, raw_path: Any, *, root_id: str = "") -> tuple[Pat
     root_resolved = root.resolve(strict=False)
     target = root_resolved / relative_path
     _assert_accessible_path(root_resolved, target, root_id=root_id)
-    if relative_path:
-        _assert_not_sensitive(target)
+    _assert_not_sensitive(target)
     return target, relative_path
 
 

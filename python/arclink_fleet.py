@@ -164,6 +164,7 @@ def register_fleet_host(
     capacity_slots: int = 10,
     host_id: str = "",
     metadata: Mapping[str, Any] | None = None,
+    commit: bool = True,
 ) -> dict[str, Any]:
     clean_hostname = str(hostname or "").strip().lower()
     if not clean_hostname:
@@ -226,7 +227,8 @@ def register_fleet_host(
             params.append(utc_now_iso())
             params.append(str(existing["host_id"]))
             conn.execute(f"UPDATE arclink_fleet_hosts SET {', '.join(sets)} WHERE host_id = ?", params)
-            conn.commit()
+            if commit:
+                conn.commit()
             existing = conn.execute(
                 "SELECT * FROM arclink_fleet_hosts WHERE host_id = ?",
                 (str(existing["host_id"]),),
@@ -235,16 +237,34 @@ def register_fleet_host(
 
     clean_id = host_id.strip() if host_id else _fleet_id("host")
     now = utc_now_iso()
-    conn.execute(
-        """
-        INSERT INTO arclink_fleet_hosts (
-          host_id, hostname, region, tags_json, status, drain, capacity_slots,
-          observed_load, metadata_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, 'active', 0, ?, 0, ?, ?, ?)
-        """,
-        (clean_id, clean_hostname, clean_region, tags_json or "{}", capacity_slots, metadata_json or "{}", now, now),
-    )
-    conn.commit()
+    try:
+        conn.execute(
+            """
+            INSERT INTO arclink_fleet_hosts (
+              host_id, hostname, region, tags_json, status, drain, capacity_slots,
+              observed_load, metadata_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 'active', 0, ?, 0, ?, ?, ?)
+            """,
+            (clean_id, clean_hostname, clean_region, tags_json or "{}", capacity_slots, metadata_json or "{}", now, now),
+        )
+    except sqlite3.IntegrityError:
+        raced = conn.execute(
+            "SELECT * FROM arclink_fleet_hosts WHERE LOWER(hostname) = ?",
+            (clean_hostname,),
+        ).fetchone()
+        if raced is None:
+            raise
+        return register_fleet_host(
+            conn,
+            hostname=clean_hostname,
+            region=clean_region,
+            tags=tags,
+            capacity_slots=capacity_slots,
+            metadata=metadata,
+            commit=commit,
+        )
+    if commit:
+        conn.commit()
     return dict(conn.execute("SELECT * FROM arclink_fleet_hosts WHERE host_id = ?", (clean_id,)).fetchone())
 
 
@@ -617,23 +637,34 @@ def remove_placement(
     *,
     deployment_id: str,
 ) -> dict[str, Any] | None:
-    row = conn.execute(
-        "SELECT * FROM arclink_deployment_placements WHERE deployment_id = ? AND status = 'active'",
-        (deployment_id,),
-    ).fetchone()
-    if row is None:
-        return None
-    now = utc_now_iso()
-    conn.execute(
-        "UPDATE arclink_deployment_placements SET status = 'removed', removed_at = ? WHERE placement_id = ?",
-        (now, row["placement_id"]),
-    )
-    conn.execute(
-        "UPDATE arclink_fleet_hosts SET observed_load = MAX(0, observed_load - 1), updated_at = ? WHERE host_id = ?",
-        (now, row["host_id"]),
-    )
-    conn.commit()
-    return dict(conn.execute("SELECT * FROM arclink_deployment_placements WHERE placement_id = ?", (row["placement_id"],)).fetchone())
+    own_txn = not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute(
+            "SELECT * FROM arclink_deployment_placements WHERE deployment_id = ? AND status = 'active'",
+            (deployment_id,),
+        ).fetchone()
+        if row is None:
+            if own_txn:
+                conn.commit()
+            return None
+        now = utc_now_iso()
+        conn.execute(
+            "UPDATE arclink_deployment_placements SET status = 'removed', removed_at = ? WHERE placement_id = ?",
+            (now, row["placement_id"]),
+        )
+        conn.execute(
+            "UPDATE arclink_fleet_hosts SET observed_load = MAX(0, observed_load - 1), updated_at = ? WHERE host_id = ?",
+            (now, row["host_id"]),
+        )
+        if own_txn:
+            conn.commit()
+        return dict(conn.execute("SELECT * FROM arclink_deployment_placements WHERE placement_id = ?", (row["placement_id"],)).fetchone())
+    except Exception:
+        if own_txn and conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 def get_deployment_placement(conn: sqlite3.Connection, *, deployment_id: str) -> dict[str, Any] | None:

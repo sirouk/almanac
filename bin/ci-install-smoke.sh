@@ -2446,6 +2446,20 @@ teardown() {
   remove_smoke_auto_provision_user
 }
 
+assert_smoke_target_removed() {
+  local ok=0
+  if id -u "$ARCLINK_USER" >/dev/null 2>&1; then
+    echo "Expected service user '$ARCLINK_USER' to be removed." >&2
+    ok=1
+  fi
+
+  if [[ -e "$ARCLINK_HOME" ]]; then
+    echo "Expected $ARCLINK_HOME to be removed." >&2
+    ok=1
+  fi
+  return "$ok"
+}
+
 remove_smoke_auto_provision_user() {
   if id -u "$AUTOPROV_UNIX_USER" >/dev/null 2>&1; then
     local uid=""
@@ -2485,6 +2499,9 @@ on_exit() {
     echo "Smoke test failed; attempting teardown..."
   fi
   teardown
+  if [[ "$status" -ne 0 ]]; then
+    assert_smoke_target_removed || echo "Smoke teardown left ArcLink residue after failure." >&2
+  fi
   rm -f "$ANSWERS_FILE"
   exit "$status"
 }
@@ -2592,15 +2609,7 @@ echo
 echo "Tearing ArcLink back down..."
 teardown
 
-if id -u "$ARCLINK_USER" >/dev/null 2>&1; then
-  echo "Expected service user '$ARCLINK_USER' to be removed." >&2
-  exit 1
-fi
-
-if [[ -e "$ARCLINK_HOME" ]]; then
-  echo "Expected $ARCLINK_HOME to be removed." >&2
-  exit 1
-fi
+assert_smoke_target_removed
 
 rm -f "$ANSWERS_FILE"
 trap - EXIT

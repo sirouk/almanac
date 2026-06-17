@@ -28,13 +28,14 @@ from arclink_public_bots import (
     handle_arclink_public_bot_turn,
 )
 from arclink_http import http_request, parse_json_object, parse_json_response
-from arclink_control import utc_now_iso
+from arclink_control import parse_utc_iso, utc_now, utc_now_iso
 
 logger = logging.getLogger("arclink.discord")
 
 DISCORD_API_BASE = "https://discord.com/api/v10"
 DISCORD_USER_AGENT = "ArcLinkDiscord/1.0 (+https://github.com/example/arclink)"
 DEFAULT_DISCORD_TIMESTAMP_TOLERANCE_SECONDS = 300
+DISCORD_INTERACTION_RECEIVED_RETRY_SECONDS = 120
 DISCORD_PUBLIC_KEY_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
@@ -118,6 +119,8 @@ def discord_send_message(
     channel_id: str,
     text: str,
     components: list[dict[str, Any]] | None = None,
+    embeds: list[dict[str, Any]] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "content": text if len(text) <= 1900 else text[:1897] + "...",
@@ -127,6 +130,10 @@ def discord_send_message(
     }
     if components is not None:
         payload["components"] = components
+    if embeds is not None:
+        payload["embeds"] = embeds[:10]
+    if attachments is not None:
+        payload["attachments"] = attachments[:10]
     return _request_json(
         f"/channels/{channel_id}/messages",
         bot_token=bot_token,
@@ -143,12 +150,18 @@ def discord_edit_message(
     message_id: str,
     text: str | None = None,
     components: list[dict[str, Any]] | None = None,
+    embeds: list[dict[str, Any]] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     if text is not None:
         payload["content"] = text if len(text) <= 1900 else text[:1897] + "..."
     if components is not None:
         payload["components"] = components
+    if embeds is not None:
+        payload["embeds"] = embeds[:10]
+    if attachments is not None:
+        payload["attachments"] = attachments[:10]
     return _request_json(
         f"/channels/{channel_id}/messages/{message_id}",
         bot_token=bot_token,
@@ -232,9 +245,8 @@ def verify_discord_signature(
 ) -> bool:
     """Verify a Discord interaction signature (Ed25519).
 
-    Production must use Discord's real 64-hex Ed25519 public key. Test
-    sentinels are intentionally rejected so an unset/default config cannot
-    become an unauthenticated interaction webhook.
+    Production must use Discord's real 64-hex Ed25519 public key. A wrong
+    64-hex key fails closed because Discord's signature will not verify.
     """
     if not DISCORD_PUBLIC_KEY_RE.fullmatch(str(public_key or "").strip()):
         return False
@@ -279,6 +291,33 @@ def _reserve_discord_interaction(conn: sqlite3.Connection, interaction: Mapping[
         )
         conn.commit()
     except sqlite3.IntegrityError as exc:
+        row = conn.execute(
+            """
+            SELECT status, received_at
+            FROM arclink_webhook_events
+            WHERE provider = 'discord' AND event_id = ?
+            """,
+            (interaction_id,),
+        ).fetchone()
+        if row is not None:
+            status = str(row["status"] or "")
+            received_at = parse_utc_iso(str(row["received_at"] or ""))
+            stale_received = (
+                status == "received"
+                and received_at is not None
+                and (utc_now() - received_at).total_seconds() >= DISCORD_INTERACTION_RECEIVED_RETRY_SECONDS
+            )
+            if status == "failed" or stale_received:
+                conn.execute(
+                    """
+                    UPDATE arclink_webhook_events
+                       SET event_type = ?, received_at = ?, processed_at = '', status = 'received', payload_json = ?
+                     WHERE provider = 'discord' AND event_id = ?
+                    """,
+                    (str(interaction.get("type") or ""), now, payload_json, interaction_id),
+                )
+                conn.commit()
+                return interaction_id
         raise ArcLinkDiscordError("duplicate Discord interaction") from exc
     return interaction_id
 
@@ -411,6 +450,39 @@ def parse_discord_interaction(interaction: Mapping[str, Any]) -> dict[str, str] 
     return None
 
 
+def handle_discord_gateway_message(
+    conn: sqlite3.Connection,
+    message: Mapping[str, Any],
+    *,
+    stripe_client: Any | None = None,
+    price_id: str = "price_arclink_sovereign",
+    founders_price_id: str = "price_arclink_founders",
+    scale_price_id: str = "",
+    additional_agent_price_id: str = "",
+    sovereign_agent_expansion_price_id: str = "",
+    scale_agent_expansion_price_id: str = "",
+    base_domain: str = "",
+) -> dict[str, Any] | None:
+    """Route a Discord Gateway MESSAGE_CREATE payload through the bot contract."""
+    author = message.get("author") or {}
+    if isinstance(author, Mapping) and author.get("bot"):
+        return None
+    event = dict(message)
+    event.setdefault("type", 0)
+    return handle_discord_interaction(
+        conn,
+        event,
+        stripe_client=stripe_client,
+        price_id=price_id,
+        founders_price_id=founders_price_id,
+        scale_price_id=scale_price_id,
+        additional_agent_price_id=additional_agent_price_id,
+        sovereign_agent_expansion_price_id=sovereign_agent_expansion_price_id,
+        scale_agent_expansion_price_id=scale_agent_expansion_price_id,
+        base_domain=base_domain,
+    )
+
+
 def handle_discord_interaction(
     conn: sqlite3.Connection,
     interaction: Mapping[str, Any],
@@ -456,6 +528,7 @@ def handle_discord_interaction(
             "discord_user_id": parsed.get("user_id", ""),
             "discord_message_id": parsed.get("message_id", ""),
             "discord_chat_type": parsed.get("chat_type", "dm"),
+            "discord_ephemeral_supported": itype in {2, 3},
         },
         display_name_hint=parsed.get("display_name", ""),
     )
@@ -466,9 +539,13 @@ def handle_discord_interaction(
         # native Hermes bridge as Telegram; until then, keep the interaction
         # valid without reintroducing a Raven routing preamble.
         content = "Sent to your active Hermes Agent."
+    if not str(content or "").strip():
+        content = "ArcLink handled that request."
     data: dict[str, Any] = {
         "content": content,
     }
+    if str(turn.action or "") == "credentials_revealed" and parsed.get("chat_type") != "dm":
+        data["flags"] = 64
     components = arclink_public_bot_turn_discord_components(turn)
     if components:
         data["components"] = components

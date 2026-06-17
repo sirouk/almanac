@@ -28,7 +28,8 @@ from arclink_control import (
 )
 from arclink_boundary import json_dumps_safe, json_loads_safe, reject_secret_material, rowdict
 from arclink_secrets_regex import contains_secret_material, redact_then_truncate
-from arclink_ingress import desired_arclink_ingress_records
+from arclink_adapters import DnsRecord
+from arclink_ingress import desired_arclink_ingress_records, mark_arclink_dns_provisioned, persist_arclink_dns_records
 from arclink_executor import (
     ArcLinkExecutor,
     ArcLinkExecutorConfig,
@@ -60,13 +61,15 @@ AcademyPostApplyRunner = Callable[[Mapping[str, Any]], Mapping[str, Any] | None]
 
 # Action types that map to implemented executor or local control-plane calls.
 _EXECUTOR_ACTIONS = frozenset({
-    "restart", "reprovision", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp", "backup_write_check",
+    "restart", "reprovision", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp", "stripe_entitlement_recovery", "backup_write_check",
 })
 
 _STALE_THRESHOLD_SECONDS = 3600  # 1 hour
+_STALE_RECOVERY_MAX_ATTEMPTS = 3
 _ActionExecutorCache = dict[tuple[str, str, str], ArcLinkExecutor]
 _ACTION_EXECUTOR_CACHE: _ActionExecutorCache = {}
 _LIFECYCLE_PATH_OVERRIDE_KEYS = ("project_name", "env_file", "compose_file")
+_DNS_REPAIR_RECORD_TYPES = frozenset({"A", "AAAA", "CNAME", "TXT"})
 
 
 def _worker_id(prefix: str) -> str:
@@ -79,8 +82,11 @@ def _reject_secrets(value: Any, *, path: str = "$") -> None:
 
 def _safe_error_message(exc: Exception) -> str:
     msg = redact_then_truncate(str(exc), limit=500)
+    fallback = "executor error contained secret material and was redacted"
+    if contains_secret_material(msg, allow_safe_refs=False):
+        return fallback
     if contains_secret_material(str(exc)):
-        return msg or "executor error contained secret material and was redacted"
+        return msg or fallback
     return msg
 
 
@@ -229,6 +235,28 @@ def _resolve_dns_repair(
     if not dns:
         raise ArcLinkActionWorkerError("ArcLink DNS repair found no domain DNS records for deployment")
     return deployment_id, dns, str(metadata.get("zone_id") or deployment_meta.get("cloudflare_zone_id") or "")
+
+
+def _dns_repair_records_for_persist(dns: Mapping[str, Mapping[str, Any]]) -> dict[str, DnsRecord]:
+    records: dict[str, DnsRecord] = {}
+    for role, record in dns.items():
+        if not isinstance(record, Mapping):
+            raise ArcLinkActionWorkerError(f"invalid ArcLink DNS record: {role}")
+        hostname = str(record.get("hostname") or "").strip().lower()
+        record_type = str(record.get("record_type") or "CNAME").strip().upper()
+        target = str(record.get("target") or "").strip()
+        if not hostname or not target:
+            raise ArcLinkActionWorkerError(f"ArcLink DNS record requires hostname and target: {role}")
+        if record_type not in _DNS_REPAIR_RECORD_TYPES:
+            allowed = ", ".join(sorted(_DNS_REPAIR_RECORD_TYPES))
+            raise ArcLinkActionWorkerError(f"unsupported ArcLink DNS record type; allowed types: {allowed}")
+        records[str(role)] = DnsRecord(
+            hostname=hostname,
+            record_type=record_type,
+            target=target,
+            proxied=bool(record.get("proxied", True)),
+        )
+    return records
 
 
 def _latest_subscription_for_user(conn: sqlite3.Connection, user_id: str) -> sqlite3.Row | None:
@@ -691,14 +719,44 @@ def _execute_action(
     target_id = str(intent["target_id"])
     metadata = json_loads_safe(intent.get("metadata_json", "{}"))
     worker_env = dict(env or os.environ)
-    selected_executor, routing = _select_action_executor(
-        conn,
-        intent=intent,
-        metadata=metadata,
-        fallback_executor=executor,
-        env=worker_env,
-        cache=executor_cache if executor_cache is not None else _ACTION_EXECUTOR_CACHE,
-    )
+    try:
+        selected_executor, routing = _select_action_executor(
+            conn,
+            intent=intent,
+            metadata=metadata,
+            fallback_executor=executor,
+            env=worker_env,
+            cache=executor_cache if executor_cache is not None else _ACTION_EXECUTOR_CACHE,
+        )
+    except Exception as exc:
+        error_msg = _safe_error_message(exc)
+        error_code = _safe_error_code(exc)
+        adapter_name = str(getattr(getattr(executor, "config", None), "adapter_name", "") or "")
+        attempt_id = _record_attempt(conn, action_id=action_id, status="failed", adapter=adapter_name, error=error_msg)
+        _update_intent_status(conn, action_id=action_id, status="failed")
+        append_arclink_event(
+            conn,
+            subject_kind=target_kind,
+            subject_id=target_id,
+            event_type=f"action_failed:{action_type}",
+            metadata={
+                "action_id": action_id,
+                "attempt_id": attempt_id,
+                "error_code": error_code,
+                "error": error_msg,
+                "phase": "executor_selection",
+            },
+            commit=False,
+        )
+        conn.commit()
+        return {
+            "action_id": action_id,
+            "attempt_id": attempt_id,
+            "status": "failed",
+            "action_type": action_type,
+            "error_code": error_code,
+            "error": error_msg,
+        }
 
     attempt_id = _record_attempt(
         conn, action_id=action_id, adapter=selected_executor.config.adapter_name,
@@ -743,6 +801,8 @@ def _execute_action(
             target_id=target_id,
             metadata=metadata,
             idempotency_key=str(intent.get("idempotency_key") or ""),
+            requested_by=str(intent.get("admin_id") or ""),
+            action_reason=str(intent.get("reason") or ""),
             env=worker_env,
         )
         _reject_secrets(result, path="$.result")
@@ -830,6 +890,8 @@ def _dispatch_action(
     target_id: str,
     metadata: dict[str, Any],
     idempotency_key: str = "",
+    requested_by: str = "",
+    action_reason: str = "",
     env: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Route action type to executor call. Returns redacted result metadata."""
@@ -862,6 +924,11 @@ def _dispatch_action(
             target_id=target_id,
             metadata=metadata,
         )
+        persist_arclink_dns_records(
+            conn,
+            deployment_id=deployment_id,
+            records=_dns_repair_records_for_persist(dns),
+        )
         operation_key = str(metadata.get("idempotency_key") or idempotency_key)
         _link_action_operation(
             conn,
@@ -877,6 +944,15 @@ def _dispatch_action(
             zone_id=zone_id,
             idempotency_key=operation_key,
         ))
+        raw_provider_ids = result.metadata.get("provider_record_ids") if isinstance(result.metadata, Mapping) else ()
+        provider_ids = tuple(str(item or "").strip() for item in raw_provider_ids) if isinstance(raw_provider_ids, (list, tuple)) else ()
+        mark_arclink_dns_provisioned(
+            conn,
+            deployment_id=deployment_id,
+            provisioned=tuple(result.records),
+            provider_record_ids=provider_ids,
+            metadata={"action_id": action_id, "status": result.status},
+        )
         return {"live": result.live, "status": result.status, "deployment_id": deployment_id, "records": list(result.records), "operation_kind": "cloudflare_dns_apply", "operation_idempotency_key": operation_key}
 
     if action_type == "rotate_chutes_key":
@@ -950,6 +1026,39 @@ def _dispatch_action(
             reason=str(metadata.get("reason") or "operator queued comp action"),
         )
         return {"status": "applied", "action": "comp", "user_id": user_id, "operation_kind": "control_db_comp", "operation_idempotency_key": operation_key}
+
+    if action_type == "stripe_entitlement_recovery":
+        if target_kind != "user":
+            raise ArcLinkActionWorkerError("stripe_entitlement_recovery action requires a user target")
+        operation_key = str(metadata.get("idempotency_key") or idempotency_key)
+        _link_action_operation(
+            conn,
+            action_id=action_id,
+            operation_kind="control_db_stripe_entitlement_recovery",
+            idempotency_key=operation_key,
+            target_kind=target_kind,
+            target_id=target_id,
+        )
+        from arclink_entitlements import apply_stripe_entitlement_recovery
+
+        recovery = apply_stripe_entitlement_recovery(
+            conn,
+            user_id=target_id,
+            actor_id=str(metadata.get("actor_id") or requested_by or "operator:action_worker"),
+            reason=str(metadata.get("reason") or action_reason or "operator queued Stripe entitlement recovery"),
+            stripe_customer_id=str(metadata.get("stripe_customer_id") or ""),
+            stripe_subscription_id=str(metadata.get("stripe_subscription_id") or metadata.get("subscription_id") or ""),
+            entitlement_state=str(metadata.get("entitlement_state") or "paid"),
+            subscription_status=str(metadata.get("subscription_status") or "active"),
+            current_period_end=str(metadata.get("current_period_end") or ""),
+            dry_run=_truthy(metadata.get("dry_run")),
+        )
+        return {
+            **recovery,
+            "action": "stripe_entitlement_recovery",
+            "operation_kind": "control_db_stripe_entitlement_recovery",
+            "operation_idempotency_key": operation_key,
+        }
 
     if action_type == "backup_write_check":
         if target_kind != "deployment":
@@ -2243,6 +2352,7 @@ def recover_stale_actions(
     conn: sqlite3.Connection,
     *,
     stale_threshold_seconds: int = _STALE_THRESHOLD_SECONDS,
+    max_attempts: int = _STALE_RECOVERY_MAX_ATTEMPTS,
 ) -> list[dict[str, Any]]:
     """Return running actions older than threshold to queued or failed."""
     from arclink_control import parse_utc_iso, utc_now
@@ -2259,26 +2369,55 @@ def recover_stale_actions(
         if elapsed < stale_threshold_seconds:
             continue
         action_id = str(row["action_id"])
-        _update_intent_status(conn, action_id=action_id, status="queued")
+        attempts_row = conn.execute(
+            "SELECT COUNT(*) AS n FROM arclink_action_attempts WHERE action_id = ?",
+            (action_id,),
+        ).fetchone()
+        attempt_count = int(attempts_row["n"] if attempts_row is not None else 0)
+        terminal = int(max_attempts or 0) > 0 and attempt_count >= int(max_attempts or 0)
+        new_status = "failed" if terminal else "queued"
+        if terminal:
+            error = f"stale running action exceeded {int(max_attempts)} attempt(s)"
+            conn.execute(
+                """
+                UPDATE arclink_action_attempts
+                SET status = 'failed',
+                    error = CASE WHEN error = '' THEN ? ELSE error END,
+                    finished_at = CASE WHEN finished_at = '' THEN ? ELSE finished_at END
+                WHERE action_id = ?
+                  AND status = 'running'
+                """,
+                (error, utc_now_iso(), action_id),
+            )
+        _update_intent_status(conn, action_id=action_id, status=new_status)
         append_arclink_event(
             conn,
             subject_kind=row["target_kind"],
             subject_id=row["target_id"],
-            event_type="action_stale_recovered",
-            metadata={"action_id": action_id, "elapsed_seconds": int(elapsed)},
+            event_type="action_stale_failed" if terminal else "action_stale_recovered",
+            metadata={"action_id": action_id, "elapsed_seconds": int(elapsed), "attempt_count": attempt_count},
             commit=False,
         )
         append_arclink_audit(
             conn,
-            action="stale_action_recovery",
+            action="stale_action_failed" if terminal else "stale_action_recovery",
             actor_id="system:action_worker",
             target_kind=row["target_kind"],
             target_id=row["target_id"],
-            reason=f"stale running action returned to queued after {int(elapsed)}s",
-            metadata={"action_id": action_id},
+            reason=(
+                f"stale running action failed after {attempt_count} attempt(s) and {int(elapsed)}s"
+                if terminal
+                else f"stale running action returned to queued after {int(elapsed)}s"
+            ),
+            metadata={"action_id": action_id, "attempt_count": attempt_count},
             commit=False,
         )
-        recovered.append({"action_id": action_id, "elapsed_seconds": int(elapsed), "new_status": "queued"})
+        recovered.append({
+            "action_id": action_id,
+            "elapsed_seconds": int(elapsed),
+            "attempt_count": attempt_count,
+            "new_status": new_status,
+        })
     conn.commit()
     return recovered
 

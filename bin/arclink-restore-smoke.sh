@@ -103,14 +103,35 @@ esac
 
 validate_tar_members() {
   local archive="$1"
-  local member=""
-  while IFS= read -r member; do
-    case "$member" in
-      ""|/*|../*|*/../*|..|*/..)
-        die "archive contains unsafe path: $member"
-        ;;
-    esac
-  done < <(tar -tf "$archive")
+  python3 - "$archive" <<'PY'
+from __future__ import annotations
+
+import posixpath
+import sys
+import tarfile
+
+archive = sys.argv[1]
+
+
+def unsafe_path(name: str) -> bool:
+    if not name or name.startswith("/"):
+        return True
+    normalized = posixpath.normpath(name)
+    return normalized in ("", "..") or normalized.startswith("../") or "/../" in f"/{normalized}/"
+
+
+with tarfile.open(archive, "r:*") as tar:
+    for member in tar.getmembers():
+        if unsafe_path(member.name):
+            raise SystemExit(f"archive contains unsafe path: {member.name}")
+        if member.issym() or member.islnk():
+            linkname = member.linkname or ""
+            if unsafe_path(linkname):
+                raise SystemExit(f"archive contains unsafe link target: {member.name} -> {linkname}")
+            target = posixpath.normpath(posixpath.join(posixpath.dirname(member.name), linkname))
+            if unsafe_path(target):
+                raise SystemExit(f"archive contains escaping link target: {member.name} -> {linkname}")
+PY
 }
 
 restore_source() {
@@ -177,6 +198,36 @@ validate_no_nested_git() {
   add_check "no_nested_git_metadata"
 }
 
+validate_agent_symlink_targets() {
+  python3 - "$RESTORE_ABS" <<'PY'
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    current = Path(dirpath)
+    for name in [*dirnames, *filenames]:
+        path = current / name
+        if not path.is_symlink():
+            continue
+        target_text = os.readlink(path)
+        if os.path.isabs(target_text):
+            raise SystemExit(f"agent-home backup symlink uses absolute target: {path}")
+        target = (path.parent / target_text).resolve(strict=False)
+        try:
+            relative = target.relative_to(root)
+        except ValueError:
+            raise SystemExit(f"agent-home backup symlink escapes restore tree: {path}") from None
+        parts = set(relative.parts)
+        if "secrets" in parts or "logs" in parts:
+            raise SystemExit(f"agent-home backup symlink targets excluded content: {path}")
+PY
+  add_check "agent_symlink_targets"
+}
+
 validate_shared_restore() {
   local recognized=0
   local sqlite_count=0
@@ -221,6 +272,7 @@ PY
   [[ ! -e "$RESTORE_ABS/secrets" ]] || die "agent-home backup artifact must not contain secrets/"
   [[ ! -e "$RESTORE_ABS/logs" ]] || die "agent-home backup artifact must not contain logs/"
   add_check "agent_secret_exclusion"
+  validate_agent_symlink_targets
 
   local curated=0
   for path in SOUL.md config.yaml memories skills plugins cron sessions state; do

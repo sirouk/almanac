@@ -98,6 +98,15 @@ print("private" if bool(payload.get("private")) else "public")
 PY
 }
 
+verify_agent_backup_remote_read_access() {
+  local output=""
+  if ! output="$(git ls-remote "$AGENT_BACKUP_REMOTE" HEAD 2>&1)"; then
+    echo "$output" >&2
+    return 1
+  fi
+  return 0
+}
+
 reconcile_backup_git_remote_branch() {
   local repo_dir="$1"
   local branch="$2"
@@ -187,6 +196,17 @@ if [[ "$visibility" == error:* ]]; then
   exit 1
 fi
 
+BACKUP_GIT_REMOTE="$AGENT_BACKUP_REMOTE"
+BACKUP_GIT_DEPLOY_KEY_PATH="$AGENT_BACKUP_KEY_PATH"
+BACKUP_GIT_KNOWN_HOSTS_FILE="$AGENT_BACKUP_KNOWN_HOSTS_FILE"
+prepare_backup_git_transport "$BACKUP_GIT_REMOTE"
+if [[ "$visibility" == "non-public-or-missing" ]]; then
+  if ! verify_agent_backup_remote_read_access; then
+    echo "Could not verify private GitHub backup remote access for $owner_repo." >&2
+    exit 1
+  fi
+fi
+
 mkdir -p "$AGENT_BACKUP_REPO_DIR"
 if [[ ! -d "$AGENT_BACKUP_REPO_DIR/.git" ]]; then
   git -C "$AGENT_BACKUP_REPO_DIR" init -b "$AGENT_BACKUP_BRANCH" >/dev/null
@@ -246,10 +266,6 @@ if [[ -n "$(git -C "$AGENT_BACKUP_REPO_DIR" status --porcelain)" ]]; then
     git -C "$AGENT_BACKUP_REPO_DIR" commit -m "agent backup: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
 fi
 
-BACKUP_GIT_REMOTE="$AGENT_BACKUP_REMOTE"
-BACKUP_GIT_DEPLOY_KEY_PATH="$AGENT_BACKUP_KEY_PATH"
-BACKUP_GIT_KNOWN_HOSTS_FILE="$AGENT_BACKUP_KNOWN_HOSTS_FILE"
-prepare_backup_git_transport "$BACKUP_GIT_REMOTE"
 reconcile_backup_git_remote_branch "$AGENT_BACKUP_REPO_DIR" "$AGENT_BACKUP_BRANCH"
 if [[ "$BACKUP_RECONCILE_PUSH_REQUIRED" == "1" ]]; then
   git -C "$AGENT_BACKUP_REPO_DIR" push origin "$AGENT_BACKUP_BRANCH"

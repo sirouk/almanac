@@ -54,31 +54,36 @@ if [[ ! -r "$TOKEN_FILE" ]]; then
   echo "curate-vaults: cannot read bootstrap token at $TOKEN_FILE" >&2
   exit 2
 fi
-TOKEN="$(tr -d '[:space:]' <"$TOKEN_FILE")"
 RPC=(python3 "$REPO_DIR/python/arclink_rpc_client.py" --url "$MCP_URL")
 
 call_tool() {
   local tool_name="$1"
   local payload_json="$2"
-  "${RPC[@]}" --tool "$tool_name" --json-args "$payload_json"
+  printf '%s' "$payload_json" | "${RPC[@]}" --tool "$tool_name" --json-args-file -
 }
 
 auth_payload() {
-  python3 - "$TOKEN" <<'PY'
+  python3 - "$TOKEN_FILE" <<'PY'
 import json
 import sys
-print(json.dumps({"token": sys.argv[1]}))
+from pathlib import Path
+
+token = "".join(Path(sys.argv[1]).read_text(encoding="utf-8").split())
+print(json.dumps({"token": token}))
 PY
 }
 
 subscribe_payload() {
   local vault_name="$1"
   local subscribed="$2"
-  python3 - "$TOKEN" "$vault_name" "$subscribed" <<'PY'
+  python3 - "$TOKEN_FILE" "$vault_name" "$subscribed" <<'PY'
 import json
 import sys
+from pathlib import Path
+
+token = "".join(Path(sys.argv[1]).read_text(encoding="utf-8").split())
 print(json.dumps({
-    "token": sys.argv[1],
+    "token": token,
     "vault_name": sys.argv[2],
     "subscribed": sys.argv[3].lower() in {"1", "true", "yes", "on"},
 }))

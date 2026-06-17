@@ -236,7 +236,65 @@ def test_dns_repair_through_fake_executor() -> None:
     executor = _fake_executor(executor_mod)
     result = worker.process_next_arclink_action(conn, executor=executor)
     expect(result["status"] == "succeeded", "dns repair succeeded")
+    row = conn.execute(
+        """
+        SELECT hostname, record_type, target, status
+        FROM arclink_dns_records
+        WHERE deployment_id = 'dep_1'
+        """
+    ).fetchone()
+    expect(row is not None, "explicit DNS repair should persist control-plane DNS tracking")
+    expect(row["hostname"] == "test.arclink.online", str(dict(row)))
+    expect(row["status"] == "provisioned", str(dict(row)))
     print("PASS test_dns_repair_through_fake_executor")
+
+
+def test_dns_repair_backfills_provider_record_ids_after_apply() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_dns_provider_id")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_dns_provider_id")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_dns_provider_id")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_dns_provider_id")
+    conn = memory_db(control)
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_dns_provider",
+        user_id="user_dns_provider",
+        prefix="dns-provider",
+        base_domain="example.test",
+        status="provisioning_ready",
+    )
+    dns_metadata = {
+        "dns": {
+            "dashboard": {
+                "hostname": "u-dns-provider.example.test",
+                "record_type": "CNAME",
+                "target": "edge.example.test",
+            }
+        }
+    }
+    _queue_action(dashboard, conn, action_type="dns_repair", target_id="dep_dns_provider", metadata=dns_metadata)
+
+    class ProviderIdExecutor:
+        def __init__(self):
+            self.config = executor_mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="fake")
+
+        def cloudflare_dns_apply(self, request):
+            return executor_mod.CloudflareDnsApplyResult(
+                deployment_id=request.deployment_id,
+                live=True,
+                status="applied",
+                records=("u-dns-provider.example.test",),
+                metadata={"provider_record_ids": ("cf_record_1",)},
+            )
+
+    result = worker.process_next_arclink_action(conn, executor=ProviderIdExecutor())
+    expect(result["status"] == "succeeded", str(result))
+    row = conn.execute(
+        "SELECT status, provider_record_id FROM arclink_dns_records WHERE deployment_id = 'dep_dns_provider'"
+    ).fetchone()
+    expect(row["status"] == "provisioned", str(dict(row)))
+    expect(row["provider_record_id"] == "cf_record_1", str(dict(row)))
+    print("PASS test_dns_repair_backfills_provider_record_ids_after_apply")
 
 
 def test_action_worker_links_admin_action_to_executor_operation() -> None:
@@ -360,6 +418,16 @@ def test_dns_repair_derives_records_from_control_rows() -> None:
     records = set(result["result"]["records"])
     expect("u-dns-derive.example.test" in records, str(records))
     expect("hermes-dns-derive.example.test" in records, str(records))
+    statuses = {
+        row["hostname"]: row["status"]
+        for row in conn.execute(
+            "SELECT hostname, status FROM arclink_dns_records WHERE deployment_id = 'dep_dns_derive'"
+        ).fetchall()
+    }
+    expect(statuses == {
+        "u-dns-derive.example.test": "provisioned",
+        "hermes-dns-derive.example.test": "provisioned",
+    }, str(statuses))
     print("PASS test_dns_repair_derives_records_from_control_rows")
 
 
@@ -416,6 +484,8 @@ def test_dns_repair_validation_error_redacts_secret_material() -> None:
     expect(result["status"] == "failed", str(result))
     expect("unsupported ArcLink DNS record type" in result["error"], str(result))
     expect("sk_test_secretvalue123" not in result["error"], str(result))
+    rows = conn.execute("SELECT * FROM arclink_dns_records WHERE deployment_id = 'dep_dns_secret'").fetchall()
+    expect(len(rows) == 0, str([dict(row) for row in rows]))
     print("PASS test_dns_repair_validation_error_redacts_secret_material")
 
 
@@ -439,6 +509,14 @@ def test_dns_repair_derives_records_from_deployment_when_rows_empty() -> None:
     expect(result["status"] == "succeeded", str(result))
     records = set(result["result"]["records"])
     expect("u-dns-dep.example.test" in records, str(records))
+    rows = conn.execute(
+        "SELECT hostname, status FROM arclink_dns_records WHERE deployment_id = 'dep_dns_dep'"
+    ).fetchall()
+    statuses = {row["hostname"]: row["status"] for row in rows}
+    expect(statuses == {
+        "u-dns-dep.example.test": "provisioned",
+        "hermes-dns-dep.example.test": "provisioned",
+    }, str(statuses))
     print("PASS test_dns_repair_derives_records_from_deployment_when_rows_empty")
 
 
@@ -601,6 +679,83 @@ def test_comp_replay_does_not_duplicate_audit() -> None:
     ).fetchone()
     expect(int(audits["c"]) == 1, str(audits["c"]))
     print("PASS test_comp_replay_does_not_duplicate_audit")
+
+
+def test_stripe_entitlement_recovery_action_dry_run_and_apply() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_stripe_recovery")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_stripe_recovery")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_stripe_recovery")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_stripe_recovery")
+    conn = memory_db(control)
+    control.upsert_arclink_user(conn, user_id="user_stripe_recovery", entitlement_state="none")
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_stripe_recovery",
+        user_id="user_stripe_recovery",
+        prefix="recover-aw",
+        base_domain="example.test",
+        status="entitlement_required",
+    )
+    _queue_action(
+        dashboard,
+        conn,
+        action_type="stripe_entitlement_recovery",
+        target_kind="user",
+        target_id="user_stripe_recovery",
+        key="stripe-recovery-dry-run",
+        metadata={
+            "dry_run": True,
+            "actor_id": "operator:admin_1",
+            "stripe_customer_id": "cus_action_recovery_full",
+            "stripe_subscription_id": "sub_action_recovery_full",
+        },
+    )
+    dry_result = worker.process_next_arclink_action(conn, executor=_fake_executor(executor_mod))
+    user = conn.execute("SELECT entitlement_state, stripe_customer_id FROM arclink_users WHERE user_id = 'user_stripe_recovery'").fetchone()
+    dry_audit = conn.execute(
+        "SELECT metadata_json FROM arclink_audit_log WHERE action = 'stripe_entitlement_recovery_dry_run' ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    expect(dry_result["status"] == "succeeded", str(dry_result))
+    expect(dry_result["result"]["status"] == "planned" and dry_result["result"]["dry_run"] is True, str(dry_result))
+    expect(user["entitlement_state"] == "none" and user["stripe_customer_id"] == "", str(dict(user)))
+    expect(dry_audit is not None, "expected dry-run recovery audit")
+    expect("cus_action_recovery_full" not in dry_audit["metadata_json"], dry_audit["metadata_json"])
+    expect("sub_action_recovery_full" not in dry_audit["metadata_json"], dry_audit["metadata_json"])
+
+    _queue_action(
+        dashboard,
+        conn,
+        action_type="stripe_entitlement_recovery",
+        target_kind="user",
+        target_id="user_stripe_recovery",
+        key="stripe-recovery-apply",
+        metadata={
+            "actor_id": "operator:admin_1",
+            "reason": "verified Stripe recovery import",
+            "stripe_customer_id": "cus_action_recovery_full",
+            "stripe_subscription_id": "sub_action_recovery_full",
+        },
+    )
+    applied_result = worker.process_next_arclink_action(conn, executor=_fake_executor(executor_mod))
+    user = conn.execute("SELECT entitlement_state, stripe_customer_id FROM arclink_users WHERE user_id = 'user_stripe_recovery'").fetchone()
+    dep = conn.execute("SELECT status FROM arclink_deployments WHERE deployment_id = 'dep_stripe_recovery'").fetchone()
+    sub = conn.execute("SELECT status, user_id FROM arclink_subscriptions WHERE stripe_subscription_id = 'sub_action_recovery_full'").fetchone()
+    applied_audit = conn.execute(
+        "SELECT reason, metadata_json FROM arclink_audit_log WHERE action = 'stripe_entitlement_recovery_applied' ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    link = conn.execute(
+        "SELECT operation_kind FROM arclink_action_operation_links WHERE idempotency_key = 'stripe-recovery-apply'"
+    ).fetchone()
+    expect(applied_result["status"] == "succeeded", str(applied_result))
+    expect(applied_result["result"]["status"] == "applied", str(applied_result))
+    expect(user["entitlement_state"] == "paid" and user["stripe_customer_id"] == "cus_action_recovery_full", str(dict(user)))
+    expect(dep["status"] == "provisioning_ready", str(dict(dep)))
+    expect(sub["status"] == "active" and sub["user_id"] == "user_stripe_recovery", str(dict(sub)))
+    expect(applied_audit["reason"] == "verified Stripe recovery import", str(dict(applied_audit)))
+    expect("cus_action_recovery_full" not in applied_audit["metadata_json"], applied_audit["metadata_json"])
+    expect("sub_action_recovery_full" not in applied_audit["metadata_json"], applied_audit["metadata_json"])
+    expect(link["operation_kind"] == "control_db_stripe_entitlement_recovery", str(dict(link)))
+    print("PASS test_stripe_entitlement_recovery_action_dry_run_and_apply")
 
 
 def test_backup_write_check_fails_closed_without_authorized_runner() -> None:
@@ -859,6 +1014,28 @@ def test_academy_apply_action_materializes_local_hermes_home_when_authorized() -
             proposed_by="agent-live",
         )
         programs.end_academy_mode(conn, session_id=session["session"]["session_id"], actor=user_id, graduate=True)
+
+        # Fail-closed Trainer gate (arclink_academy_programs.py:2941-3029): a live
+        # apply only materializes a capsule whose specialist has a completed
+        # PG-PROVIDER live review (live_enrichment_status == "live_reviewed").
+        # Establish that review here so "authorized" means fully authorized.
+        class _ApplyLiveTrainer:
+            live = True
+
+            def review(self, *, role_title, topic, sources):
+                return {
+                    "engine": "apply-live-router",
+                    "live": True,
+                    "summary": f"Provider reviewed {role_title}",
+                    "verdicts": [{"source_uid": s["source_uid"], "verdict": "keep"} for s in sources],
+                }
+
+        spec_uid, _ = programs.specialist_uid_for_program(
+            programs.get_academy_program(conn, "systems_practice_engineer")
+        )
+        programs.run_academy_trainer_review(
+            conn, specialist_uid=spec_uid, client=_ApplyLiveTrainer(), live_authorized=True
+        )
         action = _queue_action(
             dashboard,
             conn,
@@ -1022,6 +1199,12 @@ def test_reprovision_dispatches_pod_migration() -> None:
             VALUES ('plc_reprovision', 'dep_reprovision', 'host_reprovision', 'active', ?)
             """,
             (now,),
+        )
+        conn.execute(
+            """
+            INSERT INTO arclink_service_health (deployment_id, service_name, status, checked_at, detail_json)
+            VALUES ('dep_reprovision', 'gateway', 'healthy', '2999-01-01T00:00:00+00:00', '{}')
+            """
         )
         conn.commit()
         action = _queue_action(
@@ -1326,6 +1509,39 @@ def test_attempt_audit_is_persisted_before_side_effect() -> None:
     print("PASS test_attempt_audit_is_persisted_before_side_effect")
 
 
+def test_executor_selection_failure_records_failed_attempt() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_select_fail")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_select_fail")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_select_fail")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_select_fail")
+    conn = memory_db(control)
+    intent = _queue_action(dashboard, conn, action_type="restart")
+    original_select = worker._select_action_executor
+
+    def fail_select(*_args, **_kwargs):
+        raise RuntimeError("selection failed token=sk-proj-aaaaaaaaaaaaaaaaaaaaaaaa")
+
+    try:
+        worker._select_action_executor = fail_select
+        result = worker.process_next_arclink_action(conn, executor=_fake_executor(executor_mod), worker_id="worker_select")
+    finally:
+        worker._select_action_executor = original_select
+
+    expect(result is not None and result["status"] == "failed", str(result))
+    expect(result["attempt_id"], str(result))
+    expect("sk-proj-" not in result["error"], str(result))
+    row = conn.execute("SELECT status FROM arclink_action_intents WHERE action_id = ?", (intent["action_id"],)).fetchone()
+    expect(row["status"] == "failed", dict(row))
+    attempts = worker.list_action_attempts(conn, action_id=intent["action_id"])
+    expect(len(attempts) == 1 and attempts[0]["status"] == "failed", str(attempts))
+    event = conn.execute(
+        "SELECT metadata_json FROM arclink_events WHERE event_type = 'action_failed:restart' ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    metadata = json.loads(event["metadata_json"])
+    expect(metadata.get("phase") == "executor_selection", str(metadata))
+    print("PASS test_executor_selection_failure_records_failed_attempt")
+
+
 def test_stale_action_recovery() -> None:
     control = load_module("arclink_control.py", "arclink_control_aw_stale")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_stale")
@@ -1344,6 +1560,40 @@ def test_stale_action_recovery() -> None:
     row = conn.execute("SELECT status FROM arclink_action_intents WHERE action_id = ?", (intent["action_id"],)).fetchone()
     expect(row["status"] == "queued", "intent status returned to queued")
     print("PASS test_stale_action_recovery")
+
+
+def test_stale_action_recovery_fails_after_attempt_cap() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_stale_cap")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_stale_cap")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_stale_cap")
+    conn = memory_db(control)
+    intent = _queue_action(dashboard, conn, action_type="restart")
+    conn.execute(
+        "UPDATE arclink_action_intents SET status = 'running', updated_at = '2020-01-01T00:00:00+00:00' WHERE action_id = ?",
+        (intent["action_id"],),
+    )
+    for index, status in enumerate(("failed", "failed", "running"), start=1):
+        conn.execute(
+            """
+            INSERT INTO arclink_action_attempts (
+              attempt_id, action_id, status, executor_adapter, result_json, error, started_at, finished_at
+            ) VALUES (?, ?, ?, 'fake', '{}', '', '2020-01-01T00:00:00+00:00', ?)
+            """,
+            (f"att_stale_{index}", intent["action_id"], status, "2020-01-01T00:00:00+00:00" if status != "running" else ""),
+        )
+    conn.commit()
+    recovered = worker.recover_stale_actions(conn, stale_threshold_seconds=60, max_attempts=3)
+    expect(len(recovered) == 1 and recovered[0]["new_status"] == "failed", str(recovered))
+    row = conn.execute("SELECT status FROM arclink_action_intents WHERE action_id = ?", (intent["action_id"],)).fetchone()
+    expect(row["status"] == "failed", dict(row))
+    running = conn.execute(
+        "SELECT COUNT(*) AS n FROM arclink_action_attempts WHERE action_id = ? AND status = 'running'",
+        (intent["action_id"],),
+    ).fetchone()
+    expect(int(running["n"]) == 0, dict(running))
+    event = conn.execute("SELECT event_type FROM arclink_events ORDER BY created_at DESC LIMIT 1").fetchone()
+    expect(event["event_type"] == "action_stale_failed", dict(event))
+    print("PASS test_stale_action_recovery_fails_after_attempt_cap")
 
 
 def test_idempotent_retry() -> None:
@@ -2023,6 +2273,7 @@ def test_consume_academy_refresh_queue_markers_transitions_on_lane_evidence() ->
 if __name__ == "__main__":
     test_restart_action_through_fake_executor()
     test_dns_repair_through_fake_executor()
+    test_dns_repair_backfills_provider_record_ids_after_apply()
     test_action_worker_links_admin_action_to_executor_operation()
     test_restart_action_rejects_lifecycle_path_overrides_by_default()
     test_restart_action_lifecycle_path_overrides_require_explicit_operator_flag()
@@ -2037,6 +2288,7 @@ if __name__ == "__main__":
     test_cancel_missing_subscription_fails_closed()
     test_comp_applies_entitlement_gate()
     test_comp_replay_does_not_duplicate_audit()
+    test_stripe_entitlement_recovery_action_dry_run_and_apply()
     test_backup_write_check_fails_closed_without_authorized_runner()
     test_academy_apply_preview_action_records_no_write_result_without_executor()
     test_academy_apply_preview_action_fails_closed_on_workspace_write_request()
@@ -2054,7 +2306,9 @@ if __name__ == "__main__":
     test_action_attempt_recorded()
     test_concurrent_workers_claim_action_once()
     test_attempt_audit_is_persisted_before_side_effect()
+    test_executor_selection_failure_records_failed_attempt()
     test_stale_action_recovery()
+    test_stale_action_recovery_fails_after_attempt_cap()
     test_idempotent_retry()
     test_executor_error_secret_material_is_redacted()
     test_action_worker_returns_safe_error_code_for_executor_errors()
@@ -2069,4 +2323,4 @@ if __name__ == "__main__":
     test_action_worker_ssh_executor_requires_machine_mode_and_allowlist()
     test_action_worker_local_docker_mode_requires_deployment_exec_broker()
     test_action_worker_main_reuses_single_db_connection_for_once_batch()
-    print(f"\nAll 45 action worker tests passed.")
+    print(f"\nAll 49 action worker tests passed.")

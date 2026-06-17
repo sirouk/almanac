@@ -78,6 +78,32 @@ def test_default_hub_ref_is_captain_scoped_and_agent_independent() -> None:
     print("PASS test_default_hub_ref_is_captain_scoped_and_agent_independent")
 
 
+def test_remote_hub_refs_are_reachability_checked() -> None:
+    fleet = load_module("arclink_fleet_share.py", "arclink_fleet_share_remote_hub_test")
+
+    class RemoteRunner:
+        def __init__(self, *, ok: bool) -> None:
+            self.ok = ok
+            self.commands = []
+
+        def run(self, args, *, cwd=None):
+            self.commands.append(list(args))
+            if self.ok:
+                return fleet.GitResult(returncode=0, stdout="", stderr="")
+            return fleet.GitResult(returncode=128, stdout="", stderr="no route to hub")
+
+    ok_runner = RemoteRunner(ok=True)
+    expect(fleet.ensure_hub_repo(ok_runner, "ssh://hub.example/user/fleet.git") is True, "remote hub should pass when reachable")
+    expect(ok_runner.commands == [["git", "ls-remote", "ssh://hub.example/user/fleet.git"]], str(ok_runner.commands))
+
+    try:
+        fleet.ensure_hub_repo(RemoteRunner(ok=False), "git@hub.example:user/fleet.git")
+        raise AssertionError("unreachable remote hub should fail")
+    except fleet.ArcLinkFleetShareError as exc:
+        expect("not reachable" in str(exc), str(exc))
+    print("PASS test_remote_hub_refs_are_reachability_checked")
+
+
 def test_ensure_share_and_membership_crud_is_idempotent() -> None:
     control = load_module("arclink_control.py", "arclink_control_fleet_crud_test")
     fleet = load_module("arclink_fleet_share.py", "arclink_fleet_share_crud_test")
@@ -103,6 +129,78 @@ def test_ensure_share_and_membership_crud_is_idempotent() -> None:
     active = fleet.list_fleet_share_members(conn, owner_user_id="user_cap", status="active")
     expect(len(active) == 1 and active[0]["deployment_id"] == "dep_b", str(active))
     print("PASS test_ensure_share_and_membership_crud_is_idempotent")
+
+
+def test_share_and_member_insert_races_return_winning_rows() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_race_test")
+    fleet = load_module("arclink_fleet_share.py", "arclink_fleet_share_race_test")
+    conn = _conn(control)
+    _seed_user(conn, control, "race_owner")
+    real_share_id = fleet._fleet_share_id
+    real_member_id = fleet._fleet_share_member_id
+
+    def racing_share_id():
+        now = control.utc_now_iso()
+        conn.execute(
+            """
+            INSERT INTO arclink_fleet_shares (
+              share_id, owner_user_id, hub_ref, folder_label, access_mode, status,
+              metadata_json, created_at, updated_at
+            ) VALUES ('flsh_race_winner', 'race_owner', 'triggered-hub', 'Fleet',
+                      'read-write', 'active', '{}', ?, ?)
+            """,
+            (now, now),
+        )
+        return "flsh_race_loser"
+
+    try:
+        fleet._fleet_share_id = racing_share_id
+        share = fleet.ensure_fleet_share(conn, owner_user_id="race_owner", hub_ref="/desired/hub.git")
+    finally:
+        fleet._fleet_share_id = real_share_id
+    expect(share["share_id"] == "flsh_race_winner", str(share))
+    expect(share["hub_ref"] == "/desired/hub.git", str(share))
+
+    def racing_member_id():
+        now = control.utc_now_iso()
+        conn.execute(
+            """
+            INSERT INTO arclink_fleet_share_members (
+              member_id, share_id, owner_user_id, deployment_id, working_path, role,
+              status, joined_at, metadata_json, created_at, updated_at
+            ) VALUES ('flsm_race_winner', ?, 'race_owner', 'dep_race', '/old/path',
+                      'member', 'active', ?, '{}', ?, ?)
+            """,
+            (share["share_id"], now, now, now),
+        )
+        return "flsm_race_loser"
+
+    try:
+        fleet._fleet_share_member_id = racing_member_id
+        member = fleet.add_fleet_share_member(
+            conn,
+            owner_user_id="race_owner",
+            deployment_id="dep_race",
+            working_path="/new/path",
+            role="lead",
+        )
+    finally:
+        fleet._fleet_share_member_id = real_member_id
+    expect(member["member_id"] == "flsm_race_winner", str(member))
+    expect(member["working_path"] == "/new/path" and member["role"] == "lead", str(member))
+    print("PASS test_share_and_member_insert_races_return_winning_rows")
+
+
+def test_remove_fleet_share_member_rejects_empty_deployment() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_empty_member_remove_test")
+    fleet = load_module("arclink_fleet_share.py", "arclink_fleet_share_empty_member_remove_test")
+    conn = _conn(control)
+    try:
+        fleet.remove_fleet_share_member(conn, deployment_id="")
+        raise AssertionError("empty deployment id should be rejected")
+    except fleet.ArcLinkFleetShareError:
+        pass
+    print("PASS test_remove_fleet_share_member_rejects_empty_deployment")
 
 
 def test_reconcile_tracks_active_agents_and_deregisters_removed_without_touching_hub() -> None:
@@ -238,10 +336,14 @@ def test_corrupt_working_copy_is_quarantined_and_recloned() -> None:
     git_dir = Path(a) / ".git"
     for child in list(git_dir.iterdir()):
         shutil.rmtree(child) if child.is_dir() else child.unlink()
+    (Path(a) / "draft-unsynced.txt").write_text("local draft\n", encoding="utf-8")
     expect(fleet._is_valid_git_repo(runner, Path(a)) is False, "repo should read as corrupt")
     fleet.ensure_member_working_copy(runner, hub_ref=hub, working_path=a)
     expect(fleet._is_valid_git_repo(runner, Path(a)) is True, "repo should be valid after recovery")
     expect((Path(a) / "keep.txt").exists(), "re-clone should restore hub content")
+    expect((Path(a) / "draft-unsynced.txt").read_text(encoding="utf-8") == "local draft\n", "unsynced local edit should be restored")
+    recovery = Path(a) / "ArcLink_Corrupt_Recovery"
+    expect((recovery / "agent_a.corrupt" / "draft-unsynced.txt").exists(), "quarantined files should be visible in recovery folder")
     quarantined = list(tmp.glob("agent_a.corrupt*"))
     expect(len(quarantined) == 1, f"corrupt copy should be preserved aside: {quarantined}")
     expect(fleet.sync_member(runner, working_path=a, hub_ref=hub, deployment_id="a").status == "synced", "sync works after recovery")
@@ -257,6 +359,11 @@ def test_git_arg_guard_rejects_option_injection() -> None:
             raise AssertionError(f"hub ref {bad!r} should be rejected")
         except fleet.ArcLinkFleetShareError:
             pass
+    try:
+        fleet.ensure_hub_repo(runner, "ext::sh -c touch /tmp/arclink-fleet-pwn")
+        raise AssertionError("git remote-helper syntax should be rejected")
+    except fleet.ArcLinkFleetShareError:
+        pass
     try:
         fleet.ensure_member_working_copy(runner, hub_ref="/safe/hub.git", working_path="-evil")
         raise AssertionError("working path '-evil' should be rejected")
@@ -331,6 +438,32 @@ def test_sync_local_is_env_driven_and_needs_no_db() -> None:
     print("PASS test_sync_local_is_env_driven_and_needs_no_db")
 
 
+def test_sync_local_rejects_overbroad_env_working_root() -> None:
+    fleet = load_module("arclink_fleet_share.py", "arclink_fleet_share_local_root_guard_test")
+
+    class NoGitRunner:
+        def run(self, args, *, cwd=None):
+            raise AssertionError(f"git should not run for unsafe root: {args}")
+
+    saved = {k: os.environ.get(k) for k in ("ARCLINK_FLEET_SHARE_HUB_URL", "ARCLINK_FLEET_SHARED_ROOT", "ARCLINK_DEPLOYMENT_ID")}
+    try:
+        os.environ["ARCLINK_FLEET_SHARE_HUB_URL"] = "/tmp/arclink-fleet-hub.git"
+        os.environ["ARCLINK_FLEET_SHARED_ROOT"] = str(REPO)
+        os.environ["ARCLINK_DEPLOYMENT_ID"] = "dep_bad"
+        try:
+            fleet.sync_local_working_copy(NoGitRunner())
+            raise AssertionError("repo root must not be accepted as the fleet shared root")
+        except fleet.ArcLinkFleetShareError as exc:
+            expect("allowed fleet state root" in str(exc), str(exc))
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    print("PASS test_sync_local_rejects_overbroad_env_working_root")
+
+
 def test_reconcile_all_covers_every_captain_with_an_active_share() -> None:
     control = load_module("arclink_control.py", "arclink_control_fleet_all_test")
     fleet = load_module("arclink_fleet_share.py", "arclink_fleet_share_all_test")
@@ -387,7 +520,10 @@ def test_control_plane_cli_uses_env_config_for_db_connection() -> None:
 
 def main() -> int:
     test_default_hub_ref_is_captain_scoped_and_agent_independent()
+    test_remote_hub_refs_are_reachability_checked()
     test_ensure_share_and_membership_crud_is_idempotent()
+    test_share_and_member_insert_races_return_winning_rows()
+    test_remove_fleet_share_member_rejects_empty_deployment()
     test_reconcile_tracks_active_agents_and_deregisters_removed_without_touching_hub()
     test_sync_engine_converges_read_write_across_agents_and_flags_conflicts()
     test_member_working_copy_seeds_fleet_shared_resource_layout()
@@ -396,9 +532,10 @@ def main() -> int:
     test_git_arg_guard_rejects_option_injection()
     test_sync_member_surfaces_commit_failure_without_pushing()
     test_sync_local_is_env_driven_and_needs_no_db()
+    test_sync_local_rejects_overbroad_env_working_root()
     test_reconcile_all_covers_every_captain_with_an_active_share()
     test_control_plane_cli_uses_env_config_for_db_connection()
-    print("PASS all 12 ArcLink fleet-share tests")
+    print("PASS all 17 ArcLink fleet-share tests")
     return 0
 
 

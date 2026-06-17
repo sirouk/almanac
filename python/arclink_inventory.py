@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import math
 import os
 import re
 import secrets
@@ -158,6 +159,7 @@ def register_inventory_machine(
     tags: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
     provider_billing_ref: str = "",
+    commit: bool = True,
 ) -> dict[str, Any]:
     clean_provider = _clean_provider(provider)
     clean_hostname = _clean_host_value(hostname, label="inventory hostname", required=True)
@@ -169,98 +171,141 @@ def register_inventory_machine(
     clean_billing_ref = str(provider_billing_ref or "").strip()
     host_link = str(machine_host_link or "").strip()
     now = utc_now_iso()
+    clean_capacity_slots = max(1, int(capacity_slots)) if capacity_slots is not None else None
+    hardware_json = _safe_json(hardware_summary)
+    connectivity_json = _safe_json(connectivity_summary)
+    metadata_json = _safe_json(metadata or {})
+    metadata_update_json = _safe_json(metadata) if metadata is not None else None
+    if tags is not None:
+        _safe_json(tags)
 
-    if not host_link and capacity_slots is not None:
-        host = register_fleet_host(
+    wrote = False
+    try:
+        if not host_link and clean_capacity_slots is not None:
+            wrote = True
+            host = register_fleet_host(
+                conn,
+                hostname=clean_hostname,
+                region=clean_region,
+                capacity_slots=clean_capacity_slots,
+                tags=tags,
+                metadata=metadata,
+                commit=False,
+            )
+            host_link = str(host["host_id"])
+
+        existing = conn.execute(
+            """
+            SELECT * FROM arclink_inventory_machines
+            WHERE provider = ?
+              AND ((provider_resource_id != '' AND provider_resource_id = ?) OR LOWER(hostname) = ?)
+            ORDER BY registered_at ASC
+            LIMIT 1
+            """,
+            (clean_provider, clean_resource_id, clean_hostname),
+        ).fetchone()
+        if existing is not None:
+            next_metadata_json = metadata_update_json if metadata is not None else str(existing["metadata_json"] or "{}")
+            conn.execute(
+                """
+                UPDATE arclink_inventory_machines
+                SET provider_resource_id = ?, hostname = ?, ssh_host = ?, ssh_user = ?,
+                    region = ?, status = ?, asu_capacity = ?, asu_consumed = ?,
+                    hardware_summary_json = ?, connectivity_summary_json = ?,
+                    machine_host_link = ?, provider_billing_ref = ?, metadata_json = ?
+                WHERE machine_id = ?
+                """,
+                (
+                    clean_resource_id,
+                    clean_hostname,
+                    clean_ssh_host,
+                    clean_ssh_user,
+                    clean_region,
+                    clean_status,
+                    float(asu_capacity),
+                    float(asu_consumed),
+                    hardware_json,
+                    connectivity_json,
+                    host_link,
+                    clean_billing_ref,
+                    next_metadata_json,
+                    str(existing["machine_id"]),
+                ),
+            )
+            wrote = True
+            machine_id = str(existing["machine_id"])
+        else:
+            machine_id = _inventory_id()
+            conn.execute(
+                """
+                INSERT INTO arclink_inventory_machines (
+                  machine_id, provider, provider_resource_id, hostname, ssh_host, ssh_user,
+                  region, status, asu_capacity, asu_consumed, hardware_summary_json,
+                  connectivity_summary_json, machine_host_link, provider_billing_ref,
+                  metadata_json, registered_at, last_probed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')
+                """,
+                (
+                    machine_id,
+                    clean_provider,
+                    clean_resource_id,
+                    clean_hostname,
+                    clean_ssh_host,
+                    clean_ssh_user,
+                    clean_region,
+                    clean_status,
+                    float(asu_capacity),
+                    float(asu_consumed),
+                    hardware_json,
+                    connectivity_json,
+                    host_link,
+                    clean_billing_ref,
+                    metadata_json,
+                    now,
+                ),
+            )
+            wrote = True
+        append_arclink_audit(
             conn,
-            hostname=clean_hostname,
-            region=clean_region,
-            capacity_slots=max(1, int(capacity_slots)),
-            tags=tags,
-            metadata=metadata,
+            action="inventory_machine_registered",
+            target_kind="inventory_machine",
+            target_id=machine_id,
+            reason="operator registered inventory machine",
+            metadata={"provider": clean_provider, "hostname": clean_hostname, "machine_host_link": host_link},
+            commit=False,
         )
-        host_link = str(host["host_id"])
+        if commit:
+            conn.commit()
+    except Exception:
+        if wrote:
+            conn.rollback()
+        raise
+    return dict(conn.execute("SELECT * FROM arclink_inventory_machines WHERE machine_id = ?", (machine_id,)).fetchone())
 
-    existing = conn.execute(
+
+def _parse_gib_token(token: str) -> int | None:
+    text = str(token or "").strip()
+    if not text.endswith("G"):
+        return None
+    try:
+        value = float(text[:-1])
+    except ValueError:
+        return None
+    if value < 0:
+        return None
+    return int(value)
+
+
+def _mark_probe_degraded(conn: sqlite3.Connection, *, machine_id: str, message: str) -> None:
+    conn.execute(
         """
-        SELECT * FROM arclink_inventory_machines
-        WHERE provider = ?
-          AND ((provider_resource_id != '' AND provider_resource_id = ?) OR LOWER(hostname) = ?)
-        ORDER BY registered_at ASC
-        LIMIT 1
+        UPDATE arclink_inventory_machines
+        SET status = 'degraded', connectivity_summary_json = ?, last_probed_at = ?
+        WHERE machine_id = ?
         """,
-        (clean_provider, clean_resource_id, clean_hostname),
-    ).fetchone()
-    if existing is not None:
-        metadata_json = _safe_json(metadata) if metadata is not None else str(existing["metadata_json"] or "{}")
-        conn.execute(
-            """
-            UPDATE arclink_inventory_machines
-            SET provider_resource_id = ?, hostname = ?, ssh_host = ?, ssh_user = ?,
-                region = ?, status = ?, asu_capacity = ?, asu_consumed = ?,
-                hardware_summary_json = ?, connectivity_summary_json = ?,
-                machine_host_link = ?, provider_billing_ref = ?, metadata_json = ?
-            WHERE machine_id = ?
-            """,
-            (
-                clean_resource_id,
-                clean_hostname,
-                clean_ssh_host,
-                clean_ssh_user,
-                clean_region,
-                clean_status,
-                float(asu_capacity),
-                float(asu_consumed),
-                _safe_json(hardware_summary),
-                _safe_json(connectivity_summary),
-                host_link,
-                clean_billing_ref,
-                metadata_json,
-                str(existing["machine_id"]),
-            ),
-        )
-        machine_id = str(existing["machine_id"])
-    else:
-        machine_id = _inventory_id()
-        conn.execute(
-            """
-            INSERT INTO arclink_inventory_machines (
-              machine_id, provider, provider_resource_id, hostname, ssh_host, ssh_user,
-              region, status, asu_capacity, asu_consumed, hardware_summary_json,
-              connectivity_summary_json, machine_host_link, provider_billing_ref,
-              metadata_json, registered_at, last_probed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')
-            """,
-            (
-                machine_id,
-                clean_provider,
-                clean_resource_id,
-                clean_hostname,
-                clean_ssh_host,
-                clean_ssh_user,
-                clean_region,
-                clean_status,
-                float(asu_capacity),
-                float(asu_consumed),
-                _safe_json(hardware_summary),
-                _safe_json(connectivity_summary),
-                host_link,
-                clean_billing_ref,
-                _safe_json(metadata or {}),
-                now,
-            ),
-        )
-    append_arclink_audit(
-        conn,
-        action="inventory_machine_registered",
-        target_kind="inventory_machine",
-        target_id=machine_id,
-        reason="operator registered inventory machine",
-        metadata={"provider": clean_provider, "hostname": clean_hostname, "machine_host_link": host_link},
-        commit=False,
+        (_safe_json({"ok": False, "error": message}), utc_now_iso(), machine_id),
     )
     conn.commit()
-    return dict(conn.execute("SELECT * FROM arclink_inventory_machines WHERE machine_id = ?", (machine_id,)).fetchone())
 
 
 def _matches_inventory_filters(row: Mapping[str, Any], filters: Sequence[str]) -> bool:
@@ -400,20 +445,32 @@ def parse_probe_output(stdout: str) -> dict[str, Any]:
         if line.startswith("MemTotal:"):
             parts = line.split()
             if len(parts) >= 2:
-                mem_kib = int(parts[1])
-        elif line.startswith("/dev/") or line.startswith("overlay") or line.startswith("Filesystem"):
-            continue
-        elif line.lower().startswith("docker version"):
-            docker_version = line
-        elif line.lower().startswith("docker compose"):
-            compose_version = line
-        else:
-            fields = line.split()
-            if len(fields) >= 2 and fields[1].endswith("G"):
                 try:
-                    disk_gib = max(disk_gib, int(fields[1].rstrip("G")))
-                except ValueError:
-                    pass
+                    mem_kib = int(parts[1])
+                except ValueError as exc:
+                    raise ArcLinkInventoryError("probe output has invalid MemTotal") from exc
+            continue
+        lower = line.lower()
+        if lower.startswith("docker version"):
+            docker_version = line
+            continue
+        if lower.startswith("docker compose"):
+            compose_version = line
+            continue
+        fields = line.split()
+        if not fields or fields[0].lower() == "filesystem":
+            continue
+        size_gib = None
+        if len(fields) >= 4 and str(fields[3]).endswith("%"):
+            size_gib = _parse_gib_token(fields[0])
+        if size_gib is None and len(fields) >= 2:
+            size_gib = _parse_gib_token(fields[1])
+        if size_gib is not None:
+            disk_gib = max(disk_gib, size_gib)
+    if mem_kib <= 0:
+        raise ArcLinkInventoryError("probe output missing MemTotal")
+    if disk_gib <= 0:
+        raise ArcLinkInventoryError("probe output missing disk size")
     return {
         "vcpu_cores": vcpu,
         "ram_gib": round(mem_kib / 1024 / 1024, 2) if mem_kib else 0,
@@ -447,31 +504,21 @@ def probe_inventory_machine(
         completed = runner(command, text=True, capture_output=True, timeout=30, check=False)
     except (OSError, subprocess.SubprocessError) as exc:
         message = redact_then_truncate(str(exc), limit=240)
-        conn.execute(
-            """
-            UPDATE arclink_inventory_machines
-            SET status = 'degraded', connectivity_summary_json = ?, last_probed_at = ?
-            WHERE machine_id = ?
-            """,
-            (_safe_json({"ok": False, "error": message}), utc_now_iso(), machine["machine_id"]),
-        )
-        conn.commit()
+        _mark_probe_degraded(conn, machine_id=str(machine["machine_id"]), message=message)
         raise ArcLinkInventoryError(message) from exc
     if completed.returncode != 0:
         message = redact_then_truncate(completed.stderr or completed.stdout or "probe failed", limit=240)
-        conn.execute(
-            """
-            UPDATE arclink_inventory_machines
-            SET status = 'degraded', connectivity_summary_json = ?, last_probed_at = ?
-            WHERE machine_id = ?
-            """,
-            (_safe_json({"ok": False, "error": message}), utc_now_iso(), machine["machine_id"]),
-        )
-        conn.commit()
+        _mark_probe_degraded(conn, machine_id=str(machine["machine_id"]), message=message)
         raise ArcLinkInventoryError(message)
-    hardware = parse_probe_output(completed.stdout)
-    asu_capacity = compute_asu(hardware)
-    consumed = current_load(str(machine["machine_id"]), conn)
+    try:
+        hardware = parse_probe_output(completed.stdout)
+        asu_capacity = compute_asu(hardware)
+        consumed = current_load(str(machine["machine_id"]), conn)
+        observed_load = max(0, int(math.ceil(float(consumed))))
+    except (ArcLinkInventoryError, ArcLinkASUError) as exc:
+        message = redact_then_truncate(str(exc), limit=240)
+        _mark_probe_degraded(conn, machine_id=str(machine["machine_id"]), message=message)
+        raise ArcLinkInventoryError(message) from exc
     now = utc_now_iso()
     conn.execute(
         """
@@ -491,7 +538,7 @@ def probe_inventory_machine(
         ),
     )
     if machine.get("machine_host_link"):
-        update_fleet_host(conn, host_id=str(machine["machine_host_link"]), status="active", observed_load=int(consumed))
+        update_fleet_host(conn, host_id=str(machine["machine_host_link"]), status="active", observed_load=observed_load)
     append_arclink_audit(
         conn,
         action="inventory_machine_probed",
@@ -567,6 +614,10 @@ def _cloud_operation_kind(provider: str, action: str) -> str:
 def _idempotent_replay_result(row: Mapping[str, Any]) -> dict[str, Any]:
     result = _operation_result(row)
     result["replay"] = True
+    if str(row.get("status") or "") == "failed":
+        error = str(row.get("error") or result.get("error") or "previous cloud inventory operation failed").strip()
+        message = redact_then_truncate(error, limit=300)
+        raise ArcLinkInventoryError(f"previous cloud inventory operation failed: {message}")
     return result
 
 
@@ -766,6 +817,8 @@ def create_cloud_inventory_machine(
     if reserved.get("replay"):
         return _idempotent_replay_result(reserved)
 
+    resource_id = ""
+    machine_registered = False
     try:
         server = _call_provider_create(
             clean_provider,
@@ -820,6 +873,7 @@ def create_cloud_inventory_machine(
             metadata=metadata,
             provider_billing_ref=clean_billing_ref,
         )
+        machine_registered = True
         result = {"status": status, "replay": False, "machine": machine}
         complete_arclink_operation_idempotency(
             conn,
@@ -832,12 +886,24 @@ def create_cloud_inventory_machine(
         return result
     except Exception as exc:
         message = redact_then_truncate(str(exc), limit=300)
+        provider_refs = {"provider_resource_id": resource_id} if resource_id else {}
+        failure_result: dict[str, Any] = {"status": "failed", "replay": False, "error": message}
+        if resource_id and not machine_registered:
+            cleanup: dict[str, Any] = {"attempted": True, "destroy": True, "removed": False}
+            try:
+                client.remove_server(resource_id, destroy=True)
+                cleanup["removed"] = True
+            except Exception as cleanup_exc:
+                cleanup["error"] = redact_then_truncate(str(cleanup_exc), limit=300)
+            failure_result["cleanup"] = cleanup
         fail_arclink_operation_idempotency(
             conn,
             operation_kind=operation_kind,
             idempotency_key=clean_key,
             intent=intent,
             error=message,
+            provider_refs=provider_refs,
+            result=failure_result,
         )
         raise
 
@@ -904,6 +970,7 @@ def remove_cloud_inventory_machine(
             intent=intent,
             error=message,
             provider_refs={"provider_resource_id": resource_id},
+            result={"status": "failed", "replay": False, "error": message},
         )
         raise
 

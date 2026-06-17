@@ -6,6 +6,7 @@ __pycache__/
 *.pyc
 .env
 .env.*
+!.env.live.example
 
 # Ralphie local run artifacts
 logs/
@@ -30,3 +31,20 @@ web/.next/
 web/.arclink-workspace-proof-*/
 web/out/
 web/tsconfig.tsbuildinfo
+
+# CANON federation process artifacts (keep curated records, drop raw logs/prompts/outputs)
+research/canon/codex/logs/
+research/canon/codex/prompts/
+research/canon/codex/*.raw
+research/canon/fixes/logs/
+research/canon/fixes/prompts/
+research/canon/fixes/*.raw
+research/canon/decisions/logs/
+research/canon/decisions/prompts/
+research/canon/decisions/*.raw
+research/canon/phase1/logs/
+research/canon/phase1/prompts/
+research/canon/phase1/*.raw
+research/canon/**/driver.log
+# stray sqlite in-memory artifact (bug: sqlite3.connect(":memory:") wrote a file)
+:memory:

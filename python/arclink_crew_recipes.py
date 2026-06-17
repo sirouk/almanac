@@ -8,7 +8,7 @@ import re
 import secrets
 import sqlite3
 from string import Template
-from typing import Any, Mapping, Protocol
+from typing import Any, Mapping, Protocol, Sequence
 import urllib.error
 import urllib.request
 

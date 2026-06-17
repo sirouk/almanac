@@ -1,10 +1,12 @@
 # ArcLink Ground Truth Brief — Canonical Anchor for Documentation
 
 Authored 2026-05-30 (branch `arclink`) by the lead documentation architect, reconciling the 14
-subsystem-truth records under `research/ground-truth/`. **This brief is the single source of
-coherence** for the downstream documentation rewrite swarm. Where this brief and any existing doc
-disagree, this brief wins, because every claim here is grounded in code file citations from the
-ground-truth readers. Every doc rewrite MUST cite this brief and stay internally consistent with it.
+subsystem-truth records under `research/ground-truth/`. Quantitative module, schema, route, and
+OpenAPI provenance was refreshed from code and regression tests on 2026-06-17. **This brief is the
+single source of coherence** for the downstream documentation rewrite swarm. Where this brief and any
+existing doc disagree, this brief wins, because every claim here is grounded in code file citations
+from the ground-truth readers. Every doc rewrite MUST cite this brief and stay internally consistent
+with it.
 
 Honesty rule that overrides everything: **never claim live proof that does not exist.** Separate
 "local-real" from "proof-gated (PG-*)" from "policy/risk-accepted" in every doc, exactly as this
@@ -86,11 +88,10 @@ operator-internal words. The schema/operator canon keeps the technical names.
 
 ## 3. Full Current Module Map (every `python/arclink_*.py`, grouped by subsystem)
 
-There are **84** `python/arclink_*.py` files (includes helpers/legacy). The canonical
-`docs/arclink/architecture.md` module map is missing many of these — especially the **public Agent
-gateway / exec-broker / pod-comms / agent-supervisor family**, `operator_raven`, `operator_agent`,
-the Academy modules, `memory_synthesizer`, `fleet_share`, and `pod_migration`. Every doc must treat
-the list below as the authoritative module inventory.
+There are **87** `python/arclink_*.py` files (includes helpers/legacy). The canonical
+`docs/arclink/architecture.md` module map mirrors this inventory, and
+`tests/test_documentation_truths.py` guards both the count and membership. Every doc must treat the
+list below as the authoritative module inventory.
 
 ### Control plane core / API / schema
 - `arclink_control` — schema (`ensure_schema`), `Config`, env loading, all table DDL, helpers
@@ -139,9 +140,12 @@ the list below as the authoritative module inventory.
 - `arclink_operator_agent` — the operator's single in-stack Hermes identity + free-form turn bridge.
 - `arclink_operator_upgrade_broker` — Docker-mode operator upgrade broker (`operator-upgrade-broker`,
   8917).
+- `arclink_operator_upgrade_host_runner` — host-side queue runner for authenticated operator upgrade
+  jobs.
 - `arclink_action_worker` — admin/operator action-intent consumer (`arclink_action_intents`).
 - `arclink_rollout` — rollout model + ArcPod-update rollout planner/materializer/record-only batch.
 - `arclink_pin_upgrade_check` — hourly pinned-component upstream upgrade detector.
+- `arclink_upgrade_policy` — source-owned dependency and ArcPod rollout policy catalog.
 
 ### Academy / Crew / SOUL
 - `arclink_academy_programs` — Academy lifecycle (Majors, Trainees, sticky Mode, gallery, adopt,
@@ -213,6 +217,7 @@ the list below as the authoritative module inventory.
 ### Knowledge / memory / Notion / MCP
 - `arclink_memory_synthesizer` — memory synthesis card builder (`memory-synth` job).
 - `arclink_org_profile`, `arclink_org_profile_builder` — org-profile validate/apply/doctor + builder.
+- `arclink_skill_enablement` — per-agent approved-skill enablement helper for Academy-managed skills.
 - `arclink_notion_ssot` — Notion API client + SSOT handshake + no-secret proof harness (PG-NOTION).
 - `arclink_notion_webhook` — Notion webhook receiver + verification-token arming.
 - `arclink_ssot_batcher` — Notion-event batcher worker.
@@ -236,37 +241,36 @@ the list below as the authoritative module inventory.
 
 Verified by building the live schema and counting DDL in `arclink_control.py`:
 
-- **`arclink_*`-prefixed tables: 44** (NOT 23 — the MEMORY.md "23 tables" figure is **stale by ~2x**
+- **`arclink_*`-prefixed tables: 45** (NOT 23 — the MEMORY.md "23 tables" figure is **stale by ~2x**
   and must be corrected everywhere it appears).
-- **`academy_*` tables: 9** — these are **NOT** `arclink_`-prefixed:
+- **`academy_*` tables: 10** — these are **NOT** `arclink_`-prefixed:
   `academy_programs`, `academy_trainees`, `academy_mode_sessions`,
   `academy_resource_proposals`, `academy_sources`, `academy_corpus_specialists`,
-  `academy_specialist_sources`, `academy_source_provenance`, and
-  `academy_specialist_subscriptions`.
-- Total tables in the live schema is 78 (the remainder are legacy/substrate tables such as
+  `academy_specialist_sources`, `academy_source_provenance`,
+  `academy_specialist_subscriptions`, and `academy_source_crawl_observations`.
+- Total tables in the live schema is 80 (the remainder are legacy/substrate tables such as
   `rate_limits`, `notification_outbox`, `agents`, `agent_identity`, `org_profile_*`,
   `memory_synthesis_cards`, `notion_index_documents`, `settings`, `pin_upgrade_notifications`,
   `operator_actions`).
 
-The 44 `arclink_*` tables (alphabetical):
+The 45 `arclink_*` tables (alphabetical):
 
 ```
-arclink_action_attempts          arclink_fleet_shares             arclink_pod_migrations
-arclink_action_intents           arclink_inventory_machines       arclink_provisioning_jobs
-arclink_action_operation_links   arclink_llm_budget_reservations  arclink_public_bot_identity
-arclink_admin_roles              arclink_llm_router_keys          arclink_refuel_credits
-arclink_admin_sessions           arclink_llm_usage_events         arclink_rollouts
-arclink_admin_totp_factors       arclink_model_catalog            arclink_service_health
-arclink_admins                   arclink_onboarding_events        arclink_share_claim_nonces
-arclink_audit_log                arclink_onboarding_sessions      arclink_share_grants
-arclink_channel_pairing_codes    arclink_operation_idempotency    arclink_subscriptions
-arclink_credential_handoffs      arclink_pod_messages             arclink_user_sessions
-arclink_crew_recipes             arclink_deployment_placements    arclink_users
-arclink_deployments              arclink_dns_records              arclink_webhook_events
-arclink_evidence_runs            arclink_events                   arclink_wrapped_reports
-arclink_fleet_audit_chain        arclink_fleet_enrollments
-arclink_fleet_host_probes        arclink_fleet_hosts
-arclink_fleet_share_members
+arclink_action_attempts             arclink_events                      arclink_operation_idempotency
+arclink_action_intents              arclink_evidence_runs               arclink_pod_messages
+arclink_action_operation_links      arclink_fleet_audit_chain           arclink_pod_migrations
+arclink_admin_roles                 arclink_fleet_enrollments           arclink_provisioning_jobs
+arclink_admin_sessions              arclink_fleet_host_probes           arclink_public_bot_identity
+arclink_admin_totp_factors          arclink_fleet_hosts                 arclink_refuel_credits
+arclink_admins                      arclink_fleet_share_members         arclink_rollouts
+arclink_agent_skill_enablement      arclink_fleet_shares                arclink_service_health
+arclink_audit_log                   arclink_inventory_machines          arclink_share_claim_nonces
+arclink_channel_pairing_codes       arclink_llm_budget_reservations     arclink_share_grants
+arclink_credential_handoffs         arclink_llm_router_keys             arclink_subscriptions
+arclink_crew_recipes                arclink_llm_usage_events            arclink_user_sessions
+arclink_deployment_placements       arclink_model_catalog               arclink_users
+arclink_deployments                 arclink_onboarding_events           arclink_webhook_events
+arclink_dns_records                 arclink_onboarding_sessions         arclink_wrapped_reports
 ```
 
 Two important table facts every doc must respect:
@@ -286,14 +290,16 @@ For each subsystem: what is genuinely local-real, and what is gated. Be ruthless
 live proof here.
 
 ### 5.1 Control core / hosted API / auth
-- **REAL:** route dispatch (69 `_ROUTES` entries, 67 unique paths under `/api/v1`); session/CSRF
+- **REAL:** route dispatch (71 `_ROUTES` entries, 69 unique path suffixes under `/api/v1`; 71
+  OpenAPI path objects including the 2 LLM-router paths); session/CSRF
   (double-submit), HMAC-peppered token hashing (`hmac_sha256_v1`, legacy `sha256_legacy` auto-
   rehash); user TTL 24h / admin TTL 1h; PBKDF2-SHA256 passwords (390k iters); admin RBAC single-owner
   + TOTP-MFA gates (login ignores client-asserted MFA); CIDR gate on all admin routes; rate limits
   (login 10/900s, admin_login 5/900s, onboarding_claim 5/900s, webhooks 60/60s); body caps; CORS;
   share-request broker token auth (`X-ArcLink-Share-Request-Broker-Token`); OpenAPI generation.
-- **OpenAPI parity is FRESH:** `docs/openapi/arclink-v1.openapi.json` is **byte-identical** to the
-  code-generated spec. Keep the parity test; regenerate on any `_ROUTES` change.
+- **OpenAPI parity is FRESH:** `docs/openapi/arclink-v1.openapi.json` is canonical JSON equivalent to
+  the code-generated spec. Keep `test_openapi_spec_matches_static_copy`; regenerate on any `_ROUTES`
+  change.
 - **PROOF-GATED:** live Stripe webhook delivery (PG-STRIPE), live bot webhooks (PG-BOTS); the
   scale-operations production worker service is a runbook step, not a proven live worker.
 
@@ -521,7 +527,8 @@ live proof here.
 
 ## 6. Authoritative GAP-* Ledger (current true status — every doc must cite this)
 
-`GAPS.md` defines GAP-001..GAP-034 (GAP-008 absent). Product matrix SSOT: **101 real / 0 partial /
+`GAPS.md` defines GAP-001..GAP-034 with no open `### GAP-008` header; `GAP-008` appears only in
+locally closed references. Product matrix SSOT: **101 real / 0 partial /
 0 gap / 15 proof-gated / 5 policy-question (121 rows)**, guarded by
 `tests/test_documentation_truths.py`. The two header-level "closed locally" callouts are GAP-011
 (docs align) and GAP-025 (suite green).
@@ -538,11 +545,9 @@ live proof here.
 - **GAP-015** (share approval can silently wait without a linked public channel): **PROOF-GATED
   (PG-BOTS).** Inbox + retry-notification + no-channel recovery hints + single-row local queueing all
   real; only live Telegram/Discord delivery + callback proof remains.
-- **GAP-016** (Linked copy/duplicate policy aligned): **REAL / closed locally.** BUT GAPS.md's quoted
-  policy STRING is stale — code now emits
-  `accepted_linked_resources_writable_in_place_without_reshare_or_git_mutation` (+ destination roots
-  `["vault","workspace"]`), not the old `..._copy_to_owned_vault_or_workspace_only`. Docs must use the
-  current string.
+- **GAP-016** (Linked copy/duplicate policy aligned): **REAL / closed locally.** Code and GAPS.md now
+  cite `accepted_linked_resources_writable_in_place_without_reshare_or_git_mutation` (+ destination
+  roots `["vault","workspace"]`). Docs must keep using the current string.
 - **GAP-019** (Docker socket/root services, P0 trusted-host): **OPEN — acknowledged residual risk
   only.** Largest row (sub-items A..BD). Command path narrowed via seven brokers/helpers (raw-command
   rejection, HMAC tokens, internal networks, trusted Docker-binary pins, path/symlink validation,
@@ -595,8 +600,8 @@ live proof here.
 ### Stale gap status to flag in docs
 - Any doc citing Operator Raven as "read-only/dry-run" (GAP-029) — STALE (it queues real actions).
 - Any runbook listing `rollout` as "pending/disabled" (GAP-032) — STALE (now wired/queueable).
-- GAPS.md GAP-016 policy string — STALE (use the new string).
-- MEMORY.md "23 arclink_* tables" — STALE (44).
+- GAPS.md GAP-016 policy string — must stay aligned with `python/arclink_mcp_server.py`.
+- MEMORY.md "23 arclink_* tables" — STALE (45).
 - (Earlier brief claim that operations-runbook.md's `fleet-share-reconcile` job "does not exist" was
   itself STALE — the job exists as of commit `7ccb2b3`; docs were aligned to the code.)
 
@@ -642,7 +647,7 @@ Severity legend: **heavy** (materially wrong/missing core), **light** (small cor
 | `AGENTS.md` | light | Align contributor-facing architecture summary with the §3 module map; add the public Agent gateway/broker family and Operator Raven real-action note if referenced. |
 | `docs/API_REFERENCE.md` | light | Add 10 missing live routes: `GET /adapter-mode`; onboarding `status`/`claim-session`/`cancel`; all 6 Academy routes. Align rate-limit scope labels (`onboarding:{channel}`→`onboarding_claim`). Note refuel webhook returns synthetic `refuel_paid` marker. Otherwise accurate (auth, CORS, body caps, prices, broker token). |
 | `docs/DOC_STATUS.md` | aligned | Classifies the previously missing docs (`brand-system.md`, `professional-finish-gate.md`, `sovereign-control-node-symphony.md`) and points `architecture.md` route truth to API/OpenAPI instead of treating its high-level family table as the route catalog. |
-| `docs/arclink/architecture.md` | aligned | Module map now includes the public-Agent-gateway/broker/helper/pod-comms family, operator_raven/agent, Academy, memory_synthesizer, fleet_share, pod_migration, notification_delivery, and current 44 `arclink_*` + 9 `academy_*` count. Route truth is delegated to API_REFERENCE/OpenAPI. |
+| `docs/arclink/architecture.md` | aligned | Module map now includes the public-Agent-gateway/broker/helper/pod-comms family, operator_raven/agent, operator-upgrade host runner, upgrade policy, Academy, skill enablement, memory_synthesizer, fleet_share, pod_migration, notification_delivery, and current 45 `arclink_*` + 10 `academy_*` count. Route truth is delegated to API_REFERENCE/OpenAPI. |
 | `docs/arclink/sovereign-control-node-symphony.md` | aligned / aspirational | Corrects GAP-029 real-action Operator Raven wording, marks migration versioning as target shape, adds fleet shared folder, notes OAuth/live-Chutes adapters as present-but-unwired, names the broker/helper split, and keeps Academy weekly maintenance no-write while documenting PG-HERMES Academy SOUL apply. |
 | `docs/arclink/sovereign-control-node.md` | light-to-heavy | Ingress §6 lists DNS for FOUR hosts (`u-/files-/code-/hermes-`); code only creates DNS/Traefik for `u-` and `hermes-` (`ARCLINK_HOST_ROLES`). Files/Code are dashboard plugin routes, not subdomains — concrete contradiction, fix. Add Operator Raven/operator-agent subsection. Add handoff health gate, tailnet port allocator, operator-arcpod exclusion, mid-apply entitlement re-check. |
 | `docs/arclink/control-node-production-runbook.md` | heavy | Action matrix lists `rollout` (and suspend/unsuspend/force-resynth/bot-key-rotation) as "disabled/pending" — `rollout` is now wired/queueable (`arcpod_update_rollout`, PG-UPGRADE/PG-HERMES). Add Operator Raven real-action surface, operator approval code, operator single Hermes agent, free-form bridge. Pod-migration section is accurate. |
@@ -679,7 +684,7 @@ Severity legend: **heavy** (materially wrong/missing core), **light** (small cor
 | `plugins/hermes-agent/code/README.md` | light | Same Workspace-root fix. Add the **Fleet** root. Add that `pull`/`push` require `confirm:true` and pull is `--ff-only`. |
 | `plugins/hermes-agent/terminal/README.md` | fresh→light | Version drift (plugin.yaml 0.2.0 vs status 0.3.0). `+SSH` is correctly described as a local machine shell (not remote dial-out). |
 | `plugins/hermes-agent/arclink-managed-context/README.md` | fresh | Accurate. Could add `pre_tool_call` token-injection + `notion.query` 3/10min budget block + per-turn recipe cards. |
-| `docs/openapi/arclink-v1.openapi.json` | fresh | Byte-identical to the code-generated spec. Keep the parity test; regenerate on any `_ROUTES` change. |
+| `docs/openapi/arclink-v1.openapi.json` | fresh | Canonical JSON equivalent to the code-generated spec. Keep `test_openapi_spec_matches_static_copy`; regenerate on any `_ROUTES` change. |
 | `FUTURE_SHARED_ARCLINK.md` | heavy (intended north-star) | Add a banner clarifying what IS built (single-control-plane share grants + Linked + claim-nonce broker + git fleet folder) vs the unbuilt keypair/mesh/cross-sovereign-node layer. Its scope strings don't match the real resource_kind/resource_root/access_mode model. |
 
 ---

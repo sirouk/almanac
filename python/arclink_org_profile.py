@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
+import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import sqlite3
@@ -76,6 +79,7 @@ SECRET_KEY_TERMS = (
     "fingerprint",
     "jwt",
     "oauth",
+    "passphrase",
     "password",
     "private_key",
     "secret",
@@ -90,6 +94,17 @@ SECRET_VALUE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("Telegram bot token", re.compile(r"\b\d{6,}:[A-Za-z0-9_-]{25,}\b")),
     ("JWT", re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")),
 )
+HIGH_ENTROPY_TOKEN_RE = re.compile(r"[A-Za-z0-9_+/=-]{30,}")
+NON_SECRET_HIGH_ENTROPY_LEAF_TERMS = (
+    "checksum",
+    "content_hash",
+    "expected_sha256",
+    "hash",
+    "path",
+    "revision",
+    "sha256",
+)
+ALLOWED_REFERENCE_URI_SCHEMES = {"http", "https", "notion"}
 
 
 def utc_now_iso() -> str:
@@ -114,6 +129,18 @@ def last_apply_path(cfg: Any) -> Path:
 
 def agent_context_dir(cfg: Any) -> Path:
     return state_dir(cfg) / "agent-context"
+
+
+@contextlib.contextmanager
+def _profile_apply_lock(cfg: Any) -> Iterable[None]:
+    lock_path = state_dir(cfg) / "apply.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _atomic_write_text(path: Path, content: str, *, mode: int | None = None) -> bool:
@@ -213,8 +240,43 @@ def _is_placeholder_secret(value: str) -> bool:
         return True
     if normalized.startswith("<") and normalized.endswith(">"):
         return True
-    if normalized.startswith("cpk_"):
-        return True
+    return False
+
+
+def _path_leaf(path: str) -> str:
+    return path.rsplit(".", 1)[-1].lower()
+
+
+def _safe_high_entropy_leaf(leaf: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", "_", leaf.lower()).strip("_")
+    return any(term in normalized for term in NON_SECRET_HIGH_ENTROPY_LEAF_TERMS)
+
+
+def _token_entropy(token: str) -> float:
+    if not token:
+        return 0.0
+    return -sum((token.count(char) / len(token)) * math.log2(token.count(char) / len(token)) for char in set(token))
+
+
+def _looks_like_high_entropy_secret(path: str, value: str) -> bool:
+    leaf = _path_leaf(path)
+    if _safe_high_entropy_leaf(leaf):
+        return False
+    for token in HIGH_ENTROPY_TOKEN_RE.findall(value):
+        stripped = token.strip("=-_")
+        if len(stripped) < 30:
+            continue
+        classes = sum(
+            bool(pattern.search(stripped))
+            for pattern in (
+                re.compile(r"[a-z]"),
+                re.compile(r"[A-Z]"),
+                re.compile(r"\d"),
+                re.compile(r"[^A-Za-z0-9]"),
+            )
+        )
+        if classes >= 3 and _token_entropy(stripped) >= 4.0:
+            return True
     return False
 
 
@@ -233,24 +295,91 @@ def _walk_values(value: object, path: str = "") -> Iterable[tuple[str, object]]:
 def _secret_scan_errors(profile: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     for path, value in _walk_values(profile):
-        if not isinstance(value, str):
-            continue
-        normalized = value.strip()
-        if not normalized or _is_placeholder_secret(normalized):
-            continue
-        leaf = path.rsplit(".", 1)[-1].lower()
-        if any(term in leaf for term in SECRET_KEY_TERMS):
-            errors.append(f"{path}: looks like a secret-bearing field; store secrets outside org-profile.yaml")
-            continue
+        leaf = _path_leaf(path)
         for label, pattern in SECRET_VALUE_PATTERNS:
-            if pattern.search(normalized):
-                errors.append(f"{path}: looks like a {label}; remove it before ingestion")
+            if leaf != "<root>" and pattern.search(leaf):
+                errors.append(f"{path}: mapping key looks like a {label}; remove it before ingestion")
                 break
+        else:
+            if not isinstance(value, str):
+                continue
+            normalized = value.strip()
+            if not normalized or _is_placeholder_secret(normalized):
+                continue
+            if any(term in leaf for term in SECRET_KEY_TERMS):
+                errors.append(f"{path}: looks like a secret-bearing field; store secrets outside org-profile.yaml")
+                continue
+            for label, pattern in SECRET_VALUE_PATTERNS:
+                if pattern.search(normalized):
+                    errors.append(f"{path}: looks like a {label}; remove it before ingestion")
+                    break
+            else:
+                if _looks_like_high_entropy_secret(path, normalized):
+                    errors.append(f"{path}: looks like a high-entropy secret; remove it before ingestion")
     return errors
 
 
 def _list_ids(values: Sequence[dict[str, Any]], key: str = "id") -> list[str]:
     return [str(item.get(key) or "").strip() for item in values if isinstance(item, dict)]
+
+
+def _resolve_profile_path(raw_path: str, cfg: Any | None) -> Path:
+    raw_path = raw_path.strip()
+    if cfg is not None:
+        replacements = {
+            "<vault>": str(Path(cfg.vault_dir)),
+            "<priv>": str(Path(cfg.private_dir)),
+            "<private>": str(Path(cfg.private_dir)),
+            "<repo>": str(REPO_ROOT),
+        }
+        for marker, replacement in replacements.items():
+            if raw_path == marker:
+                return Path(replacement)
+            if raw_path.startswith(marker + "/"):
+                return Path(replacement) / raw_path[len(marker) + 1 :]
+    candidate = Path(raw_path)
+    if not candidate.is_absolute() and cfg is not None:
+        candidate = Path(cfg.vault_dir) / raw_path
+    return candidate
+
+
+def _path_is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _reference_visible_in_shared_vault(reference: dict[str, Any]) -> bool:
+    audience = str(reference.get("audience") or "all_agents").strip().lower()
+    sensitivity = str(reference.get("sensitivity") or "internal").strip().lower()
+    return audience == "all_agents" and sensitivity != "restricted"
+
+
+def _reference_uri_scheme(raw_path: str) -> str:
+    match = re.match(r"^([A-Za-z][A-Za-z0-9+.-]*):", raw_path.strip())
+    return match.group(1).lower() if match else ""
+
+
+def _reference_vault_render_path_error(reference: dict[str, Any], cfg: Any | None) -> str:
+    if cfg is None or not _reference_visible_in_shared_vault(reference):
+        return ""
+    raw_path = str(reference.get("path") or "").strip()
+    if not raw_path:
+        return ""
+    uri_scheme = _reference_uri_scheme(raw_path)
+    if uri_scheme:
+        if uri_scheme in ALLOWED_REFERENCE_URI_SCHEMES:
+            return ""
+        ref_id = str(reference.get("id") or "").strip() or "(missing-id)"
+        return f"references.{ref_id}.path uses a URI scheme that is not safe for all-agents vault render: {uri_scheme}"
+    candidate = _resolve_profile_path(raw_path, cfg)
+    allowed_roots = (Path(cfg.vault_dir), REPO_ROOT)
+    if any(_path_is_relative_to(candidate, root) for root in allowed_roots):
+        return ""
+    ref_id = str(reference.get("id") or "").strip() or "(missing-id)"
+    return f"references.{ref_id}.path for all-agents vault render must stay under <vault> or <repo>: {raw_path}"
 
 
 def _semantic_report(profile: dict[str, Any], cfg: Any | None = None) -> tuple[list[str], list[str]]:
@@ -354,33 +483,18 @@ def _semantic_report(profile: dict[str, Any], cfg: Any | None = None) -> tuple[l
             if str(ref_id) not in ref_ids:
                 warnings.append(f"teams.{team_id}.knowledge_refs references unknown reference: {ref_id}")
 
-    def resolve_profile_path(raw_path: str) -> Path:
-        raw_path = raw_path.strip()
-        if cfg is not None:
-            replacements = {
-                "<vault>": str(Path(cfg.vault_dir)),
-                "<priv>": str(Path(cfg.private_dir)),
-                "<private>": str(Path(cfg.private_dir)),
-                "<repo>": str(REPO_ROOT),
-            }
-            for marker, replacement in replacements.items():
-                if raw_path == marker:
-                    return Path(replacement)
-                if raw_path.startswith(marker + "/"):
-                    return Path(replacement) / raw_path[len(marker) + 1 :]
-        candidate = Path(raw_path)
-        if not candidate.is_absolute() and cfg is not None:
-            candidate = Path(cfg.vault_dir) / raw_path
-        return candidate
-
     for reference in references:
         if not isinstance(reference, dict):
             continue
         ref_id = str(reference.get("id") or "").strip()
         ref_type = str(reference.get("type") or "markdown").strip()
         raw_path = str(reference.get("path") or "").strip()
+        render_path_error = _reference_vault_render_path_error(reference, cfg)
+        if render_path_error:
+            errors.append(render_path_error)
+            continue
         if ref_type in {"markdown", "repo"} and raw_path and cfg is not None:
-            candidate = resolve_profile_path(raw_path)
+            candidate = _resolve_profile_path(raw_path, cfg)
             if not candidate.exists():
                 warnings.append(f"references.{ref_id}.path is not currently accessible: {raw_path}")
 
@@ -393,7 +507,7 @@ def _semantic_report(profile: dict[str, Any], cfg: Any | None = None) -> tuple[l
         expected_sha256 = str(source.get("expected_sha256") or "").strip()
         if not raw_path or cfg is None:
             continue
-        candidate = resolve_profile_path(raw_path)
+        candidate = _resolve_profile_path(raw_path, cfg)
         if not candidate.exists():
             warnings.append(f"agent_lineage.seed_sources.{source_id}.path is not currently accessible: {raw_path}")
             continue
@@ -781,6 +895,27 @@ def _display_source_path(source_path: Path) -> str:
     return str(source_path)
 
 
+def _display_reference_path(raw_path: str, cfg: Any | None = None) -> str:
+    raw_path = str(raw_path or "").strip()
+    if not raw_path:
+        return ""
+    uri_scheme = _reference_uri_scheme(raw_path)
+    if uri_scheme:
+        return raw_path if uri_scheme in ALLOWED_REFERENCE_URI_SCHEMES else "[path withheld]"
+    if cfg is None:
+        if Path(raw_path).is_absolute() or raw_path.startswith(("<priv>", "<private>")):
+            return "[path withheld]"
+        return raw_path
+    candidate = _resolve_profile_path(raw_path, cfg)
+    for label, root in (("<vault>", Path(cfg.vault_dir)), ("<repo>", REPO_ROOT)):
+        try:
+            relative = candidate.resolve().relative_to(root.resolve())
+        except (OSError, ValueError):
+            continue
+        return label if str(relative) == "." else f"{label}/{relative}"
+    return "[path withheld]"
+
+
 def _safe_join(values: object) -> str:
     parts = _strings(values)
     return ", ".join(parts) if parts else "-"
@@ -838,7 +973,7 @@ def _teams_by_id(profile: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
-def render_vault_profile(profile: dict[str, Any], *, source_path: Path | None = None) -> str:
+def render_vault_profile(profile: dict[str, Any], *, source_path: Path | None = None, cfg: Any | None = None) -> str:
     org = _organization(profile)
     checksum = profile_checksum(profile)
     lines: list[str] = [
@@ -1012,13 +1147,14 @@ def render_vault_profile(profile: dict[str, Any], *, source_path: Path | None = 
     references = [
         reference
         for reference in _as_list(profile.get("references"))
-        if isinstance(reference, dict) and str(reference.get("sensitivity") or "internal") != "restricted"
+        if isinstance(reference, dict) and _reference_visible_in_shared_vault(reference)
     ]
     if references:
         lines.extend(["## Supporting References", ""])
         for reference in references:
+            display_path = _display_reference_path(str(reference.get("path") or ""), cfg=cfg)
             lines.append(
-                f"- {reference.get('id')}: {reference.get('title')} ({reference.get('type') or 'other'}) - {reference.get('path')}"
+                f"- {reference.get('id')}: {reference.get('title')} ({reference.get('type') or 'other'}) - {display_path}"
             )
     lines.extend(
         [
@@ -2050,7 +2186,6 @@ def _replace_profile_rows(conn: sqlite3.Connection, profile: dict[str, Any], *, 
         """,
         (checksum, now),
     )
-    conn.commit()
 
 
 def _active_agent_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -2090,81 +2225,87 @@ def apply_profile(
             "warnings": validation["warnings"],
         }
     checksum = str(validation["checksum"])
-    _replace_profile_rows(conn, profile, source_path=source_path, checksum=checksum)
+    with _profile_apply_lock(cfg):
+        try:
+            _replace_profile_rows(conn, profile, source_path=source_path, checksum=checksum)
 
-    state_dir(cfg).mkdir(parents=True, exist_ok=True)
-    applied_body = json.dumps(
-        {
-            "revision": checksum,
-            "source_path": str(source_path),
-            "applied_at": utc_now_iso(),
-            "applied_by": actor,
-            "profile": profile,
-        },
-        indent=2,
-        sort_keys=True,
-    ) + "\n"
-    applied_changed = _atomic_write_text(applied_profile_path(cfg), applied_body, mode=0o600)
-
-    vault_path = _generated_vault_abs_path(cfg, profile)
-    vault_changed = _atomic_write_text(vault_path, render_vault_profile(profile, source_path=source_path), mode=0o644)
-
-    matched_agents: list[dict[str, Any]] = []
-    unmatched_agents: list[dict[str, Any]] = []
-    context_root = agent_context_dir(cfg)
-    context_root.mkdir(parents=True, exist_ok=True)
-    for row in _active_agent_rows(conn):
-        context = build_agent_context_for_row(profile, row)
-        agent_id = str(row["agent_id"] or "").strip()
-        if not context:
-            stale_path = context_root / f"{agent_id}.json"
-            stale_removed = False
-            if stale_path.exists():
-                stale_path.unlink()
-                stale_removed = True
-            unmatched_agents.append(
+            state_dir(cfg).mkdir(parents=True, exist_ok=True)
+            applied_body = json.dumps(
                 {
-                    "agent_id": agent_id,
-                    "unix_user": str(row["unix_user"] or ""),
-                    "context_path": str(stale_path),
-                    "stale_context_removed": stale_removed,
-                }
-            )
-            continue
-        context_body = json.dumps(context, indent=2, sort_keys=True) + "\n"
-        path = context_root / f"{agent_id}.json"
-        context_changed = _atomic_write_text(path, context_body, mode=0o644)
-        matched_agents.append(
-            {
-                "agent_id": agent_id,
-                "unix_user": str(row["unix_user"] or ""),
-                "person_id": str(context.get("person_id") or ""),
-                "context_path": str(path),
-                "context_changed": context_changed,
-            }
-        )
+                    "revision": checksum,
+                    "source_path": str(source_path),
+                    "applied_at": utc_now_iso(),
+                    "applied_by": actor,
+                    "profile": profile,
+                },
+                indent=2,
+                sort_keys=True,
+            ) + "\n"
+            applied_changed = _atomic_write_text(applied_profile_path(cfg), applied_body, mode=0o600)
 
-    report = {
-        "applied": True,
-        "source": str(source_path),
-        "revision": checksum,
-        "checksum": checksum,
-        "warnings": validation["warnings"],
-        "state_file": str(applied_profile_path(cfg)),
-        "state_changed": applied_changed,
-        "generated_vault_doc": str(vault_path),
-        "generated_vault_doc_changed": vault_changed,
-        "matched_agents": matched_agents,
-        "unmatched_active_agents": unmatched_agents,
-        "counts": {
-            "roles": len(profile.get("roles") or {}),
-            "people": len(_as_list(profile.get("people"))),
-            "teams": len(_as_list(profile.get("teams"))),
-            "relationships": len(_as_list(profile.get("relationships"))),
-        },
-    }
-    _atomic_write_text(last_apply_path(cfg), json.dumps(report, indent=2, sort_keys=True) + "\n", mode=0o600)
-    return report
+            vault_path = _generated_vault_abs_path(cfg, profile)
+            vault_changed = _atomic_write_text(vault_path, render_vault_profile(profile, source_path=source_path, cfg=cfg), mode=0o644)
+
+            matched_agents: list[dict[str, Any]] = []
+            unmatched_agents: list[dict[str, Any]] = []
+            context_root = agent_context_dir(cfg)
+            context_root.mkdir(parents=True, exist_ok=True)
+            for row in _active_agent_rows(conn):
+                context = build_agent_context_for_row(profile, row)
+                agent_id = str(row["agent_id"] or "").strip()
+                if not context:
+                    stale_path = context_root / f"{agent_id}.json"
+                    stale_removed = False
+                    if stale_path.exists():
+                        stale_path.unlink()
+                        stale_removed = True
+                    unmatched_agents.append(
+                        {
+                            "agent_id": agent_id,
+                            "unix_user": str(row["unix_user"] or ""),
+                            "context_path": str(stale_path),
+                            "stale_context_removed": stale_removed,
+                        }
+                    )
+                    continue
+                context_body = json.dumps(context, indent=2, sort_keys=True) + "\n"
+                path = context_root / f"{agent_id}.json"
+                context_changed = _atomic_write_text(path, context_body, mode=0o644)
+                matched_agents.append(
+                    {
+                        "agent_id": agent_id,
+                        "unix_user": str(row["unix_user"] or ""),
+                        "person_id": str(context.get("person_id") or ""),
+                        "context_path": str(path),
+                        "context_changed": context_changed,
+                    }
+                )
+
+            report = {
+                "applied": True,
+                "source": str(source_path),
+                "revision": checksum,
+                "checksum": checksum,
+                "warnings": validation["warnings"],
+                "state_file": str(applied_profile_path(cfg)),
+                "state_changed": applied_changed,
+                "generated_vault_doc": str(vault_path),
+                "generated_vault_doc_changed": vault_changed,
+                "matched_agents": matched_agents,
+                "unmatched_active_agents": unmatched_agents,
+                "counts": {
+                    "roles": len(profile.get("roles") or {}),
+                    "people": len(_as_list(profile.get("people"))),
+                    "teams": len(_as_list(profile.get("teams"))),
+                    "relationships": len(_as_list(profile.get("relationships"))),
+                },
+            }
+            _atomic_write_text(last_apply_path(cfg), json.dumps(report, indent=2, sort_keys=True) + "\n", mode=0o600)
+        except BaseException:
+            conn.rollback()
+            raise
+        conn.commit()
+        return report
 
 
 def doctor_profile(conn: sqlite3.Connection, cfg: Any, *, profile: dict[str, Any] | None = None) -> dict[str, Any]:

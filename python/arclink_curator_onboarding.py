@@ -216,7 +216,10 @@ def notify_operator_worker_failure(
     ]
     try:
         send_text(bot_token, operator_chat_id, "\n".join(lines))
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        compact_error = (str(exc).strip() or exc.__class__.__name__).replace("\n", " ")[:200]
+        sys.stderr.write(f"Curator onboarding could not notify operator about update failure: {compact_error}\n")
+        sys.stderr.flush()
         return
 
 
@@ -825,6 +828,14 @@ def _handle_operator_callback(
         # /upgrade_apply <single-use nonce>). They route through the same
         # Operator Raven dispatch gate as typed commands; the nonce is the
         # structured confirmation, so no extra typing is required.
+        if operator_raven_command_is_mutating(raw_command):
+            telegram_answer_callback_query(
+                bot_token=bot_token,
+                callback_query_id=callback_query_id,
+                text="Use the typed operator command with the approval code for this action.",
+                show_alert=True,
+            )
+            return
         actor = _format_actor_label({"from": sender})
         result: dict[str, Any] | None = None
         try:
@@ -972,7 +983,7 @@ def _handle_operator_callback(
                 replacement_text = (message_text + f"\n\n{result_text} ({actor})").strip() if message_text else result_text
             elif scope == "upgrade":
                 if action == "dismiss":
-                    upsert_setting(conn, "arclink_upgrade_last_dismissed_sha", target_id)
+                    upsert_setting(conn, "arclink_upgrade_last_notified_sha", target_id)
                     result_text = f"Dismissed ArcLink update notice for {target_id[:12]}."
                     replacement_text = (message_text + f"\n\nDismissed by {actor}.").strip()
                 elif action == "install" and one_tap_install:
@@ -994,6 +1005,8 @@ def _handle_operator_callback(
                         "or append your configured operator approval code."
                     )
                     replacement_text = (message_text + f"\n\n{result_text} ({actor})").strip()
+                else:
+                    raise ValueError(f"unknown upgrade action: {action}")
             elif scope == "pin-upgrade":
                 payload = get_pin_upgrade_action_payload(conn, target_id)
                 if payload is None:
@@ -1179,23 +1192,32 @@ def run_once(cfg: Config, bot_token: str, curator_bot_id: str, *, poll_timeout: 
             sys.stderr.flush()
             if not update_key:
                 break
-            with connect_db(cfg) as conn:
-                failure = record_onboarding_update_failure(conn, update_id=update_key, error=compact_error)
-                failure_count = int(failure.get("failure_count") or 1)
-                skipped = failure_count >= cfg.onboarding_update_failure_limit
-                if skipped:
-                    mark_onboarding_update_skipped(conn, update_key)
-                    upsert_setting(conn, OFFSET_SETTING_KEY, str(update_id + 1))
-                else:
-                    notify_operator_worker_failure(
-                        bot_token,
-                        cfg,
-                        update=update,
-                        failure_count=failure_count,
-                        error=compact_error,
-                        skipped=False,
-                    )
-                    break
+            try:
+                with connect_db(cfg) as conn:
+                    failure = record_onboarding_update_failure(conn, update_id=update_key, error=compact_error)
+                    failure_count = int(failure.get("failure_count") or 1)
+                    skipped = failure_count >= cfg.onboarding_update_failure_limit
+                    if skipped:
+                        mark_onboarding_update_skipped(conn, update_key)
+                        upsert_setting(conn, OFFSET_SETTING_KEY, str(update_id + 1))
+                    else:
+                        notify_operator_worker_failure(
+                            bot_token,
+                            cfg,
+                            update=update,
+                            failure_count=failure_count,
+                            error=compact_error,
+                            skipped=False,
+                        )
+                        break
+            except Exception as ledger_exc:  # noqa: BLE001
+                ledger_error = (str(ledger_exc).strip() or ledger_exc.__class__.__name__).replace("\n", " ")[:500]
+                sys.stderr.write(
+                    "Curator onboarding cannot persist its Telegram update failure ledger; "
+                    f"stopping instead of retrying update {update_key} silently: {ledger_error}\n"
+                )
+                sys.stderr.flush()
+                raise SystemExit(1) from ledger_exc
             if skipped:
                 notify_operator_worker_failure(
                     bot_token,

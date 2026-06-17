@@ -118,6 +118,8 @@ describe("Page content smoke checks", () => {
     assert.ok(content.includes("Fake adapters"), "missing fake adapter notice");
     assert.ok(content.includes("/checkout/success"), "missing checkout success redirect");
     assert.ok(content.includes("/checkout/cancel"), "missing checkout cancel redirect");
+    assert.ok(content.includes("safeNavigationHref"), "checkout href must pass through the navigation allowlist");
+    assert.ok(!content.includes("href={checkoutUrl}"), "checkout href must not render the raw server URL");
   });
 
   it("Onboarding preferred-channel copy stays honest about web identity", () => {
@@ -214,6 +216,9 @@ describe("Page content smoke checks", () => {
     assert.ok(content.includes("api.retryShareGrantNotification"), "dashboard should retry share notifications through the user API");
     assert.ok(content.includes("Retry Raven prompt"), "dashboard should label retry as Raven prompt queueing");
     assert.ok(content.includes("live bot delivery remains proof-gated"), "dashboard should not claim retry proves live bot delivery");
+    assert.ok(content.includes("safeNavigationHref"), "dashboard server-supplied hrefs must pass through the navigation allowlist");
+    assert.ok(!content.includes("href={setup.settings_url}"), "dashboard must not render raw backup settings URLs");
+    assert.ok(!content.includes("href={portalUrl}"), "dashboard must not render an unsanitized billing portal URL");
     assert.ok(!content.includes("Files (Nextcloud)"), "dashboard should not advertise legacy Nextcloud access");
     assert.ok(!content.includes("Code (code-server)"), "dashboard should not advertise legacy code-server access");
   });
@@ -239,6 +244,23 @@ describe("Page content smoke checks", () => {
     assert.ok(content.includes("PG-FLEET/PG-PROVISION"), "admin page should keep live worker proof gates visible");
     assert.ok(content.includes("PG-UPGRADE/PG-HERMES"), "admin page should keep rollout live proof gates visible");
     assert.ok(content.includes("ArcPod rollout jobs use local preflight"), "admin page should describe rollout jobs as local preflight gated");
+    assert.ok(content.includes("r.status === 403"), "admin page should distinguish CIDR allowlist denials from generic failures");
+    assert.ok(content.includes("allowlisted operator connection"), "admin 403 message should name the recovery condition");
+  });
+
+  it("Checkout success page allowlists deployment links", () => {
+    const content = readFileSync(resolve(ROOT, "src/app/checkout/success/page.tsx"), "utf-8");
+    assert.ok(content.includes("safeNavigationHref"), "success page deployment hrefs must pass through the navigation allowlist");
+    assert.ok(content.includes("deploymentHref(deployment)"), "success page should derive deployment readiness from sanitized hrefs");
+  });
+
+  it("Service worker does not pre-cache auth-gated shells", () => {
+    const content = readFileSync(resolve(ROOT, "public/sw.js"), "utf-8");
+    const assetBlock = content.match(/const STATIC_ASSETS = \[[\s\S]*?\];/);
+    assert.ok(assetBlock, "missing service worker static asset list");
+    assert.ok(!assetBlock[0].includes('"/dashboard"'), "dashboard shell must not be pre-cached");
+    assert.ok(!assetBlock[0].includes('"/admin"'), "admin shell must not be pre-cached");
+    assert.ok(content.includes('url.pathname.startsWith("/api/")'), "service worker must continue bypassing API requests");
   });
 
   it("No page claims live provisioning with fake adapters", () => {

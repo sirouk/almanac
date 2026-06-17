@@ -160,6 +160,7 @@ export default function AdminPage() {
     api.adminDashboard().then((r) => {
       if (r.status === 200) setData(r.data as AdminData);
       else if (r.status === 401) router.push("/login");
+      else if (r.status === 403) setError("Admin access is restricted from this network. Use an allowlisted operator connection.");
       else setError("Failed to load admin data.");
     }).catch(() => setError("Failed to load admin data.")).finally(() => setLoading(false));
   }, [router]);

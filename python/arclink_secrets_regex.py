@@ -46,6 +46,23 @@ PLAINTEXT_SECRET_RE = re.compile(
 _SECRET_REF_KEY_RE = re.compile(
     r"(?i)(^secret_refs?$|(?:^|_)(?:secret|token|api_key|apikey|password|credential)(?:_|$)|client_secret|webhook_secret)"
 )
+_SECRET_REF_EXEMPT_SUFFIXES = (
+    "_status",
+    "_state",
+    "_count",
+    "_counts",
+    "_estimate",
+    "_estimates",
+    "_tokens",
+    "_id",
+    "_ids",
+    "_kind",
+    "_type",
+    # content-addressed action hashes (e.g. pin_upgrade_action_token) are sha256[:16]
+    # routing handles, not credentials; the value-based contains_secret_material() check
+    # still runs, so a real secret stored under such a key would still be rejected.
+    "_action_token",
+)
 
 
 def is_secret_ref(value: Any) -> bool:
@@ -80,7 +97,14 @@ def _path_segments(path: str) -> list[str]:
 
 
 def path_requires_secret_ref(path: str) -> bool:
-    return any(_SECRET_REF_KEY_RE.search(segment) for segment in _path_segments(path))
+    for segment in _path_segments(path):
+        normalized = segment.lower()
+        if not _SECRET_REF_KEY_RE.search(normalized):
+            continue
+        if normalized.endswith(_SECRET_REF_EXEMPT_SUFFIXES):
+            continue
+        return True
+    return False
 
 
 def path_allows_compose_secret_source(path: str, value: Any) -> bool:

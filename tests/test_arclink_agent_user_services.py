@@ -16,6 +16,25 @@ def expect(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def write_fake_hermes_runtime(root: Path) -> tuple[Path, Path]:
+    runtime_dir = root / "runtime"
+    hermes_bin = runtime_dir / "hermes-venv" / "bin" / "hermes"
+    hermes_bin.parent.mkdir(parents=True, exist_ok=True)
+    hermes_bin.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    hermes_bin.chmod(0o755)
+    skills_dir = runtime_dir / "hermes-agent-src" / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    sync_script = runtime_dir / "hermes-agent-src" / "tools" / "skills_sync.py"
+    sync_script.parent.mkdir(parents=True, exist_ok=True)
+    sync_script.write_text(
+        "from pathlib import Path\n"
+        "import os\n"
+        "Path(os.environ['HERMES_HOME'], 'skills').mkdir(parents=True, exist_ok=True)\n",
+        encoding="utf-8",
+    )
+    return runtime_dir, hermes_bin
+
+
 def test_generated_activate_path_watches_trigger_file_and_parent_directory() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -28,9 +47,7 @@ def test_generated_activate_path_watches_trigger_file_and_parent_directory() -> 
         )
         (fakebin / "systemctl").chmod(0o755)
 
-        hermes_bin = root / "hermes"
-        hermes_bin.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-        hermes_bin.chmod(0o755)
+        _, hermes_bin = write_fake_hermes_runtime(root)
 
         home = root / "home"
         home.mkdir(parents=True, exist_ok=True)
@@ -216,6 +233,111 @@ def test_generated_web_service_units_follow_access_state() -> None:
         print("PASS test_generated_web_service_units_follow_access_state")
 
 
+def test_invalid_access_state_does_not_render_dashboard_units() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fakebin = root / "fakebin"
+        fakebin.mkdir(parents=True, exist_ok=True)
+        systemctl_log = root / "systemctl.log"
+        (fakebin / "systemctl").write_text(
+            "#!/usr/bin/env bash\n"
+            "printf '%s\\n' \"$*\" >> \"$SYSTEMCTL_LOG\"\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        (fakebin / "systemctl").chmod(0o755)
+
+        _, hermes_bin = write_fake_hermes_runtime(root)
+
+        home = root / "home"
+        hermes_home = home / ".local" / "share" / "arclink-agent" / "hermes-home"
+        state_dir = hermes_home / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "arclink-web-access.json").write_text(
+            json.dumps({"dashboard_url": "https://example.invalid"}),
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            [
+                str(SCRIPT),
+                "agent-test",
+                str(REPO),
+                str(hermes_home),
+                '["discord"]',
+                "",
+                str(hermes_bin),
+            ],
+            env={
+                **os.environ,
+                "HOME": str(home),
+                "PATH": f"{fakebin}:{os.environ.get('PATH', '')}",
+                "SYSTEMCTL_LOG": str(systemctl_log),
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        target_dir = home / ".config" / "systemd" / "user"
+        expect(result.returncode != 0, "invalid access state should fail closed")
+        expect("Invalid ArcLink dashboard access state" in result.stderr, result.stderr)
+        expect(not (target_dir / "arclink-user-agent-dashboard.service").exists(), "dashboard unit should not be rendered")
+        expect(not (target_dir / "arclink-user-agent-dashboard-proxy.service").exists(), "proxy unit should not be rendered")
+        expect(not systemctl_log.exists(), "systemctl should not be reached after invalid access state")
+        print("PASS test_invalid_access_state_does_not_render_dashboard_units")
+
+
+def test_systemd_unit_directive_injection_inputs_are_rejected() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fakebin = root / "fakebin"
+        fakebin.mkdir(parents=True, exist_ok=True)
+        systemctl_log = root / "systemctl.log"
+        (fakebin / "systemctl").write_text(
+            "#!/usr/bin/env bash\n"
+            "printf '%s\\n' \"$*\" >> \"$SYSTEMCTL_LOG\"\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        (fakebin / "systemctl").chmod(0o755)
+
+        _, hermes_bin = write_fake_hermes_runtime(root)
+
+        home = root / "home"
+        hermes_home = home / ".local" / "share" / "arclink-agent" / "hermes-home"
+        injected_agent_id = "agent-test\nExecStart=/tmp/injected"
+
+        result = subprocess.run(
+            [
+                str(SCRIPT),
+                injected_agent_id,
+                str(REPO),
+                str(hermes_home),
+                '["tui-only"]',
+                "",
+                str(hermes_bin),
+            ],
+            env={
+                **os.environ,
+                "HOME": str(home),
+                "PATH": f"{fakebin}:{os.environ.get('PATH', '')}",
+                "SYSTEMCTL_LOG": str(systemctl_log),
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        target_dir = home / ".config" / "systemd" / "user"
+        refresh_unit = target_dir / "arclink-user-agent-refresh.service"
+        expect(result.returncode != 0, "directive injection input should be rejected")
+        expect("Refusing to render systemd unit with control characters in AGENT_ID" in result.stderr, result.stderr)
+        expect(not refresh_unit.exists(), f"refresh unit should not be rendered: {refresh_unit}")
+        expect(not systemctl_log.exists(), "systemctl should not be reached after rejected render input")
+        print("PASS test_systemd_unit_directive_injection_inputs_are_rejected")
+
+
 def test_generated_backup_cron_job_follows_backup_state_file() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -230,9 +352,7 @@ def test_generated_backup_cron_job_follows_backup_state_file() -> None:
         )
         (fakebin / "systemctl").chmod(0o755)
 
-        hermes_bin = root / "hermes"
-        hermes_bin.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-        hermes_bin.chmod(0o755)
+        _, hermes_bin = write_fake_hermes_runtime(root)
 
         home = root / "home"
         hermes_home = home / ".local" / "share" / "arclink-agent" / "hermes-home"
@@ -315,9 +435,7 @@ def test_missing_native_hermes_gateway_units_do_not_abort_install() -> None:
         )
         (fakebin / "systemctl").chmod(0o755)
 
-        hermes_bin = root / "hermes"
-        hermes_bin.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-        hermes_bin.chmod(0o755)
+        _, hermes_bin = write_fake_hermes_runtime(root)
 
         home = root / "home"
         hermes_home = home / ".local" / "share" / "arclink-agent" / "hermes-home"
@@ -357,9 +475,11 @@ def test_missing_native_hermes_gateway_units_do_not_abort_install() -> None:
 def main() -> int:
     test_generated_activate_path_watches_trigger_file_and_parent_directory()
     test_generated_web_service_units_follow_access_state()
+    test_invalid_access_state_does_not_render_dashboard_units()
+    test_systemd_unit_directive_injection_inputs_are_rejected()
     test_generated_backup_cron_job_follows_backup_state_file()
     test_missing_native_hermes_gateway_units_do_not_abort_install()
-    print("PASS all 4 agent-user-services regression tests")
+    print("PASS all 6 agent-user-services regression tests")
     return 0
 
 

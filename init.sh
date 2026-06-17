@@ -10,8 +10,9 @@ fi
 
 MODE=""
 FORWARD_ARGS=()
-REPO_URL="${ARCLINK_INIT_REPO_URL:-https://github.com/example/arclink.git}"
-RAW_INIT_URL="${ARCLINK_INIT_RAW_URL:-https://raw.githubusercontent.com/example/arclink/main/init.sh}"
+REPO_URL="${ARCLINK_INIT_REPO_URL:-https://github.com/sirouk/arclink.git}"
+REPO_REF="${ARCLINK_INIT_REPO_REF:-${ARCLINK_UPSTREAM_BRANCH:-arclink}}"
+RAW_INIT_URL="${ARCLINK_INIT_RAW_URL:-https://raw.githubusercontent.com/sirouk/arclink/$REPO_REF/init.sh}"
 CACHE_DIR="${ARCLINK_INIT_CACHE_DIR:-$HOME/.cache/arclink-init}"
 REPO_DIR="$CACHE_DIR/repo"
 TARGET_HOST="${ARCLINK_TARGET_HOST:-}"
@@ -122,7 +123,7 @@ ensure_repo_cache() {
 
   mkdir -p "$CACHE_DIR"
   if [[ ! -d "$REPO_DIR/.git" ]]; then
-    git clone --depth 1 "$REPO_URL" "$REPO_DIR"
+    git clone --depth 1 --branch "$REPO_REF" "$REPO_URL" "$REPO_DIR"
   else
     git -C "$REPO_DIR" pull --ff-only
   fi
@@ -196,7 +197,7 @@ request_remote_enrollment() {
   fi
 
   bootstrap_url="$(remote_bootstrap_url)"
-  requester_identity="${ARCLINK_REQUESTER_IDENTITY:-$(id -un 2>/dev/null || printf "$TARGET_USER")}"
+  requester_identity="${ARCLINK_REQUESTER_IDENTITY:-$(id -un 2>/dev/null || printf '%s' "$TARGET_USER")}"
 
   request_json="$(
     ARCLINK_REMOTE_BOOTSTRAP_URL="$bootstrap_url" \

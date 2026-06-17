@@ -78,6 +78,8 @@ def deliver_discord_channel(
     bot_token: str,
     channel_id: str,
     components: list[dict[str, Any]] | None = None,
+    embeds: list[dict[str, Any]] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> str | None:
     if not bot_token:
         return "DISCORD_BOT_TOKEN is not configured"
@@ -86,7 +88,17 @@ def deliver_discord_channel(
     if not channel_id.isdigit():
         return f"discord channel_id must be numeric, got {channel_id[:60]!r}"
     try:
-        discord_send_message(bot_token=bot_token, channel_id=channel_id, text=message, components=components)
+        kwargs: dict[str, Any] = {
+            "bot_token": bot_token,
+            "channel_id": channel_id,
+            "text": message,
+            "components": components,
+        }
+        if embeds is not None:
+            kwargs["embeds"] = embeds
+        if attachments is not None:
+            kwargs["attachments"] = attachments
+        discord_send_message(**kwargs)
     except Exception as exc:  # noqa: BLE001
         return str(exc).strip() or "unknown discord delivery error"
     return None
@@ -98,6 +110,8 @@ def deliver_discord_user(
     bot_token: str,
     user_id: str,
     components: list[dict[str, Any]] | None = None,
+    embeds: list[dict[str, Any]] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> str | None:
     if not bot_token:
         return "DISCORD_BOT_TOKEN is not configured"
@@ -110,10 +124,31 @@ def deliver_discord_user(
         channel_id = str(dm.get("id") or "").strip()
         if not channel_id:
             return "discord DM channel response did not include an id"
-        discord_send_message(bot_token=bot_token, channel_id=channel_id, text=message, components=components)
+        kwargs = {
+            "bot_token": bot_token,
+            "channel_id": channel_id,
+            "text": message,
+            "components": components,
+        }
+        if embeds is not None:
+            kwargs["embeds"] = embeds
+        if attachments is not None:
+            kwargs["attachments"] = attachments
+        discord_send_message(**kwargs)
     except Exception as exc:  # noqa: BLE001
         return str(exc).strip() or "unknown discord user delivery error"
     return None
+
+
+def _discord_payload_list(extra: dict[str, Any], key: str) -> list[dict[str, Any]] | None:
+    value = extra.get(key)
+    if not isinstance(value, list):
+        return None
+    safe: list[dict[str, Any]] = []
+    for item in value[:10]:
+        if isinstance(item, dict):
+            safe.append(dict(item))
+    return safe or None
 
 
 def deliver_telegram(
@@ -491,12 +526,24 @@ def _validate_public_agent_bridge_cmd(cmd: list[str], *, project_name: str = "")
         container_name = parts[3].strip()
         if not PUBLIC_AGENT_BRIDGE_CONTAINER_RE.fullmatch(container_name):
             return False, "", "public Agent bridge container name is not allowlisted"
-        if "hermes-gateway" not in container_name:
-            return False, "", "public Agent bridge may only exec the hermes-gateway service"
-        if expected_project and not (
-            container_name.startswith(f"{expected_project}-") or container_name.startswith(f"{expected_project}_")
+        service_suffix = container_name
+        if expected_project:
+            service_suffix = ""
+            for separator in ("-", "_"):
+                prefix = f"{expected_project}{separator}"
+                if container_name.startswith(prefix):
+                    service_suffix = container_name[len(prefix):]
+                    break
+            if not service_suffix:
+                return False, "", "public Agent bridge container does not match the deployment project"
+        allowed_services = ("hermes-gateway", "operator-hermes-gateway", "control-operator-hermes-gateway")
+        if not any(
+            service_suffix == service
+            or service_suffix.startswith(f"{service}-")
+            or service_suffix.startswith(f"{service}_")
+            for service in allowed_services
         ):
-            return False, "", "public Agent bridge container does not match the deployment project"
+            return False, "", "public Agent bridge may only exec the hermes-gateway service"
         return True, "docker-exec-hermes-gateway", ""
 
     if (
@@ -689,6 +736,7 @@ def _public_agent_gateway_payload(
             "telegram_update_json",
             "telegram_update_json_list",
             "telegram_native_callback",
+            "telegram_callback_family",
         ):
             value = extra.get(key)
             if value not in (None, ""):
@@ -957,6 +1005,50 @@ def _public_agent_bridge_job_dir() -> Path:
     return _public_agent_bridge_log_path().parent / "public-agent-bridge-jobs"
 
 
+def _strip_public_agent_bridge_payload_secrets(payload: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    clean = dict(payload)
+    if "bot_token" not in clean:
+        return clean, False
+    clean.pop("bot_token", None)
+    return clean, True
+
+
+def _hydrate_public_agent_bridge_payload_secret(payload: dict[str, Any], *, required: bool) -> dict[str, Any]:
+    clean = dict(payload)
+    if not required or str(clean.get("bot_token") or "").strip():
+        return clean
+    platform = str(clean.get("platform") or "").strip().lower()
+    env_name = {
+        "telegram": "TELEGRAM_BOT_TOKEN",
+        "discord": "DISCORD_BOT_TOKEN",
+    }.get(platform)
+    if not env_name:
+        raise RuntimeError("public Agent bridge job cannot resolve the bot token for this platform")
+    token = config_env_value(env_name, "").strip()
+    if not token:
+        raise RuntimeError(f"{env_name} is not configured for Hermes public gateway bridge")
+    clean["bot_token"] = token
+    return clean
+
+
+def _strip_gateway_exec_request_secrets(request_body: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    clean = dict(request_body)
+    payload = clean.get("payload")
+    if not isinstance(payload, dict):
+        return clean, False
+    clean_payload, requires_runtime_secret = _strip_public_agent_bridge_payload_secrets(payload)
+    clean["payload"] = clean_payload
+    return clean, requires_runtime_secret
+
+
+def _hydrate_gateway_exec_request_secret(request_body: dict[str, Any], *, required: bool) -> dict[str, Any]:
+    clean = dict(request_body)
+    payload = clean.get("payload")
+    if isinstance(payload, dict):
+        clean["payload"] = _hydrate_public_agent_bridge_payload_secret(payload, required=required)
+    return clean
+
+
 def _write_public_agent_bridge_job(
     *,
     notification_id: int,
@@ -970,10 +1062,12 @@ def _write_public_agent_bridge_job(
         if not isinstance(gateway_exec_request, dict):
             raise ValueError("gateway exec broker request must be a JSON object")
         command_kind = "gateway-exec-broker-request"
+        clean_request, requires_runtime_secret = _strip_gateway_exec_request_secrets(gateway_exec_request)
         body = {
             "notification_id": int(notification_id),
             "command_kind": command_kind,
-            "gateway_exec_request": gateway_exec_request,
+            "gateway_exec_request": clean_request,
+            "gateway_exec_request_requires_runtime_secret": requires_runtime_secret,
             "timeout_seconds": _public_agent_bridge_max_seconds(),
         }
     else:
@@ -981,12 +1075,14 @@ def _write_public_agent_bridge_job(
         valid, command_kind, reason = _validate_public_agent_bridge_cmd(clean_cmd, project_name=project_name)
         if not valid:
             raise ValueError(reason)
+        clean_payload, requires_runtime_secret = _strip_public_agent_bridge_payload_secrets(payload or {})
         body = {
             "notification_id": int(notification_id),
             "cmd": clean_cmd,
             "command_kind": command_kind,
             "project_name": str(project_name or "").strip(),
-            "payload": payload or {},
+            "payload": clean_payload,
+            "payload_requires_runtime_secret": requires_runtime_secret,
             "timeout_seconds": _public_agent_bridge_max_seconds(),
         }
     job_dir = _public_agent_bridge_job_dir()
@@ -1016,6 +1112,13 @@ def _load_public_agent_bridge_job(job_path: Path) -> dict[str, Any]:
     return body
 
 
+def _unlink_public_agent_bridge_job(job_path: Path) -> None:
+    try:
+        job_path.unlink()
+    except OSError:
+        pass
+
+
 def _append_public_agent_bridge_log(message: str) -> None:
     try:
         log_path = _public_agent_bridge_log_path()
@@ -1033,7 +1136,16 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
         cmd = [str(part) for part in job.get("cmd") or []]
         project_name = str(job.get("project_name") or "").strip()
         payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+        payload = _hydrate_public_agent_bridge_payload_secret(
+            payload,
+            required=job.get("payload_requires_runtime_secret") is True,
+        )
         gateway_exec_request = job.get("gateway_exec_request") if isinstance(job.get("gateway_exec_request"), dict) else None
+        if gateway_exec_request is not None:
+            gateway_exec_request = _hydrate_gateway_exec_request_secret(
+                gateway_exec_request,
+                required=job.get("gateway_exec_request_requires_runtime_secret") is True,
+            )
         timeout_seconds = int(job.get("timeout_seconds") or _public_agent_bridge_max_seconds())
         if notification_id <= 0:
             raise RuntimeError("public Agent bridge job is missing notification_id")
@@ -1209,8 +1321,10 @@ def _spawn_public_agent_gateway_bridge(
                     return True, ""
                 if returncode == 0:
                     return True, ""
+                _unlink_public_agent_bridge_job(job_path)
                 return False, f"Hermes public gateway bridge worker exited immediately with status {returncode}; see {log_path}"
         except OSError as exc:
+            _unlink_public_agent_bridge_job(job_path)
             return False, f"could not start Hermes public gateway bridge worker: {str(exc)[:180]}"
 
     log_path = _public_agent_bridge_log_path()
@@ -1348,6 +1462,8 @@ def _deliver_public_bot_user(
         discord_components = extra.get("discord_components")
         if not isinstance(discord_components, list):
             discord_components = None
+        discord_embeds = _discord_payload_list(extra, "discord_embeds")
+        discord_attachments = _discord_payload_list(extra, "discord_attachments")
         ref: dict[str, str] = {}
         if session_id and conn is not None:
             ref = _provisioning_message_ref(conn, session_id=session_id, channel="discord")
@@ -1361,6 +1477,8 @@ def _deliver_public_bot_user(
                     message_id=edit_message_id,
                     text=message,
                     components=discord_components,
+                    embeds=discord_embeds,
+                    attachments=discord_attachments,
                 )
                 return None
             except Exception as exc:  # noqa: BLE001 - fall back to a fresh ready hub.
@@ -1371,7 +1489,17 @@ def _deliver_public_bot_user(
             channel_id = str(dm.get("id") or "").strip()
             if not channel_id:
                 return "discord DM channel response did not include an id"
-            sent = discord_send_message(bot_token=bot_token, channel_id=channel_id, text=message, components=discord_components)
+            send_kwargs: dict[str, Any] = {
+                "bot_token": bot_token,
+                "channel_id": channel_id,
+                "text": message,
+                "components": discord_components,
+            }
+            if discord_embeds is not None:
+                send_kwargs["embeds"] = discord_embeds
+            if discord_attachments is not None:
+                send_kwargs["attachments"] = discord_attachments
+            sent = discord_send_message(**send_kwargs)
             if capture and session_id and conn is not None:
                 _store_provisioning_message_ref(
                     conn,
@@ -1675,6 +1803,9 @@ def run_public_agent_turns_once(
     clean_target = str(target_id or "").strip()
     where = ["delivered_at IS NULL", "target_kind = 'public-agent-turn'"]
     params: list[Any] = []
+    now_iso = utc_now_iso()
+    where.append("(next_attempt_at IS NULL OR next_attempt_at = '' OR next_attempt_at <= ?)")
+    params.append(now_iso)
     if clean_channel:
         where.append("channel_kind = ?")
         params.append(clean_channel)
@@ -1746,6 +1877,8 @@ def deliver_row(cfg: Config, row: dict[str, Any], conn: Any | None = None) -> st
             discord_components = extra.get("discord_components")
             if not isinstance(discord_components, list):
                 discord_components = None
+            discord_embeds = _discord_payload_list(extra, "discord_embeds")
+            discord_attachments = _discord_payload_list(extra, "discord_attachments")
             if target_kind == "webhook":
                 return deliver_discord(row["message"], webhook_url=target_value)
             if target_kind == "channel":
@@ -1754,6 +1887,8 @@ def deliver_row(cfg: Config, row: dict[str, Any], conn: Any | None = None) -> st
                     bot_token=_resolve_curator_discord_bot_token(cfg),
                     channel_id=target_value,
                     components=discord_components,
+                    embeds=discord_embeds,
+                    attachments=discord_attachments,
                 )
             return "discord target is not configured"
         if platform == "telegram":

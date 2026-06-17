@@ -1331,6 +1331,12 @@ github_owner_repo_from_remote() {
 github_repo_visibility() {
   local owner_repo="${1:-}"
   local api_base="${GITHUB_API_BASE:-${BACKUP_GIT_GITHUB_API_BASE:-https://api.github.com}}"
+  local clean_api_base="${api_base%/}"
+
+  if [[ "$clean_api_base" != "https://api.github.com" && "${ARCLINK_BACKUP_ALLOW_TEST_GITHUB_API_BASE:-0}" != "1" ]]; then
+    printf '%s\n' "error:untrusted-api-base"
+    return 0
+  fi
 
   python3 - "$api_base" "$owner_repo" <<'PY'
 from __future__ import annotations
@@ -1374,6 +1380,18 @@ backup_github_owner_repo_from_remote() {
   github_owner_repo_from_remote "${1:-}"
 }
 
+verify_backup_git_remote_read_access() {
+  local remote="${1:-$BACKUP_GIT_REMOTE}"
+  local output=""
+
+  [[ -n "$remote" ]] || return 0
+  if ! output="$(git ls-remote "$remote" HEAD 2>&1)"; then
+    echo "$output" >&2
+    return 1
+  fi
+  return 0
+}
+
 require_private_github_backup_remote() {
   local remote="${1:-$BACKUP_GIT_REMOTE}"
   local owner_repo="" visibility=""
@@ -1394,6 +1412,12 @@ require_private_github_backup_remote() {
   if [[ "$visibility" == error:* || "$visibility" == "unsupported" ]]; then
     echo "Could not verify GitHub visibility for $owner_repo ($visibility)." >&2
     return 1
+  fi
+  if [[ "$visibility" == "non-public-or-missing" ]]; then
+    if ! verify_backup_git_remote_read_access "$remote"; then
+      echo "Could not verify private GitHub backup remote access for $owner_repo." >&2
+      return 1
+    fi
   fi
 }
 
@@ -1438,11 +1462,6 @@ ensure_backup_git_known_hosts() {
     return 1
   fi
 
-  if ! command -v ssh-keyscan >/dev/null 2>&1; then
-    echo "ssh-keyscan is required to prepare backup Git SSH host keys." >&2
-    return 1
-  fi
-
   mkdir -p "$(dirname "$BACKUP_GIT_KNOWN_HOSTS_FILE")"
   touch "$BACKUP_GIT_KNOWN_HOSTS_FILE"
   chmod 600 "$BACKUP_GIT_KNOWN_HOSTS_FILE"
@@ -1452,7 +1471,33 @@ ensure_backup_git_known_hosts() {
     return 0
   fi
 
-  ssh-keyscan -H "$host" >>"$BACKUP_GIT_KNOWN_HOSTS_FILE" 2>/dev/null
+  if [[ "$host" == "github.com" ]]; then
+    cat >>"$BACKUP_GIT_KNOWN_HOSTS_FILE" <<'EOF'
+github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
+EOF
+    if command -v ssh-keygen >/dev/null 2>&1 && \
+      ssh-keygen -F "$host" -f "$BACKUP_GIT_KNOWN_HOSTS_FILE" >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+
+  if [[ "${ARCLINK_BACKUP_ALLOW_SSH_KEYSCAN_TOFU:-0}" == "1" ]]; then
+    if ! command -v ssh-keyscan >/dev/null 2>&1; then
+      echo "ssh-keyscan is required to prepare backup Git SSH host keys." >&2
+      return 1
+    fi
+    ssh-keyscan -H "$host" >>"$BACKUP_GIT_KNOWN_HOSTS_FILE" 2>/dev/null || return 1
+    if command -v ssh-keygen >/dev/null 2>&1 && \
+      ssh-keygen -F "$host" -f "$BACKUP_GIT_KNOWN_HOSTS_FILE" >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+
+  echo "Backup Git SSH host key for $host is not trusted in $BACKUP_GIT_KNOWN_HOSTS_FILE." >&2
+  echo "Preload a verified known_hosts entry before running backups." >&2
+  return 1
 }
 
 prepare_backup_git_transport() {
@@ -1473,7 +1518,7 @@ prepare_backup_git_transport() {
     return 1
   fi
 
-  ensure_backup_git_known_hosts "$remote"
+  ensure_backup_git_known_hosts "$remote" || return 1
   chmod 600 "$BACKUP_GIT_DEPLOY_KEY_PATH" >/dev/null 2>&1 || true
   if [[ -f "${BACKUP_GIT_DEPLOY_KEY_PATH}.pub" ]]; then
     chmod 644 "${BACKUP_GIT_DEPLOY_KEY_PATH}.pub" >/dev/null 2>&1 || true
@@ -1556,16 +1601,16 @@ run_compose() {
 
 with_nextcloud_compose_env() {
   # Container image+tag pins for the three services in the compose file are
-  # read from config/pins.json (postgres, redis, nextcloud). Env-var overrides
-  # still win, and a hard-coded fallback covers partially-bootstrapped hosts
-  # where jq/pins.sh isn't yet available.
+  # read from config/pins.json (postgres, redis, nextcloud). Existing env values
+  # are degraded-path fallbacks only when jq/pins.sh or the pins file is not yet
+  # available, matching the Hermes runtime pin precedence above.
   local _postgres_image _postgres_tag _redis_image _redis_tag _nextcloud_image _nextcloud_tag
-  _postgres_image="$(__pins_get_or_default postgres image docker.io/library/postgres)"
-  _postgres_tag="$(__pins_get_or_default postgres tag 16-alpine)"
-  _redis_image="$(__pins_get_or_default redis image docker.io/library/redis)"
-  _redis_tag="$(__pins_get_or_default redis tag 7-alpine)"
-  _nextcloud_image="$(__pins_get_or_default nextcloud image docker.io/library/nextcloud)"
-  _nextcloud_tag="$(__pins_get_or_default nextcloud tag 31-apache)"
+  _postgres_image="$(__pins_get_or_default postgres image "${ARCLINK_POSTGRES_IMAGE:-docker.io/library/postgres}")"
+  _postgres_tag="$(__pins_get_or_default postgres tag "${ARCLINK_POSTGRES_TAG:-16-alpine}")"
+  _redis_image="$(__pins_get_or_default redis image "${ARCLINK_REDIS_IMAGE:-docker.io/library/redis}")"
+  _redis_tag="$(__pins_get_or_default redis tag "${ARCLINK_REDIS_TAG:-7-alpine}")"
+  _nextcloud_image="$(__pins_get_or_default nextcloud image "${ARCLINK_NEXTCLOUD_IMAGE:-docker.io/library/nextcloud}")"
+  _nextcloud_tag="$(__pins_get_or_default nextcloud tag "${ARCLINK_NEXTCLOUD_TAG:-31-apache}")"
   (
     export NEXTCLOUD_PORT NEXTCLOUD_TRUSTED_DOMAIN
     export POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD
@@ -1574,12 +1619,12 @@ with_nextcloud_compose_env() {
     export NEXTCLOUD_CUSTOM_CONFIG_DIR NEXTCLOUD_EMPTY_SKELETON_DIR NEXTCLOUD_ARCLINK_CONFIG_FILE
     export NEXTCLOUD_HOOKS_DIR NEXTCLOUD_PRE_INSTALL_HOOK_DIR NEXTCLOUD_POST_INSTALL_HOOK_DIR NEXTCLOUD_BEFORE_STARTING_HOOK_DIR
     export NEXTCLOUD_PRE_INSTALL_HOOK_FILE NEXTCLOUD_POST_INSTALL_HOOK_FILE NEXTCLOUD_BEFORE_STARTING_HOOK_FILE VAULT_DIR
-    export ARCLINK_POSTGRES_IMAGE="${ARCLINK_POSTGRES_IMAGE:-$_postgres_image}"
-    export ARCLINK_POSTGRES_TAG="${ARCLINK_POSTGRES_TAG:-$_postgres_tag}"
-    export ARCLINK_REDIS_IMAGE="${ARCLINK_REDIS_IMAGE:-$_redis_image}"
-    export ARCLINK_REDIS_TAG="${ARCLINK_REDIS_TAG:-$_redis_tag}"
-    export ARCLINK_NEXTCLOUD_IMAGE="${ARCLINK_NEXTCLOUD_IMAGE:-$_nextcloud_image}"
-    export ARCLINK_NEXTCLOUD_TAG="${ARCLINK_NEXTCLOUD_TAG:-$_nextcloud_tag}"
+    export ARCLINK_POSTGRES_IMAGE="$_postgres_image"
+    export ARCLINK_POSTGRES_TAG="$_postgres_tag"
+    export ARCLINK_REDIS_IMAGE="$_redis_image"
+    export ARCLINK_REDIS_TAG="$_redis_tag"
+    export ARCLINK_NEXTCLOUD_IMAGE="$_nextcloud_image"
+    export ARCLINK_NEXTCLOUD_TAG="$_nextcloud_tag"
     "$@"
   )
 }

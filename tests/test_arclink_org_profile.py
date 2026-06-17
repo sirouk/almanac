@@ -506,6 +506,99 @@ def test_generated_vault_render_path_is_vault_relative_and_source_display_saniti
     print("PASS test_generated_vault_render_path_is_vault_relative_and_source_display_sanitized")
 
 
+def test_org_profile_secret_scan_blocks_known_bypasses() -> None:
+    org_profile = load_module(REPO / "python" / "arclink_org_profile.py", "arclink_org_profile_secret_scan_test")
+    cpk_errors = org_profile._secret_scan_errors({"api_key": "cpk_ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"})
+    expect(any("secret-bearing field" in error for error in cpk_errors), cpk_errors)
+
+    key_errors = org_profile._secret_scan_errors({"ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456": "note"})
+    expect(any("mapping key looks like a GitHub token" in error for error in key_errors), key_errors)
+
+    passphrase_errors = org_profile._secret_scan_errors({"passphrase": "Tq9xZ2mWv7Lp0Rb4Kn8Yc3Fd6Hj1Gs5"})
+    expect(any("secret-bearing field" in error for error in passphrase_errors), passphrase_errors)
+
+    entropy_errors = org_profile._secret_scan_errors({"notes": "Tq9xZ2mWv7Lp0Rb4Kn8Yc3Fd6Hj1Gs5"})
+    expect(any("high-entropy secret" in error for error in entropy_errors), entropy_errors)
+
+    checksum_errors = org_profile._secret_scan_errors({"expected_sha256": "a" * 64})
+    expect(checksum_errors == [], checksum_errors)
+    print("PASS test_org_profile_secret_scan_blocks_known_bypasses")
+
+
+def test_reference_audience_and_path_containment_for_shared_vault_render() -> None:
+    org_profile = load_module(REPO / "python" / "arclink_org_profile.py", "arclink_org_profile_reference_render_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        cfg = SimpleNamespace(vault_dir=root / "vault", private_dir=root / "priv", state_dir=root / "state")
+        profile = {
+            "version": 1,
+            "organization": {
+                "id": "example",
+                "name": "Example",
+                "profile_kind": "organization",
+                "mission": "Operate.",
+            },
+            "roles": {"operator": {"description": "Operator"}},
+            "people": [
+                {
+                    "id": "alex",
+                    "display_name": "Alex",
+                    "role": "operator",
+                    "unix_user": "alex",
+                    "agent": {"name": "Atlas", "purpose": "Assist Alex."},
+                }
+            ],
+            "references": [
+                {
+                    "id": "handbook",
+                    "title": "Shared Handbook",
+                    "type": "markdown",
+                    "path": "Docs/handbook.md",
+                    "audience": "all_agents",
+                    "sensitivity": "internal",
+                },
+                {
+                    "id": "team-packet",
+                    "title": "Team Packet",
+                    "type": "markdown",
+                    "path": "/etc/passwd",
+                    "audience": "team_only",
+                    "sensitivity": "internal",
+                },
+                {
+                    "id": "notion-board",
+                    "title": "Shared Notion Board",
+                    "type": "notion",
+                    "path": "notion://Example/Board",
+                    "audience": "all_agents",
+                    "sensitivity": "internal",
+                },
+            ],
+        }
+        validation = org_profile.validate_profile(profile, cfg)
+        expect(validation["valid"], validation)
+        rendered = org_profile.render_vault_profile(profile, cfg=cfg)
+        expect("Shared Handbook" in rendered, rendered)
+        expect("<vault>/Docs/handbook.md" in rendered, rendered)
+        expect("Shared Notion Board" in rendered, rendered)
+        expect("notion://Example/Board" in rendered, rendered)
+        expect("Team Packet" not in rendered, rendered)
+        expect("/etc/passwd" not in rendered, rendered)
+
+        bad_profile = json.loads(json.dumps(profile))
+        bad_profile["references"][0]["path"] = "/etc/passwd"
+        bad_validation = org_profile.validate_profile(bad_profile, cfg)
+        expect(not bad_validation["valid"], bad_validation)
+        expect(any("must stay under <vault> or <repo>" in error for error in bad_validation["errors"]), bad_validation)
+
+        bad_uri_profile = json.loads(json.dumps(profile))
+        bad_uri_profile["references"][0]["path"] = "file:///etc/passwd"
+        bad_uri_validation = org_profile.validate_profile(bad_uri_profile, cfg)
+        expect(not bad_uri_validation["valid"], bad_uri_validation)
+        expect(any("URI scheme" in error for error in bad_uri_validation["errors"]), bad_uri_validation)
+    print("PASS test_reference_audience_and_path_containment_for_shared_vault_render")
+
+
 def test_org_profile_rejects_ambiguous_identity_match_tokens() -> None:
     org_profile = load_module(REPO / "python" / "arclink_org_profile.py", "arclink_org_profile_duplicate_identity_test")
     profile = {
@@ -550,7 +643,7 @@ def test_org_profile_shared_vault_render_omits_people_when_policy_is_group_visib
     print("PASS test_org_profile_shared_vault_render_omits_people_when_policy_is_group_visible")
 
 
-def test_managed_memory_preserves_durable_org_profile_overlay_when_unmatched() -> None:
+def test_managed_memory_clears_durable_org_profile_overlay_when_context_empty() -> None:
     control = load_module(REPO / "python" / "arclink_control.py", "arclink_control_clear_org_profile_test")
     org_profile = load_module(REPO / "python" / "arclink_org_profile.py", "arclink_org_profile_clear_overlay_test")
     with tempfile.TemporaryDirectory() as tmp:
@@ -584,14 +677,82 @@ def test_managed_memory_preserves_durable_org_profile_overlay_when_unmatched() -
         }
         paths = control.write_managed_memory_stubs(hermes_home=hermes_home, payload=payload)
         expect(paths["changed"], paths)
+        expect(paths["org_profile_context_removed"], paths)
         state_payload = json.loads((hermes_home / "state" / "arclink-vault-reconciler.json").read_text(encoding="utf-8"))
         expect(state_payload["org_profile_agent_context"] == {}, state_payload)
-        expect((hermes_home / "state" / "arclink-org-profile-context.json").exists(), paths)
+        expect(not (hermes_home / "state" / "arclink-org-profile-context.json").exists(), paths)
         identity = json.loads((hermes_home / "state" / "arclink-identity-context.json").read_text(encoding="utf-8"))
-        expect(identity["person_id"] == "alex", identity)
+        expect("person_id" not in identity, identity)
         soul = (hermes_home / "SOUL.md").read_text(encoding="utf-8")
-        expect("ArcLink operating-profile overlay" in soul, soul)
-    print("PASS test_managed_memory_preserves_durable_org_profile_overlay_when_unmatched")
+        expect("ArcLink operating-profile overlay" not in soul, soul)
+    print("PASS test_managed_memory_clears_durable_org_profile_overlay_when_context_empty")
+
+
+def test_apply_profile_rolls_back_db_revision_when_file_fanout_fails() -> None:
+    control = load_module(REPO / "python" / "arclink_control.py", "arclink_control_org_profile_rollback_test")
+    org_profile = load_module(REPO / "python" / "arclink_org_profile.py", "arclink_org_profile_rollback_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        vault_file = root / "vault-is-file"
+        vault_file.write_text("not a directory", encoding="utf-8")
+        config_path = root / "config" / "arclink.env"
+        write_config(
+            config_path,
+            {
+                "ARCLINK_USER": "arclink",
+                "ARCLINK_HOME": str(root / "home-arclink"),
+                "ARCLINK_REPO_DIR": str(REPO),
+                "ARCLINK_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(vault_file),
+                "ARCLINK_DB_PATH": str(root / "state" / "arclink-control.sqlite3"),
+                "ARCLINK_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ARCLINK_CURATOR_DIR": str(root / "state" / "curator"),
+                "ARCLINK_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ARCLINK_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ARCLINK_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ARCLINK_RELEASE_STATE_FILE": str(root / "state" / "arclink-release.json"),
+            },
+        )
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            profile = {
+                "version": 1,
+                "organization": {
+                    "id": "example",
+                    "name": "Example",
+                    "profile_kind": "organization",
+                    "mission": "Operate.",
+                },
+                "roles": {"operator": {"description": "Operator"}},
+                "people": [
+                    {
+                        "id": "alex",
+                        "display_name": "Alex",
+                        "role": "operator",
+                        "unix_user": "alex",
+                        "agent": {"name": "Atlas", "purpose": "Assist Alex."},
+                    }
+                ],
+            }
+            validation = org_profile.validate_profile(profile, cfg)
+            expect(validation["valid"], validation)
+            try:
+                org_profile.apply_profile(conn, cfg, profile=profile, source_path=root / "org-profile.yaml", actor="test")
+            except OSError:
+                pass
+            else:
+                raise AssertionError("expected vault file fan-out failure")
+            revision = conn.execute("SELECT value FROM settings WHERE key = 'org_profile_revision'").fetchone()
+            expect(revision is None, revision)
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+    print("PASS test_apply_profile_rolls_back_db_revision_when_file_fanout_fails")
 
 
 def main() -> int:
@@ -602,10 +763,13 @@ def main() -> int:
     test_agent_identity_rejects_duplicate_org_profile_person_links()
     test_builder_starter_profile_covers_operational_rails()
     test_generated_vault_render_path_is_vault_relative_and_source_display_sanitized()
+    test_org_profile_secret_scan_blocks_known_bypasses()
+    test_reference_audience_and_path_containment_for_shared_vault_render()
     test_org_profile_rejects_ambiguous_identity_match_tokens()
     test_org_profile_shared_vault_render_omits_people_when_policy_is_group_visible()
-    test_managed_memory_preserves_durable_org_profile_overlay_when_unmatched()
-    print("PASS all 10 org-profile tests")
+    test_managed_memory_clears_durable_org_profile_overlay_when_context_empty()
+    test_apply_profile_rolls_back_db_revision_when_file_fanout_fails()
+    print("PASS all 13 org-profile tests")
     return 0
 
 

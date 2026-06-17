@@ -464,6 +464,11 @@ def _render_env_for_host(
     return render_env
 
 
+def _deployment_is_operator_control_stack(deployment: Mapping[str, Any]) -> bool:
+    metadata = json_loads_safe(str(deployment.get("metadata_json") or "{}"))
+    return isinstance(metadata, Mapping) and metadata.get("operator_agent") is True
+
+
 def process_sovereign_batch(
     conn: sqlite3.Connection,
     *,
@@ -547,6 +552,8 @@ def process_sovereign_batch(
         process_sovereign_teardown(conn, deployment=dict(row), worker=worker, executor=executor)
         for row in teardown_rows
     ]
+    apply_limit = max(1, int(worker.batch_size))
+    candidate_limit = max(apply_limit + 5, apply_limit * 2)
     rows = conn.execute(
         """
         SELECT d.*
@@ -562,15 +569,19 @@ def process_sovereign_batch(
                AND COALESCE(j.attempt_count, 0) < ?
              )
            )
-          AND COALESCE(d.metadata_json, '') NOT LIKE '%"operator_agent"%'
         ORDER BY d.updated_at ASC, d.deployment_id ASC
         LIMIT ?
         """,
-        (SOLO_JOB_KIND, worker.max_attempts, worker.batch_size),
+        (SOLO_JOB_KIND, worker.max_attempts, candidate_limit),
     ).fetchall()
     results = list(teardown_results)
     for row in rows:
-        results.append(process_sovereign_deployment(conn, deployment=dict(row), worker=worker, executor=executor))
+        deployment = dict(row)
+        if _deployment_is_operator_control_stack(deployment):
+            continue
+        results.append(process_sovereign_deployment(conn, deployment=deployment, worker=worker, executor=executor))
+        if len(results) - len(teardown_results) >= apply_limit:
+            break
     return results
 
 

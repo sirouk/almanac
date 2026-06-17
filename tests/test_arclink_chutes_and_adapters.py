@@ -536,7 +536,12 @@ def test_chutes_boundary_operator_observe_only_unlimited_is_metered_but_never_bl
             "budget_policy": "observe_only_unlimited",
         }
     }
-    boundary = mod.evaluate_chutes_deployment_boundary("operator", "operator", metadata)
+    boundary = mod.evaluate_chutes_deployment_boundary(
+        "operator",
+        "operator",
+        metadata,
+        observe_unlimited_authorized=True,
+    )
     # Effectively unlimited: never fails closed, never "unconfigured"/"exhausted".
     expect(boundary.budget_status == "unlimited", str(boundary))
     expect(boundary.allow_inference is True, str(boundary))
@@ -545,6 +550,27 @@ def test_chutes_boundary_operator_observe_only_unlimited_is_metered_but_never_bl
     expect(boundary.used_cents == 5_000_000, str(boundary))
     expect(boundary.remaining_cents >= 10**11, str(boundary))
     print("PASS test_chutes_boundary_operator_observe_only_unlimited_is_metered_but_never_blocked")
+
+
+def test_chutes_boundary_unauthorized_observe_only_unlimited_demotes_to_capped_lane() -> None:
+    mod = load_module("arclink_chutes.py", "arclink_chutes_boundary_unlimited_demote_test")
+    metadata = {
+        "chutes": {
+            "secret_ref": "secret://arclink/chutes/captain-dep",
+            "key_id": "key_captain",
+            "monthly_budget_cents": 0,
+            "used_cents": 5_000_000,
+            "budget_policy": "observe_only_unlimited",
+        }
+    }
+    boundary = mod.evaluate_chutes_deployment_boundary("captain-dep", "captain-user", metadata)
+    expect(boundary.budget_status == "unconfigured", str(boundary))
+    expect(boundary.allow_inference is False, str(boundary))
+    expect(boundary.credential_state == "budget_unconfigured", str(boundary))
+    public = boundary.to_public()
+    expect(public["budget"]["limit_enforced"] is True, str(public))
+    expect(public["budget"]["status"] != "unlimited", str(public))
+    print("PASS test_chutes_boundary_unauthorized_observe_only_unlimited_demotes_to_capped_lane")
 
 
 def test_chutes_boundary_suspends_provider_for_noncurrent_billing() -> None:
@@ -785,7 +811,9 @@ def main() -> int:
     test_fake_inference_enforces_chutes_boundary()
     test_chutes_usage_ingestion_updates_budget_boundary_without_secrets()
     test_chutes_usage_ingestion_blocks_after_hard_limit()
-    print("PASS all 24 ArcLink Chutes/adapter tests")
+    test_chutes_boundary_operator_observe_only_unlimited_is_metered_but_never_blocked()
+    test_chutes_boundary_unauthorized_observe_only_unlimited_demotes_to_capped_lane()
+    print("PASS all 26 ArcLink Chutes/adapter tests")
     return 0
 
 

@@ -11,7 +11,9 @@ REPO = Path(__file__).resolve().parents[1]
 COMMON_SH = REPO / "bin" / "common.sh"
 ENV_EXAMPLE = REPO / "config" / "arclink.env.example"
 PINS_JSON = REPO / "config" / "pins.json"
-PINNED_REF = "3c231eb3979ab9c57d5cd6d02f1d577a3b718b43"
+# Tracks the committed config/pins.json hermes-agent ref; bumped 3c231eb -> 042c1d6
+# in pre-campaign commit 7ac94d3. Update this whenever the pin is intentionally rolled.
+PINNED_REF = "042c1d6bb0543c543ed1a81f009aab4569b0405d"
 
 
 def run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:

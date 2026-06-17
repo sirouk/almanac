@@ -15,34 +15,38 @@ def expect(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def write_fake_user_tools(root: Path, home_dir: Path) -> Path:
+    fakebin = root / "fakebin"
+    fakebin.mkdir(parents=True, exist_ok=True)
+    (fakebin / "id").write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1\" == \"alex\" ]]; then exit 0; fi\n"
+        "exec /usr/bin/id \"$@\"\n",
+        encoding="utf-8",
+    )
+    (fakebin / "id").chmod(0o755)
+    (fakebin / "getent").write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1\" == \"passwd\" && \"$2\" == \"alex\" ]]; then\n"
+        f"  printf 'alex:x:1001:1001::%s:/bin/bash\\n' '{home_dir}'\n"
+        "  exit 0\n"
+        "fi\n"
+        "exec /usr/bin/getent \"$@\"\n",
+        encoding="utf-8",
+    )
+    (fakebin / "getent").chmod(0o755)
+    (fakebin / "chown").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    (fakebin / "chown").chmod(0o755)
+    return fakebin
+
+
 def test_install_agent_ssh_key_adds_tailnet_restricted_entry() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         home_dir = root / "alex-home"
         home_dir.mkdir(parents=True, exist_ok=True)
         pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKeyData arclink-remote-hermes@test"
-
-        fakebin = root / "fakebin"
-        fakebin.mkdir(parents=True, exist_ok=True)
-        (fakebin / "id").write_text(
-            "#!/usr/bin/env bash\n"
-            "if [[ \"$1\" == \"alex\" ]]; then exit 0; fi\n"
-            "exec /usr/bin/id \"$@\"\n",
-            encoding="utf-8",
-        )
-        (fakebin / "id").chmod(0o755)
-        (fakebin / "getent").write_text(
-            "#!/usr/bin/env bash\n"
-            "if [[ \"$1\" == \"passwd\" && \"$2\" == \"alex\" ]]; then\n"
-            f"  printf 'alex:x:1001:1001::%s:/bin/bash\\n' '{home_dir}'\n"
-            "  exit 0\n"
-            "fi\n"
-            "exec /usr/bin/getent \"$@\"\n",
-            encoding="utf-8",
-        )
-        (fakebin / "getent").chmod(0o755)
-        (fakebin / "chown").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-        (fakebin / "chown").chmod(0o755)
+        fakebin = write_fake_user_tools(root, home_dir)
 
         result = subprocess.run(
             [str(SCRIPT), "--unix-user", "alex", "--pubkey", pubkey],
@@ -60,9 +64,62 @@ def test_install_agent_ssh_key_adds_tailnet_restricted_entry() -> None:
         print("PASS test_install_agent_ssh_key_adds_tailnet_restricted_entry")
 
 
+def test_install_agent_ssh_key_rejects_multiline_public_key() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        home_dir = root / "alex-home"
+        home_dir.mkdir(parents=True, exist_ok=True)
+        fakebin = write_fake_user_tools(root, home_dir)
+        pubkey = (
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKeyData\n"
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIInjected unrestricted@test"
+        )
+
+        result = subprocess.run(
+            [str(SCRIPT), "--unix-user", "alex", "--pubkey", pubkey],
+            env={**os.environ, "PATH": f"{fakebin}:{os.environ.get('PATH', '')}"},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        expect(result.returncode != 0, "multiline SSH public key should be rejected")
+        expect("multiline SSH public key" in result.stderr, result.stderr)
+        expect(not (home_dir / ".ssh" / "authorized_keys").exists(), "authorized_keys should not be created")
+        print("PASS test_install_agent_ssh_key_rejects_multiline_public_key")
+
+
+def test_install_agent_ssh_key_rejects_unsafe_from_restriction() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        home_dir = root / "alex-home"
+        home_dir.mkdir(parents=True, exist_ok=True)
+        fakebin = write_fake_user_tools(root, home_dir)
+        pubkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKeyData arclink-remote-hermes@test"
+
+        result = subprocess.run(
+            [str(SCRIPT), "--unix-user", "alex", "--pubkey", pubkey],
+            env={
+                **os.environ,
+                "PATH": f"{fakebin}:{os.environ.get('PATH', '')}",
+                "ARCLINK_AGENT_REMOTE_SSH_FROM": '100.64.0.0/10",permitopen="*:*',
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        expect(result.returncode != 0, "unsafe from= restriction should be rejected")
+        expect("invalid from= restriction" in result.stderr, result.stderr)
+        expect(not (home_dir / ".ssh" / "authorized_keys").exists(), "authorized_keys should not be created")
+        print("PASS test_install_agent_ssh_key_rejects_unsafe_from_restriction")
+
+
 def main() -> int:
     test_install_agent_ssh_key_adds_tailnet_restricted_entry()
-    print("PASS all 1 install-agent-ssh-key regression tests")
+    test_install_agent_ssh_key_rejects_multiline_public_key()
+    test_install_agent_ssh_key_rejects_unsafe_from_restriction()
+    print("PASS all 3 install-agent-ssh-key regression tests")
     return 0
 
 

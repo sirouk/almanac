@@ -14,6 +14,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 INSTALL_SCRIPT = REPO / "bin" / "install-arclink-plugins.sh"
 WORKSPACE_INSTALL_SCRIPT = REPO / "bin" / "install-hermes-workspace-plugins.sh"
+SYNC_BUNDLED_SKILLS_SCRIPT = REPO / "bin" / "sync-hermes-bundled-skills.sh"
 PLUGINS_ROOT = REPO / "plugins" / "hermes-agent"
 PLUGIN_DIR = REPO / "plugins" / "hermes-agent" / "arclink-managed-context"
 PLUGIN_INIT = PLUGIN_DIR / "__init__.py"
@@ -23,6 +24,7 @@ DEFAULT_PLUGIN_NAMES = (
     "terminal",
     "arclink-theme",
     "arclink-managed-context",
+    "arclink-crew",
 )
 LEGACY_PLUGIN_NAMES = (
     "arclink-code-space",
@@ -268,7 +270,7 @@ def test_install_arclink_plugins_preserves_existing_plugin_config_and_enables_de
         root = Path(tmp)
         hermes_home = root / "hermes-home"
         hermes_home.mkdir(parents=True, exist_ok=True)
-        (hermes_home / "config.yaml").write_text(
+        original_config = (
             "model: gpt-5.4\n"
             "dashboard:\n"
             "  hidden_plugins:\n"
@@ -285,9 +287,9 @@ def test_install_arclink_plugins_preserves_existing_plugin_config_and_enables_de
             "  - existing-plugin\n"
             "mcp_servers:\n"
             "  arclink-mcp:\n"
-            "    url: http://127.0.0.1:8282/mcp\n",
-            encoding="utf-8",
+            "    url: http://127.0.0.1:8282/mcp\n"
         )
+        (hermes_home / "config.yaml").write_text(original_config, encoding="utf-8")
         result = subprocess.run(
             [str(INSTALL_SCRIPT), str(REPO), str(hermes_home)],
             env={**os.environ},
@@ -302,6 +304,8 @@ def test_install_arclink_plugins_preserves_existing_plugin_config_and_enables_de
         expect("mcp_servers:\n  arclink-mcp:" in config_body, config_body)
         expect("  - existing-plugin" in config_body, config_body)
         expect("  - noisy-plugin" in config_body, config_body)
+        backup_body = (hermes_home / "config.yaml.arclink-pre-plugin-install.bak").read_text(encoding="utf-8")
+        expect(backup_body == original_config, backup_body)
         hidden_block = config_body.split("  hidden_plugins:\n", 1)[1].split("plugins:\n", 1)[0]
         expect("drive" not in hidden_block, config_body)
         expect("code" not in hidden_block, config_body)
@@ -472,6 +476,58 @@ def test_install_arclink_plugins_prunes_legacy_dashboard_plugin_aliases() -> Non
         expect("  - existing-plugin" in config_body, config_body)
         _assert_default_plugins_installed(hermes_home)
         print("PASS test_install_arclink_plugins_prunes_legacy_dashboard_plugin_aliases")
+
+
+def test_sync_hermes_bundled_skills_requires_runtime_source_by_default() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        missing_runtime = root / "missing-runtime"
+
+        missing = subprocess.run(
+            [str(SYNC_BUNDLED_SKILLS_SCRIPT), str(hermes_home), str(missing_runtime)],
+            env={**os.environ, "ARCLINK_SYNC_HERMES_BUNDLED_SKILLS_OPTIONAL": ""},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(missing.returncode == 1, f"missing runtime must fail closed: stdout={missing.stdout!r} stderr={missing.stderr!r}")
+        expect("refusing to skip bundled skill sync" in missing.stderr, missing.stderr)
+
+        optional = subprocess.run(
+            [str(SYNC_BUNDLED_SKILLS_SCRIPT), str(hermes_home), str(missing_runtime)],
+            env={**os.environ, "ARCLINK_SYNC_HERMES_BUNDLED_SKILLS_OPTIONAL": "1"},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(optional.returncode == 0, f"explicit optional sync should skip cleanly: {optional.stderr!r}")
+        expect("explicit operator opt-out" in optional.stderr, optional.stderr)
+
+        runtime = root / "runtime"
+        tools = runtime / "hermes-agent-src" / "tools"
+        skills = runtime / "hermes-agent-src" / "skills"
+        tools.mkdir(parents=True)
+        skills.mkdir(parents=True)
+        (tools / "skills_sync.py").write_text(
+            "from pathlib import Path\n"
+            "import os\n"
+            "home = Path(os.environ['HERMES_HOME'])\n"
+            "home.mkdir(parents=True, exist_ok=True)\n"
+            "(home / 'bundled-skills-source.txt').write_text(os.environ['HERMES_BUNDLED_SKILLS'], encoding='utf-8')\n",
+            encoding="utf-8",
+        )
+        synced = subprocess.run(
+            [str(SYNC_BUNDLED_SKILLS_SCRIPT), str(hermes_home), str(runtime)],
+            env={**os.environ, "ARCLINK_SYNC_HERMES_BUNDLED_SKILLS_OPTIONAL": ""},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(synced.returncode == 0, f"valid runtime source should sync: stdout={synced.stdout!r} stderr={synced.stderr!r}")
+        marker = hermes_home / "bundled-skills-source.txt"
+        expect(marker.read_text(encoding="utf-8") == str(skills), marker.read_text(encoding="utf-8"))
+        print("PASS test_sync_hermes_bundled_skills_requires_runtime_source_by_default")
 
 
 def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
@@ -2119,6 +2175,30 @@ def test_arclink_code_source_control_reports_and_updates_git_state() -> None:
             )
             expect(not (repo / "notes.md").exists(), "expected untracked file discard to remove the file")
             expect(cleaned["status"]["clean"] is True, str(cleaned))
+
+            original_run = code_api.subprocess.run
+
+            def fake_git_run(command, **_kwargs):
+                return subprocess.CompletedProcess(
+                    command,
+                    1,
+                    stdout="",
+                    stderr=f"fatal: cannot lock {repo}/.git/index token=abc123 password=secret",
+                )
+
+            code_api.subprocess.run = fake_git_run
+            try:
+                code_api._run_git(repo, ["status"])
+            except Exception as exc:
+                detail = str(getattr(exc, "detail", ""))
+                expect(getattr(exc, "status_code", None) == 400, f"expected git failure 400, got {exc!r}")
+                expect(str(workspace) not in detail and str(hermes_home) not in detail, detail)
+                expect("token=abc123" not in detail and "password=secret" not in detail, detail)
+                expect("[repo]" in detail and "token=[redacted]" in detail and "password=[redacted]" in detail, detail)
+            else:
+                raise AssertionError("expected git failure to raise")
+            finally:
+                code_api.subprocess.run = original_run
             print("PASS test_arclink_code_source_control_reports_and_updates_git_state")
         finally:
             os.environ.clear()
@@ -2226,6 +2306,13 @@ def test_arclink_dashboard_file_plugins_reject_sensitive_workspace_paths() -> No
             os.environ["DRIVE_WORKSPACE_ROOT"] = str(hermes_home)
             os.environ["CODE_WORKSPACE_ROOT"] = str(hermes_home)
             os.environ["TERMINAL_WORKSPACE_ROOT"] = str(hermes_home)
+
+            try:
+                drive_api._resolve_local(hermes_home / "secrets", "/", root_id="workspace")
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 403, f"expected sensitive Drive root rejection, got {exc!r}")
+            else:
+                raise AssertionError("expected sensitive Drive root to be rejected")
 
             drive_listing = asyncio.run(drive_api.items(root="workspace", path="/"))
             drive_paths = {item["path"] for item in drive_listing["items"]}
@@ -4110,6 +4197,61 @@ def test_arclink_managed_context_pre_tool_call_injects_bootstrap_token() -> None
             )
             expect(share_args["token"] == "tok_live_test", share_args)
 
+            pod_list_args = {"direction": "inbox", "limit": 10}
+            hook(
+                tool_name="mcp_arclink_mcp_pod_comms_list",
+                args=pod_list_args,
+                session_id="session-token",
+                task_id="task-pod-list",
+                tool_call_id="call-pod-list",
+            )
+            expect(pod_list_args["token"] == "tok_live_test", pod_list_args)
+
+            pod_send_args = {"recipient_deployment_id": "arcdep_recipient", "body": "Hello from the Crew"}
+            hook(
+                tool_name="mcp_arclink_mcp_pod_comms_send",
+                args=pod_send_args,
+                session_id="session-token",
+                task_id="task-pod-send",
+                tool_call_id="call-pod-send",
+            )
+            expect(pod_send_args["token"] == "tok_live_test", pod_send_args)
+
+            pod_share_args = {
+                "recipient_deployment_id": "arcdep_recipient",
+                "resource_kind": "drive",
+                "resource_root": "vault",
+                "resource_path": "/Projects/brief.md",
+            }
+            hook(
+                tool_name="mcp_arclink_mcp_pod_comms_share_file",
+                args=pod_share_args,
+                session_id="session-token",
+                task_id="task-pod-share",
+                tool_call_id="call-pod-share",
+            )
+            expect(pod_share_args["token"] == "tok_live_test", pod_share_args)
+
+            ssot_approve_args = {"pending_id": "ssotw_approve"}
+            hook(
+                tool_name="mcp_arclink_mcp_ssot_approve",
+                args=ssot_approve_args,
+                session_id="session-token",
+                task_id="task-ssot-approve",
+                tool_call_id="call-ssot-approve",
+            )
+            expect(ssot_approve_args["token"] == "tok_live_test", ssot_approve_args)
+
+            ssot_deny_args = {"pending_id": "ssotw_deny", "reason": "Out of date"}
+            hook(
+                tool_name="mcp_arclink_mcp_ssot_deny",
+                args=ssot_deny_args,
+                session_id="session-token",
+                task_id="task-ssot-deny",
+                tool_call_id="call-ssot-deny",
+            )
+            expect(ssot_deny_args["token"] == "tok_live_test", ssot_deny_args)
+
             academy_search_args = {"query": "resilience engineering", "limit": 5}
             hook(
                 tool_name="mcp_arclink_mcp_academy_search_graduates",
@@ -4165,7 +4307,7 @@ def test_arclink_managed_context_pre_tool_call_injects_bootstrap_token() -> None
 
             os.environ["HERMES_HOME"] = str(hermes_home)
             lines = [json.loads(line) for line in telemetry_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-            expect(len(lines) == 8, lines)
+            expect(len(lines) == 13, lines)
             expect(all(record.get("tool_token_injected") is True for record in lines), lines)
             expect(
                 {record.get("tool_name") for record in lines}
@@ -4176,6 +4318,11 @@ def test_arclink_managed_context_pre_tool_call_injects_bootstrap_token() -> None
                     "mcp_arclink_mcp_ssot_write",
                     "mcp_arclink_mcp_ssot_preflight",
                     "mcp_arclink_mcp_shares_request",
+                    "mcp_arclink_mcp_pod_comms_list",
+                    "mcp_arclink_mcp_pod_comms_send",
+                    "mcp_arclink_mcp_pod_comms_share_file",
+                    "mcp_arclink_mcp_ssot_approve",
+                    "mcp_arclink_mcp_ssot_deny",
                     "mcp_arclink_mcp_academy_search_graduates",
                     "academy.propose-resource",
                 },
@@ -4190,6 +4337,11 @@ def test_arclink_managed_context_pre_tool_call_injects_bootstrap_token() -> None
                     "task-ssot-write",
                     "task-ssot-preflight",
                     "task-share",
+                    "task-pod-list",
+                    "task-pod-send",
+                    "task-pod-share",
+                    "task-ssot-approve",
+                    "task-ssot-deny",
                     "task-academy-search",
                     "task-academy-resource",
                 },
@@ -4201,6 +4353,43 @@ def test_arclink_managed_context_pre_tool_call_injects_bootstrap_token() -> None
         finally:
             os.environ.clear()
             os.environ.update(old_env)
+
+
+def test_arclink_managed_context_token_tools_match_mcp_agent_token_schema() -> None:
+    plugin = load_module(PLUGIN_INIT, "arclink_managed_context_plugin_token_surface_test")
+    python_dir = str(REPO / "python")
+    if python_dir not in sys.path:
+        sys.path.insert(0, python_dir)
+    mcp_server = load_module(REPO / "python" / "arclink_mcp_server.py", "arclink_mcp_server_token_surface_test")
+
+    agent_token_tools: list[str] = []
+    for tool_name, schema in mcp_server.TOOL_SCHEMAS.items():
+        props = schema.get("properties") if isinstance(schema, dict) else {}
+        token_prop = props.get("token") if isinstance(props, dict) else None
+        description = str(token_prop.get("description") or "") if isinstance(token_prop, dict) else ""
+        if "arclink-managed-context fills it" in description:
+            agent_token_tools.append(tool_name)
+
+    expect("pod_comms.list" in agent_token_tools, agent_token_tools)
+    expect("pod_comms.send" in agent_token_tools, agent_token_tools)
+    expect("pod_comms.share-file" in agent_token_tools, agent_token_tools)
+    expect("ssot.approve" in agent_token_tools, agent_token_tools)
+    expect("ssot.deny" in agent_token_tools, agent_token_tools)
+
+    missing: list[str] = []
+    for tool_name in agent_token_tools:
+        wrapper = "mcp_arclink_mcp_" + tool_name.replace(".", "_").replace("-", "_")
+        if not plugin._tool_needs_agent_token(tool_name):
+            missing.append(tool_name)
+        if not plugin._tool_needs_agent_token(wrapper):
+            missing.append(wrapper)
+    expect(not missing, f"managed-context token list missing MCP agent-token tools: {missing}")
+    expect(not plugin._tool_needs_agent_token("agents.register"), "agents.register uses a registration token, not the agent-token seam")
+    expect(
+        not plugin._tool_needs_agent_token("mcp_arclink_mcp_agents_register"),
+        "agents.register wrapper uses a registration token, not the agent-token seam",
+    )
+    print("PASS test_arclink_managed_context_token_tools_match_mcp_agent_token_schema")
 
 
 def test_arclink_managed_context_budgets_live_notion_queries_per_turn() -> None:
@@ -4411,6 +4600,7 @@ def main() -> int:
     test_install_arclink_theme_plugin_sets_dashboard_theme_without_menu()
     test_install_arclink_plugins_excludes_generated_artifacts()
     test_install_arclink_plugins_prunes_legacy_dashboard_plugin_aliases()
+    test_sync_hermes_bundled_skills_requires_runtime_source_by_default()
     test_arclink_dashboard_plugins_expose_sanitized_access_state()
     test_arclink_drive_and_code_expose_writable_linked_shared_folders()
     test_arclink_drive_code_share_request_broker_contract()
@@ -4437,6 +4627,7 @@ def main() -> int:
     test_arclink_managed_context_answers_resource_request_without_secrets()
     test_arclink_managed_context_injects_tool_recipe_cards_on_intent_triggers()
     test_arclink_managed_context_pre_tool_call_injects_bootstrap_token()
+    test_arclink_managed_context_token_tools_match_mcp_agent_token_schema()
     test_arclink_managed_context_budgets_live_notion_queries_per_turn()
     test_arclink_managed_context_emits_telemetry_and_respects_opt_out()
     test_arclink_managed_context_recipe_tools_match_mcp_surface()

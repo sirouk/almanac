@@ -15,18 +15,25 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from arclink_chutes import ChutesCatalogClient, ChutesCatalogError, evaluate_chutes_deployment_boundary, record_chutes_usage_event
+from arclink_chutes import (
+    ChutesCatalogClient,
+    ChutesCatalogError,
+    evaluate_chutes_deployment_boundary,
+    record_chutes_budget_policy_demotion,
+    record_chutes_usage_event,
+)
+from arclink_boundary import json_dumps_safe
 from arclink_control import (
     ensure_schema,
     get_model_catalog_entry,
     latest_model_in_family,
     model_family_key,
     rate_limit_count,
-    record_rate_limit_event,
     upsert_model_catalog,
     verify_llm_router_key,
 )
-from arclink_secrets_regex import redact_then_truncate
+from arclink_operator_agent import observe_unlimited_authorized
+from arclink_secrets_regex import REDACTION_TEXT, contains_secret_material, redact_then_truncate
 
 
 DEFAULT_CHUTES_BASE_URL = "https://llm.chutes.ai/v1"
@@ -489,7 +496,14 @@ async def _read_json_body(config: RouterConfig, request: Request) -> tuple[dict[
     content_length = request.headers.get("content-length")
     if content_length and _clean_int(content_length, 0) > config.max_body_bytes:
         return None, _router_error(413, "request_body_too_large", "ArcLink LLM router request body is too large."), b""
-    body = await request.body()
+    chunks = bytearray()
+    async for chunk in request.stream():
+        if not chunk:
+            continue
+        if len(chunks) + len(chunk) > config.max_body_bytes:
+            return None, _router_error(413, "request_body_too_large", "ArcLink LLM router request body is too large."), bytes(chunks)
+        chunks.extend(chunk)
+    body = bytes(chunks)
     if len(body) > config.max_body_bytes:
         return None, _router_error(413, "request_body_too_large", "ArcLink LLM router request body is too large."), body
     try:
@@ -638,7 +652,13 @@ def _resolve_router_model(
     return requested, entry, {"requested_model": requested, "upstream_model": requested, "replacement_reason": ""}
 
 
-def _router_model_allowed(config: RouterConfig, model: str, allowed_models: tuple[str, ...]) -> bool:
+def _router_model_allowed(
+    config: RouterConfig,
+    model: str,
+    allowed_models: tuple[str, ...],
+    *,
+    allow_default_model: bool = True,
+) -> bool:
     clean_model = str(model or "").strip()
     if not clean_model:
         return False
@@ -647,7 +667,20 @@ def _router_model_allowed(config: RouterConfig, model: str, allowed_models: tupl
     # Some providers accept a comma-bearing model string as provider-side
     # fallback. Preserve that as a single default model even when the allowlist
     # itself is represented as comma-separated values.
-    return bool(config.default_model and clean_model == config.default_model)
+    return bool(allow_default_model and config.default_model and clean_model == config.default_model)
+
+
+def _disallowed_router_model(
+    config: RouterConfig,
+    models: tuple[str, ...],
+    allowed_models: tuple[str, ...],
+    *,
+    allow_default_model: bool,
+) -> str:
+    for model in models:
+        if not _router_model_allowed(config, model, allowed_models, allow_default_model=allow_default_model):
+            return model
+    return ""
 
 
 def _router_fallback_candidates(config: RouterConfig, primary_model: str) -> tuple[str, ...]:
@@ -666,11 +699,18 @@ def _upstream_status_is_retryable(config: RouterConfig, status_code: int) -> boo
 
 
 def _safe_upstream_error(value: Any) -> str:
-    return redact_then_truncate(value, limit=300)
+    redacted = redact_then_truncate(value, limit=300)
+    if contains_secret_material(redacted, allow_safe_refs=False):
+        return REDACTION_TEXT
+    return redacted
 
 
 def _metadata_json(metadata: Mapping[str, Any]) -> str:
     return json.dumps(dict(metadata or {}), sort_keys=True, separators=(",", ":"))
+
+
+def _safe_metadata_json(metadata: Mapping[str, Any]) -> str:
+    return json_dumps_safe(dict(metadata or {}), label="ArcLink LLM router metadata")
 
 
 def _public_fallback_attempts(attempts: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -758,7 +798,7 @@ def _record_fallback_attempt_event(config: RouterConfig, metadata: Mapping[str, 
                 (
                     f"evt_{uuid.uuid4().hex}",
                     str(metadata.get("deployment_id") or ""),
-                    _metadata_json(metadata),
+                    _safe_metadata_json(metadata),
                     _utc_now_iso(),
                 ),
             )
@@ -818,7 +858,7 @@ def _check_rate_limit(conn: sqlite3.Connection, *, scope: str, subject: str, lim
     return None
 
 
-def _record_rate_limits(conn: sqlite3.Connection, auth_record: Mapping[str, Any]) -> None:
+def _record_rate_limits(conn: sqlite3.Connection, auth_record: Mapping[str, Any], *, commit: bool = True) -> None:
     key_id = str(auth_record.get("key_id") or "")
     deployment_id = str(auth_record.get("deployment_id") or "")
     user_id = str(auth_record.get("user_id") or "")
@@ -828,7 +868,12 @@ def _record_rate_limits(conn: sqlite3.Connection, auth_record: Mapping[str, Any]
         ("llm-router:user", user_id),
     ):
         if subject:
-            record_rate_limit_event(conn, scope, subject)
+            conn.execute(
+                "INSERT INTO rate_limits (scope, subject, observed_at) VALUES (?, ?, ?)",
+                (scope, subject, _utc_now_iso()),
+            )
+    if commit:
+        conn.commit()
 
 
 def _open_reserved_count(conn: sqlite3.Connection, deployment_id: str) -> int:
@@ -851,6 +896,7 @@ def _create_budget_reservation(
     user_id: str,
     reserved_cents: int,
     metadata: Mapping[str, Any] | None = None,
+    commit: bool = True,
 ) -> dict[str, Any]:
     reservation_id = f"llmres_{uuid.uuid4().hex[:24]}"
     conn.execute(
@@ -869,7 +915,8 @@ def _create_budget_reservation(
             _utc_now_iso(),
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return {
         "reservation_id": reservation_id,
         "request_id": request_id,
@@ -1035,7 +1082,7 @@ def _queue_arc_pod_fuel_notice(
                     monthly_budget_cents=monthly_budget,
                     usage_percent=usage_percent,
                 ),
-                json.dumps(_fuel_notice_actions(), sort_keys=True),
+                _safe_metadata_json(_fuel_notice_actions()),
                 _utc_now_iso(),
             ),
         )
@@ -1048,7 +1095,7 @@ def _queue_arc_pod_fuel_notice(
             (
                 f"evt_{uuid.uuid4().hex}",
                 clean_deployment,
-                json.dumps(
+                _safe_metadata_json(
                     {
                         "user_id": clean_user,
                         "notice_key": notice_key,
@@ -1057,8 +1104,7 @@ def _queue_arc_pod_fuel_notice(
                         "monthly_budget_cents": monthly_budget,
                         "usage_percent": usage_percent,
                         "notification_id": notification_id,
-                    },
-                    sort_keys=True,
+                    }
                 ),
                 _utc_now_iso(),
             ),
@@ -1080,10 +1126,20 @@ def _preflight_chat_request(
     model = str(payload.get("model") or "").strip()
     if not model:
         return None, _router_error(400, "missing_model", "ArcLink LLM router requires a model.")
-    allowed_models = tuple(auth_record.get("allowed_models") or ()) or config.allowed_models
-    if not _router_model_allowed(config, model, allowed_models):
+    key_allowed_models = tuple(auth_record.get("allowed_models") or ())
+    allowed_models = key_allowed_models or config.allowed_models
+    allow_default_model = not key_allowed_models
+    if not _router_model_allowed(config, model, allowed_models, allow_default_model=allow_default_model):
         return None, _router_error(403, "model_not_allowed", "Requested model is not allowed for this ArcPod.")
     upstream_model, catalog_entry, model_resolution = _resolve_router_model(conn, config, model, allowed_models)
+    disallowed_model = _disallowed_router_model(
+        config,
+        _router_fallback_candidates(config, upstream_model),
+        allowed_models,
+        allow_default_model=allow_default_model,
+    )
+    if disallowed_model:
+        return None, _router_error(403, "model_not_allowed", "Resolved or fallback model is not allowed for this ArcPod.")
 
     prompt_tokens = _estimate_prompt_tokens(payload, body)
     if prompt_tokens > config.prompt_estimate_token_cap:
@@ -1092,99 +1148,136 @@ def _preflight_chat_request(
     if max_tokens > config.max_tokens_cap:
         return None, _router_error(400, "max_tokens_too_large", "Requested max_tokens exceeds the ArcLink LLM router cap.")
 
-    metadata, billing_state = _load_deployment_context(conn, auth_record)
-    boundary = evaluate_chutes_deployment_boundary(
-        str(auth_record.get("deployment_id") or ""),
-        str(auth_record.get("user_id") or ""),
-        _router_boundary_metadata(metadata, auth_record),
-        env={
-            "ARCLINK_CHUTES_DEFAULT_MONTHLY_BUDGET_CENTS": str(config.default_monthly_budget_cents),
-            "ARCLINK_CHUTES_WARNING_THRESHOLD_PERCENT": "80",
-            "ARCLINK_CHUTES_HARD_LIMIT_PERCENT": "100",
-        },
-        billing_state=billing_state,
-    )
-    if not boundary.allow_inference:
-        status_code = 402 if boundary.credential_state in {"billing_suspended", "budget_unconfigured", "budget_exhausted"} else 403
-        if boundary.credential_state == "budget_exhausted":
+    transaction_started = False
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        transaction_started = True
+        metadata, billing_state = _load_deployment_context(conn, auth_record)
+        deployment_id = str(auth_record.get("deployment_id") or "")
+        user_id = str(auth_record.get("user_id") or "")
+        boundary_metadata = _router_boundary_metadata(metadata, auth_record)
+        observe_authorized = observe_unlimited_authorized(conn, deployment_id, user_id)
+        boundary = evaluate_chutes_deployment_boundary(
+            deployment_id,
+            user_id,
+            boundary_metadata,
+            env={
+                "ARCLINK_CHUTES_DEFAULT_MONTHLY_BUDGET_CENTS": str(config.default_monthly_budget_cents),
+                "ARCLINK_CHUTES_WARNING_THRESHOLD_PERCENT": "80",
+                "ARCLINK_CHUTES_HARD_LIMIT_PERCENT": "100",
+            },
+            billing_state=billing_state,
+            observe_unlimited_authorized=observe_authorized,
+        )
+        demotion_recorded = record_chutes_budget_policy_demotion(
+            conn,
+            deployment_id=deployment_id,
+            metadata=boundary_metadata,
+            observe_unlimited_authorized=observe_authorized,
+            source="llm_router_preflight",
+            commit=False,
+        )
+        if not boundary.allow_inference:
+            status_code = 402 if boundary.credential_state in {"billing_suspended", "budget_unconfigured", "budget_exhausted"} else 403
+            if boundary.credential_state == "budget_exhausted":
+                _queue_arc_pod_fuel_notice(
+                    conn,
+                    deployment_id=deployment_id,
+                    user_id=user_id,
+                    boundary=boundary,
+                    severity="empty",
+                    commit=False,
+                )
+                conn.commit()
+            elif demotion_recorded:
+                conn.commit()
+            else:
+                conn.rollback()
+            transaction_started = False
+            return None, _router_error(status_code, boundary.credential_state, boundary.reason)
+
+        for scope, subject, limit in (
+            ("llm-router:key", str(auth_record.get("key_id") or ""), config.key_requests_per_minute),
+            ("llm-router:deployment", str(auth_record.get("deployment_id") or ""), config.deployment_requests_per_minute),
+            ("llm-router:user", str(auth_record.get("user_id") or ""), config.user_requests_per_minute),
+        ):
+            error = _check_rate_limit(conn, scope=scope, subject=subject, limit=limit)
+            if error is not None:
+                conn.rollback()
+                transaction_started = False
+                return None, error
+
+        if _open_reserved_count(conn, deployment_id) >= config.deployment_concurrency_limit:
+            conn.rollback()
+            transaction_started = False
+            return None, _json_error(
+                429,
+                "concurrency_limited",
+                "ArcLink LLM router deployment concurrency limit exceeded.",
+                retry_after=1,
+            )
+
+        pricing_choice = _fallback_reservation_pricing(
+            conn,
+            config,
+            primary_model=upstream_model,
+            primary_entry=catalog_entry,
+            input_tokens=prompt_tokens,
+            max_tokens=max_tokens,
+        )
+        selected_pricing = dict(pricing_choice["selected"])
+        reserved_cents = int(selected_pricing.get("reserved_cents") or config.min_reservation_cents)
+        # Observed-unlimited Pods (the Operator's own Pod) are metered but never reservation-
+        # blocked, so Raven inference cannot be silenced by a budget cap.
+        if str(getattr(boundary, "budget_status", "") or "") != "unlimited" and boundary.remaining_cents < reserved_cents:
             _queue_arc_pod_fuel_notice(
                 conn,
                 deployment_id=str(auth_record.get("deployment_id") or ""),
                 user_id=str(auth_record.get("user_id") or ""),
                 boundary=boundary,
-                severity="empty",
+                severity="low",
+                commit=False,
             )
-        return None, _router_error(status_code, boundary.credential_state, boundary.reason)
+            conn.commit()
+            transaction_started = False
+            return None, _router_error(402, "budget_exhausted", "Chutes budget remaining is below the required request reservation.")
 
-    for scope, subject, limit in (
-        ("llm-router:key", str(auth_record.get("key_id") or ""), config.key_requests_per_minute),
-        ("llm-router:deployment", str(auth_record.get("deployment_id") or ""), config.deployment_requests_per_minute),
-        ("llm-router:user", str(auth_record.get("user_id") or ""), config.user_requests_per_minute),
-    ):
-        error = _check_rate_limit(conn, scope=scope, subject=subject, limit=limit)
-        if error is not None:
-            return None, error
-
-    deployment_id = str(auth_record.get("deployment_id") or "")
-    if _open_reserved_count(conn, deployment_id) >= config.deployment_concurrency_limit:
-        return None, _json_error(
-            429,
-            "concurrency_limited",
-            "ArcLink LLM router deployment concurrency limit exceeded.",
-            retry_after=1,
-        )
-
-    pricing_choice = _fallback_reservation_pricing(
-        conn,
-        config,
-        primary_model=upstream_model,
-        primary_entry=catalog_entry,
-        input_tokens=prompt_tokens,
-        max_tokens=max_tokens,
-    )
-    selected_pricing = dict(pricing_choice["selected"])
-    reserved_cents = int(selected_pricing.get("reserved_cents") or config.min_reservation_cents)
-    # Observed-unlimited Pods (the Operator's own Pod) are metered but never reservation-
-    # blocked, so Raven inference cannot be silenced by a budget cap.
-    if str(getattr(boundary, "budget_status", "") or "") != "unlimited" and boundary.remaining_cents < reserved_cents:
-        _queue_arc_pod_fuel_notice(
+        _record_rate_limits(conn, auth_record, commit=False)
+        request_id = f"llmreq_{uuid.uuid4().hex[:24]}"
+        reservation_metadata = {
+            "request_id": request_id,
+            "deployment_id": deployment_id,
+            "user_id": str(auth_record.get("user_id") or ""),
+            "requested_model": model,
+            "primary_model": upstream_model,
+            "final_model": upstream_model,
+            "fallback_used": False,
+            "fallback_candidate_count": len(_router_fallback_candidates(config, upstream_model)),
+            "fallback_pricing_reserved": str(selected_pricing.get("model") or "") != upstream_model,
+            "reservation_pricing_model": str(selected_pricing.get("model") or upstream_model),
+            "reservation_pricing_source": str(selected_pricing.get("pricing_source") or ""),
+            "reservation_input_cents_per_million": int(selected_pricing.get("input_cents_per_million") or 0),
+            "reservation_output_cents_per_million": int(selected_pricing.get("output_cents_per_million") or 0),
+            "reserved_cents": reserved_cents,
+            "reservation_pricing_candidates": pricing_choice["choices"],
+            "pricing_adjusted_at_settlement": False,
+            "model_resolution": model_resolution,
+        }
+        reservation = _create_budget_reservation(
             conn,
-            deployment_id=str(auth_record.get("deployment_id") or ""),
+            request_id=request_id,
+            deployment_id=deployment_id,
             user_id=str(auth_record.get("user_id") or ""),
-            boundary=boundary,
-            severity="low",
+            reserved_cents=reserved_cents,
+            metadata=reservation_metadata,
+            commit=False,
         )
-        return None, _router_error(402, "budget_exhausted", "Chutes budget remaining is below the required request reservation.")
-
-    _record_rate_limits(conn, auth_record)
-    request_id = f"llmreq_{uuid.uuid4().hex[:24]}"
-    reservation_metadata = {
-        "request_id": request_id,
-        "deployment_id": deployment_id,
-        "user_id": str(auth_record.get("user_id") or ""),
-        "requested_model": model,
-        "primary_model": upstream_model,
-        "final_model": upstream_model,
-        "fallback_used": False,
-        "fallback_candidate_count": len(_router_fallback_candidates(config, upstream_model)),
-        "fallback_pricing_reserved": str(selected_pricing.get("model") or "") != upstream_model,
-        "reservation_pricing_model": str(selected_pricing.get("model") or upstream_model),
-        "reservation_pricing_source": str(selected_pricing.get("pricing_source") or ""),
-        "reservation_input_cents_per_million": int(selected_pricing.get("input_cents_per_million") or 0),
-        "reservation_output_cents_per_million": int(selected_pricing.get("output_cents_per_million") or 0),
-        "reserved_cents": reserved_cents,
-        "reservation_pricing_candidates": pricing_choice["choices"],
-        "pricing_adjusted_at_settlement": False,
-        "model_resolution": model_resolution,
-    }
-    reservation = _create_budget_reservation(
-        conn,
-        request_id=request_id,
-        deployment_id=deployment_id,
-        user_id=str(auth_record.get("user_id") or ""),
-        reserved_cents=reserved_cents,
-        metadata=reservation_metadata,
-    )
+        conn.commit()
+        transaction_started = False
+    except Exception:
+        if transaction_started:
+            conn.rollback()
+        raise
     reservation["input_token_estimate"] = prompt_tokens
     reservation["output_token_estimate"] = max_tokens if max_tokens > 0 else min(config.max_tokens_cap, 1024)
     reservation["requested_model"] = model
@@ -1397,30 +1490,39 @@ def _record_router_usage(
             now,
         ),
     )
+    usage_result = None
     if status == "succeeded":
-        usage_result = record_chutes_usage_event(
-            conn,
-            deployment_id=deployment_id,
-            user_id=user_id,
-            usage_event={
-                "usage_event_id": usage_id,
-                "request_id": request_id,
-                "model_id": model,
-                "source": "llm-router",
-                "observed_at": now,
-                "input_tokens": max(0, int(input_tokens)),
-                "output_tokens": max(0, int(output_tokens)),
-                "total_tokens": max(0, int(total_tokens)),
-                "delta_cents": actual_cents,
-            },
-            env={
-                "ARCLINK_CHUTES_DEFAULT_MONTHLY_BUDGET_CENTS": str(config.default_monthly_budget_cents),
-                "ARCLINK_CHUTES_WARNING_THRESHOLD_PERCENT": "80",
-                "ARCLINK_CHUTES_HARD_LIMIT_PERCENT": "100",
-            },
-            commit=False,
-        )
-        if usage_result.boundary.budget_status in {"warning", "exhausted"}:
+        conn.execute("SAVEPOINT llm_router_chutes_usage")
+        try:
+            usage_result = record_chutes_usage_event(
+                conn,
+                deployment_id=deployment_id,
+                user_id=user_id,
+                usage_event={
+                    "usage_event_id": usage_id,
+                    "request_id": request_id,
+                    "model_id": model,
+                    "source": "llm-router",
+                    "observed_at": now,
+                    "input_tokens": max(0, int(input_tokens)),
+                    "output_tokens": max(0, int(output_tokens)),
+                    "total_tokens": max(0, int(total_tokens)),
+                    "delta_cents": actual_cents,
+                },
+                env={
+                    "ARCLINK_CHUTES_DEFAULT_MONTHLY_BUDGET_CENTS": str(config.default_monthly_budget_cents),
+                    "ARCLINK_CHUTES_WARNING_THRESHOLD_PERCENT": "80",
+                    "ARCLINK_CHUTES_HARD_LIMIT_PERCENT": "100",
+                },
+                commit=False,
+            )
+            conn.execute("RELEASE SAVEPOINT llm_router_chutes_usage")
+        except (KeyError, PermissionError, ValueError, sqlite3.Error) as exc:
+            conn.execute("ROLLBACK TO SAVEPOINT llm_router_chutes_usage")
+            conn.execute("RELEASE SAVEPOINT llm_router_chutes_usage")
+            usage_metadata["chutes_usage_recorded"] = False
+            usage_metadata["chutes_usage_error"] = _safe_upstream_error(str(exc))
+        if usage_result is not None and usage_result.boundary.budget_status in {"warning", "exhausted"}:
             _queue_arc_pod_fuel_notice(
                 conn,
                 deployment_id=deployment_id,

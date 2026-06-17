@@ -743,11 +743,13 @@ when they were active blockers during this buildout pass. Treat rows marked
   recipient's own Vault/Workspace (`docs/arclink/operations-runbook.md:150-165`);
   tests prove copy/duplicate works (`tests/test_arclink_plugins.py:640-686`).
   `shares.request` now returns
-  `copy_duplicate_policy: accepted_linked_resources_copy_to_owned_vault_or_workspace_only`
-  and destination roots `vault`/`workspace`
-  (`python/arclink_mcp_server.py:1031-1042`), and managed-context guidance says
-  the same rule instead of calling it a policy question
-  (`plugins/hermes-agent/arclink-managed-context/__init__.py:326-330`).
+  `copy_duplicate_policy: accepted_linked_resources_writable_in_place_without_reshare_or_git_mutation`,
+  destination roots `vault`/`workspace`, and detail that accepted Drive/Code
+  shared folders are writable in place, cannot be reshared, still block Linked
+  git mutations, and may also be copied or duplicated into owned roots
+  (`python/arclink_mcp_server.py:120-125`,
+  `python/arclink_mcp_server.py:1086-1089`). Managed-context guidance says
+  the same rule instead of calling it a policy question.
   Regression tests assert the MCP description, response, and recipe wording
   (`tests/test_arclink_mcp_schemas.py:223-228`,
   `tests/test_arclink_mcp_schemas.py:356-366`,
@@ -2232,6 +2234,60 @@ when they were active blockers during this buildout pass. Treat rows marked
   when those handoffs expose a concrete source defect or the operator records a
   new local product decision.
 
+### GAP-035 - Post-repair reconciliation proof discipline
+
+- Severity: P1
+- Status: partial, proof-gated, test-gap, doc-gap
+- Journey joints: `J-03`, `J-04`, `J-13`, `J-19`, `J-24`, `J-27`
+- Proof gates: `PG-BOTS`, `PG-HERMES`, `PG-FLEET`, `PG-PROD`
+- Joint: Public bots, public Agent bridge, Hermes workspace, fleet-shared
+  skills, evidence governance, canon/doc corpus
+- Expected: after the large CANON repair campaign, every follow-up seam should
+  have a named owner, focused local proof, a live-proof gate, and a clear
+  product severity before any production-readiness claim is made.
+- Actual evidence: `GAP-035-A` adds source/test-real reconciliation buildout:
+  Telegram long-text delivery now splits into bounded `sendMessage` batches with
+  reply/thread and inline-keyboard placement preserved; native Telegram callback
+  metadata now carries durable families for `ea`, `mp`, `sc`, and `cl`; Discord
+  has an explicit Gateway `MESSAGE_CREATE` handler for selected-agent free text;
+  Discord sends/Agent bridge metadata support components, embeds, and attachment
+  metadata with default-deny mentions; per-Agent skill enablement discovers
+  fleet-shared `Agents_Skills/*/skills` roots only when backed by real `SKILL.md`
+  skill directories and obvious symlink escapes are rejected; enablement receipts
+  now name `/reload_skills` and `reload_skills_or_next_session`; the live journey
+  matrix has named external proof rows for terminal tmux durability, reload
+  skills, fleet skills, callback replay, Discord media/free-text, and Telegram
+  split batching; the evidence DB has a governance rollup read by the operator
+  snapshot; and `research/canon/COVERAGE_MATRIX.md` is regenerated at 859/859
+  tracked rows with canon/decision/fix artifacts under CANON-32.
+- Reconciliation table:
+
+| Item | Owning surface | Proof gate | Focused tests | Live-proof status | Product severity |
+| --- | --- | --- | --- | --- | --- |
+| Terminal tmux proof | Hermes Terminal plugin, `terminal-tmux` service, live journey | `PG-HERMES` / `terminal_tmux_dashboard_restart_proof` | `tests/test_arclink_plugins.py`, `tests/test_arclink_provisioning.py`, `tests/test_arclink_live_journey.py`, `tests/test_arclink_live_runner.py` | Named proof row exists; restart-survival live proof not run | P1 |
+| `/reload_skills` after enablement | Public bot command menus, `arclink_skill_enablement.py`, Hermes active Agent | `PG-HERMES` / `reload_skills_after_enablement_proof` | `tests/test_arclink_telegram.py`, `tests/test_arclink_skill_enablement.py`, `tests/test_arclink_public_bots.py` | Source receipts/menu rail exist; live proof that a newly enabled skill is usable after reload not run | P1/P2 |
+| Fleet-shared skill scanning | `arclink_skill_enablement.py`, headless Hermes setup, fleet shared roots | `PG-FLEET` + `PG-HERMES` / `fleet_shared_skill_guard_proof` | `tests/test_arclink_skill_enablement.py`, `tests/test_arclink_headless_hermes_setup.py` | Local guarded discovery exists; live fleet-shared proof not run | P1 |
+| Discord media/components | `arclink_discord.py`, `arclink_notification_delivery.py`, `arclink_public_agent_bridge.py` | `PG-BOTS` + `PG-HERMES` / `discord_agent_media_components_proof` | `tests/test_arclink_discord.py`, `tests/test_arclink_notification_delivery.py`, `tests/test_arclink_public_agent_bridge.py` | Components/embeds/attachment metadata are source-real; executable action callbacks wait on durable callback proof | P1 |
+| Durable callback state | Telegram ingress metadata, notification outbox, public Agent bridge | `PG-BOTS` + `PG-HERMES` / `durable_callback_replay_proof` | `tests/test_arclink_telegram.py`, `tests/test_arclink_operator_agent.py`, `tests/test_arclink_notification_delivery.py`, `tests/test_arclink_hosted_api.py` | Raw update plus family metadata persist locally; only `ea:` has full durable resolution mapping today | P0/P1 |
+| Discord free-text ingress | Discord Gateway message path, public bot selected-agent routing | `PG-BOTS` + `PG-HERMES` / `discord_free_text_ingress_proof` | `tests/test_arclink_discord.py`, `tests/test_arclink_public_bots.py` | Local handler exists; production control-node Gateway listener/live intent proof not run | P1 |
+| Telegram text-split batching | Telegram transport, notification delivery, public Agent bridge | `PG-BOTS` + `PG-HERMES` / `telegram_text_split_batch_proof` | `tests/test_arclink_telegram.py`, `tests/test_arclink_notification_delivery.py` | Outbound long-text batching is source-real; inbound split-correlation remains intentionally unclaimed | P2 |
+| Evidence/governance ambition | `arclink_evidence.py`, operator snapshot, CANON/GAPS/DOC_STATUS/symphony docs | `PG-PROD` | `tests/test_arclink_evidence.py`, `tests/test_arclink_dashboard.py`, `tests/test_arclink_live_journey.py` | Governance rollup is local-real; production readiness remains false until required journeys pass | P1 |
+
+- Missing proof/tests: `GAP-001` full paid Control Node live proof; terminal
+  dashboard/container restart proof; real `/reload_skills` usability proof;
+  production Discord Gateway listener proof; generalized durable callback
+  replay/resolution for non-`ea` families; optional stricter fleet skill
+  provenance/size/secret scanning; inbound Telegram split-correlation proof if
+  that feature is still desired.
+- Impact: without this reconciliation discipline, the project can look green
+  after a huge repair campaign while important cross-surface seams remain
+  unproved or undocumented.
+- Owner/surface: CANON-05, CANON-12, CANON-19, CANON-23, CANON-30, CANON-32.
+- Next repair: run the named live proof gates when credentials/host access are
+  available. Do not promote the symphony doc, `GAP-001`, or the operator
+  dashboard governance rollup to production-ready until the required evidence
+  journeys are recorded as passed.
+
 ## Not Gaps / Already Real
 
 These surfaces were checked and found covered at the source/local level. They
@@ -2330,13 +2386,13 @@ proof and store redacted evidence outside tracked public docs.
 | --- | --- | --- |
 | `PG-PROD` | Full production journey | `bin/arclink-live-proof --live --json` (`docs/arclink/control-node-production-runbook.md:254-260`) |
 | `PG-STRIPE` | Stripe checkout, webhook, portal, refuel, refund/cancel | selected `ARCLINK_PROOF_*` Stripe rows (`docs/arclink/live-e2e-secrets-needed.md:56-60`, `docs/arclink/live-e2e-secrets-needed.md:99-104`) |
-| `PG-BOTS` | Telegram/Discord webhooks, command menus, buttons, delivery, selected-agent bridge | selected Telegram/Discord proof rows (`docs/arclink/live-e2e-secrets-needed.md:105-112`) |
+| `PG-BOTS` | Telegram/Discord webhooks, command menus, buttons, delivery, selected-agent bridge, long text, callback replay, Discord free-text/media | selected Telegram/Discord proof rows plus `durable_callback_replay_proof`, `discord_agent_media_components_proof`, `discord_free_text_ingress_proof`, and `telegram_text_split_batch_proof` |
 | `PG-PROVISION` | Control Node ArcPod apply, health, rollback, teardown, dashboard reachability | production Docker/SSH, rollback credentials, secret resolver, and health proof (`docs/arclink/live-e2e-secrets-needed.md:172-186`) |
-| `PG-FLEET` | Remote worker SSH, inventory, capacity, provider worker lifecycle | one scratch create/join/probe/drain/remove per provider (`docs/arclink/fleet-operator-runbook.md:94-132`) |
+| `PG-FLEET` | Remote worker SSH, inventory, capacity, provider worker lifecycle, fleet-shared skills | one scratch create/join/probe/drain/remove per provider plus `fleet_shared_skill_guard_proof` (`docs/arclink/fleet-operator-runbook.md:94-132`) |
 | `PG-INGRESS` | Cloudflare DNS/Access, Traefik routing, Tailscale Serve/Funnel/cert behavior | selected ingress credentials and teardown evidence (`docs/arclink/live-e2e-secrets-needed.md:172-186`) |
 | `PG-PROVIDER` | Provider OAuth, inference, key lifecycle, usage/quota/billing sync, router relay | bounded external provider rows plus router proof (`docs/arclink/live-e2e-secrets-needed.md:113-136`, `docs/arclink/llm-router.md:227-245`) |
 | `PG-NOTION` | Shared-root membership, webhook callback, page/database read, SSOT write, retained user-owned OAuth | shared-root readability, then explicitly authorized write preflight (`python/arclink_notion_ssot.py:1120-1205`) |
-| `PG-HERMES` | Live Hermes dashboard, gateway response, qmd retrieval, memory refresh, Drive/Code/Terminal browser workflows | `bin/arclink-live-proof --journey workspace --live --json` with TLS URL and auth (`docs/arclink/live-e2e-secrets-needed.md:49-52`) |
+| `PG-HERMES` | Live Hermes dashboard, gateway response, qmd retrieval, memory refresh, Drive/Code/Terminal browser workflows, tmux durability, skill reload, selected-agent bridge proof | `bin/arclink-live-proof --journey workspace --live --json` with TLS URL and auth plus named external rows for `terminal_tmux_dashboard_restart_proof` and `reload_skills_after_enablement_proof` (`docs/arclink/live-e2e-secrets-needed.md:49-52`) |
 | `PG-BACKUP` | Control DB restore, per-deployment volume restore, private/user backup restore, disaster drill | staging restore of control DB plus at least one ArcPod state stack (`docs/arclink/backup-restore.md:72-77`) |
 | `PG-UPGRADE` | Live shared-host, Docker, Control Node, and component-pin upgrades | release-state proof from the relevant deploy/upgrade command family |
 | `PG-SHARED-HOST` | Shared Host fresh install, Curator/enrollment rails, health, and cleanup | `./test.sh` or `sudo bin/ci-install-smoke.sh` on a supported Linux/systemd host with redacted evidence |

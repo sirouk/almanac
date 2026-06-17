@@ -21,6 +21,9 @@ from typing import Any
 
 
 HOST_RUNNER_SCHEMA_VERSION = 1
+HOST_RUNNER_RESULT_GRACE_SECONDS = 30
+QUEUE_RETENTION_SECONDS = 7 * 24 * 60 * 60
+QUEUE_RETENTION_MAX_FILES = 2048
 SAFE_COMPONENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,80}$")
 REQUEST_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{7,80}$")
 ALLOWED_PIN_COMPONENTS = {"hermes-agent", "qmd", "nextcloud", "postgres", "redis", "nvm", "node"}
@@ -86,9 +89,14 @@ def _priv_dir(repo_dir: Path) -> Path:
 
 def _queue_root(priv_dir: Path) -> Path:
     configured = str(os.environ.get("ARCLINK_OPERATOR_UPGRADE_HOST_QUEUE_DIR") or "").strip()
-    root = Path(configured).resolve(strict=False) if configured else priv_dir / "state" / "operator-upgrade-host-runner"
+    state_root = (priv_dir / "state").resolve(strict=False)
+    root = Path(configured).resolve(strict=False) if configured else state_root / "operator-upgrade-host-runner"
     if not root.is_absolute():
         raise ValueError("operator upgrade host runner queue path must be absolute")
+    try:
+        root.relative_to(state_root)
+    except ValueError:
+        raise ValueError("operator upgrade host runner queue path must stay under private state") from None
     return root
 
 
@@ -163,6 +171,30 @@ def _operator_timeout(request_body: dict[str, Any]) -> int:
     except (TypeError, ValueError):
         value = 7200
     return max(30, min(21600, value))
+
+
+def _request_expiry(request_body: dict[str, Any], *, timeout_seconds: int) -> int:
+    raw_created_at = request_body.get("created_at")
+    if raw_created_at in (None, ""):
+        return 0
+    try:
+        created_at = int(str(raw_created_at).strip())
+    except (TypeError, ValueError):
+        raise ValueError("operator upgrade host runner created_at is invalid") from None
+    if created_at <= 0:
+        raise ValueError("operator upgrade host runner created_at is invalid")
+    wait_seconds = max(30, min(21630, timeout_seconds + HOST_RUNNER_RESULT_GRACE_SECONDS))
+    return created_at + wait_seconds
+
+
+def _container_priv_dir_value(request_body: dict[str, Any]) -> str:
+    value = _single_line(request_body.get("container_priv_dir"), label="container_priv_dir", allow_blank=True, max_chars=4096)
+    if not value:
+        return ""
+    path = Path(value)
+    if not path.is_absolute() or "arclink-priv" not in path.parts:
+        raise ValueError("operator upgrade host runner container_priv_dir is not an ArcLink private-state path")
+    return value
 
 
 def _operator_env(request_body: dict[str, Any], *, repo_dir: Path, priv_dir: Path) -> dict[str, str]:
@@ -259,7 +291,7 @@ def _pin_upgrade_log_requires_deploy(log_path: Path, *, expected_statuses: int) 
     return any(status in {"changed", "pushed"} for status in recent)
 
 
-def _pin_upgrade_command(component_upgrade: Path, item: dict[str, Any]) -> list[str]:
+def _validated_pin_upgrade(item: dict[str, Any]) -> tuple[str, str, str]:
     component = _single_line(item.get("component"), label="pin upgrade component", allow_blank=False, max_chars=96)
     if not SAFE_COMPONENT_RE.fullmatch(component) or component not in ALLOWED_PIN_COMPONENTS:
         raise ValueError("operator upgrade host runner pin upgrade component is not allowlisted")
@@ -268,13 +300,19 @@ def _pin_upgrade_command(component_upgrade: Path, item: dict[str, Any]) -> list[
     flag = PIN_UPGRADE_FLAGS.get(kind)
     if not flag:
         raise ValueError(f"operator upgrade host runner pin upgrade kind is not allowlisted: {kind}")
-    return [str(component_upgrade), component, "apply", flag, target, "--skip-upgrade"]
+    return component, flag, target
+
+
+def _pin_upgrade_command(component_upgrade: Path, item: dict[str, Any]) -> list[str]:
+    component, flag, target = _validated_pin_upgrade(item)
+    return [str(component_upgrade), component, "apply", flag, target, "--skip-push", "--skip-upgrade"]
 
 
 def _validate_request(request_body: dict[str, Any], *, repo_dir: Path, priv_dir: Path) -> dict[str, Any]:
     if any(key in request_body for key in ("args", "cmd", "command")):
         raise ValueError("operator upgrade host runner does not accept raw commands")
-    if int(request_body.get("schema_version") or 0) != HOST_RUNNER_SCHEMA_VERSION:
+    schema_version = request_body.get("schema_version")
+    if type(schema_version) is not int or schema_version != HOST_RUNNER_SCHEMA_VERSION:
         raise ValueError("operator upgrade host runner request schema is unsupported")
     request_id = _single_line(request_body.get("request_id"), label="request_id", allow_blank=False, max_chars=96)
     if not REQUEST_ID_RE.fullmatch(request_id):
@@ -295,40 +333,36 @@ def _validate_request(request_body: dict[str, Any], *, repo_dir: Path, priv_dir:
         label="operator log",
         mkdir_parent=True,
     )
+    timeout_seconds = _operator_timeout(request_body)
+    expires_at = _request_expiry(request_body, timeout_seconds=timeout_seconds)
+    if expires_at and time.time() > expires_at:
+        raise ValueError("operator upgrade host runner request expired before execution")
     normalized: dict[str, Any] = {
         "request_id": request_id,
         "operation": operation,
         "log_path": log_path,
-        "timeout_seconds": _operator_timeout(request_body),
-        "container_priv_dir": _single_line(
-            request_body.get("container_priv_dir"), label="container_priv_dir", allow_blank=True, max_chars=4096
-        ),
+        "timeout_seconds": timeout_seconds,
+        "expires_at": expires_at,
+        "container_priv_dir": _container_priv_dir_value(request_body),
         "upstream": {},
     }
     upstream = request_body.get("upstream")
     if isinstance(upstream, dict):
-        normalized["upstream"] = {
-            key: _single_line(upstream.get(key), label=key, allow_blank=True, max_chars=4096)
-            for key in UPSTREAM_ENV_KEYS
-            if _single_line(upstream.get(key), label=key, allow_blank=True, max_chars=4096)
-        }
+        normalized_upstream: dict[str, str] = {}
+        for key in UPSTREAM_ENV_KEYS:
+            value = _single_line(upstream.get(key), label=key, allow_blank=True, max_chars=4096)
+            if value:
+                normalized_upstream[key] = value
+        normalized["upstream"] = normalized_upstream
     if operation == "run_pin_upgrade":
         install_items = request_body.get("install_items")
         if not isinstance(install_items, list) or not install_items:
             raise ValueError("operator upgrade host runner pin upgrade request has no install items")
-        normalized_items: list[dict[str, str]] = []
         for item in install_items:
             if not isinstance(item, dict):
                 raise ValueError("operator upgrade host runner pin upgrade item must be a JSON object")
-            command = _pin_upgrade_command(Path("/tmp/component-upgrade-placeholder"), item)
-            normalized_items.append(
-                {
-                    "component": command[1],
-                    "kind": _single_line(item.get("kind"), label="pin upgrade kind", allow_blank=False, max_chars=64),
-                    "target": command[4],
-                }
-            )
-        normalized["install_items"] = normalized_items
+            _validated_pin_upgrade(item)  # reject any disallowed item before running a single command
+        normalized["install_items"] = install_items
     return normalized
 
 
@@ -362,40 +396,82 @@ def _run_request(request_body: dict[str, Any], *, repo_dir: Path, priv_dir: Path
             handle.write("All requested pinned components were already current; skipping deploy upgrade.\n")
             handle.flush()
             return int(last_result.returncode if last_result is not None else 0)
-        last_result = _run_logged_command(handle, [str(deploy), "upgrade"], cwd=repo_dir, env=env, timeout_seconds=timeout_seconds)
+        deploy_env = dict(env)
+        deploy_env["ARCLINK_CONTROL_UPGRADE_ALLOW_DIRTY"] = "1"
+        handle.write("Applying queued pin changes from the local checkout without pushing upstream.\n")
+        handle.flush()
+        last_result = _run_logged_command(handle, [str(deploy), "upgrade"], cwd=repo_dir, env=deploy_env, timeout_seconds=timeout_seconds)
         return int(last_result.returncode if last_result is not None else 0)
 
 
 def _process_request_file(path: Path, *, repo_dir: Path, priv_dir: Path, queue_root: Path) -> None:
-    stat_result = path.lstat()
-    if stat.S_ISLNK(stat_result.st_mode) or not stat.S_ISREG(stat_result.st_mode):
-        raise ValueError(f"operator upgrade host runner refusing non-regular request file {path}")
-    request_body = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(request_body, dict):
-        raise ValueError("operator upgrade host runner request must be a JSON object")
-    request_id = _single_line(request_body.get("request_id"), label="request_id", allow_blank=False, max_chars=96)
-    if not REQUEST_ID_RE.fullmatch(request_id):
-        raise ValueError("operator upgrade host runner request id is invalid")
-    result_path = queue_root / "results" / f"{request_id}.json"
     done_dir = queue_root / "processed"
     result: dict[str, Any]
+    request_id = path.stem if REQUEST_ID_RE.fullmatch(path.stem) else ""
+    result_path: Path | None = None
     try:
+        stat_result = path.lstat()
+        if stat.S_ISLNK(stat_result.st_mode) or not stat.S_ISREG(stat_result.st_mode):
+            raise ValueError(f"operator upgrade host runner refusing non-regular request file {path}")
+        request_body = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(request_body, dict):
+            raise ValueError("operator upgrade host runner request must be a JSON object")
+        body_request_id = _single_line(request_body.get("request_id"), label="request_id", allow_blank=False, max_chars=96)
+        if not REQUEST_ID_RE.fullmatch(body_request_id):
+            raise ValueError("operator upgrade host runner request id is invalid")
+        request_id = body_request_id
+        result_path = queue_root / "results" / f"{request_id}.json"
         returncode = _run_request(request_body, repo_dir=repo_dir, priv_dir=priv_dir)
         result = {"ok": True, "request_id": request_id, "returncode": int(returncode), "completed_at": int(time.time())}
     except BaseException as exc:
         result = {
             "ok": False,
-            "request_id": request_id,
+            "request_id": request_id or path.stem,
             "error": str(exc),
             "error_class": exc.__class__.__name__,
             "completed_at": int(time.time()),
         }
-    _atomic_write_json(result_path, result)
+        if result_path is None and request_id:
+            result_path = queue_root / "results" / f"{request_id}.json"
+    if result_path is not None:
+        _atomic_write_json(result_path, result)
     done_dir.mkdir(parents=True, exist_ok=True)
     try:
         os.replace(path, done_dir / path.name)
     except OSError:
         path.unlink(missing_ok=True)
+
+
+def _prune_queue_dir(
+    path: Path,
+    *,
+    now: float | None = None,
+    max_age_seconds: int = QUEUE_RETENTION_SECONDS,
+    max_files: int = QUEUE_RETENTION_MAX_FILES,
+) -> None:
+    if not path.exists():
+        return
+    cutoff = (time.time() if now is None else now) - max_age_seconds
+    try:
+        entries = [(item.lstat().st_mtime, item) for item in path.glob("*.json")]
+    except OSError:
+        return
+    kept: list[tuple[float, Path]] = []
+    for item_mtime, item in entries:
+        if item_mtime >= cutoff:
+            kept.append((item_mtime, item))
+            continue
+        try:
+            item.unlink()
+        except OSError:
+            pass
+    if max_files <= 0 or len(kept) <= max_files:
+        return
+    for _item_mtime, item in sorted(kept, key=lambda entry: (entry[0], entry[1].name))[: len(kept) - max_files]:
+        try:
+            item.unlink()
+        except OSError:
+            pass
 
 
 def process_once() -> int:
@@ -411,7 +487,9 @@ def process_once() -> int:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return 0
-        for request_path in sorted(pending_dir.glob("*.json"), key=lambda item: (item.stat().st_mtime, item.name)):
+        _prune_queue_dir(queue_root / "results")
+        _prune_queue_dir(queue_root / "processed")
+        for request_path in sorted(pending_dir.glob("*.json"), key=lambda item: (item.lstat().st_mtime, item.name)):
             _process_request_file(request_path, repo_dir=repo_dir, priv_dir=priv_dir, queue_root=queue_root)
     return 0
 

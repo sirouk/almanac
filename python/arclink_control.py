@@ -18,8 +18,10 @@ import string
 import subprocess
 import sys
 import tempfile
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 from urllib import error as urlerror
 from urllib import parse as urlparse
@@ -54,6 +56,7 @@ from arclink_notion_ssot import (  # noqa: E402
 )
 from arclink_rpc_client import mcp_call  # noqa: E402
 from arclink_resource_map import managed_resource_ref, shared_resource_lines, shared_tailnet_host  # noqa: E402
+from arclink_boundary import json_dumps_safe, reject_secret_material  # noqa: E402
 
 
 AUTO_PROVISION_UNIX_USER_PATTERN = re.compile(r"^[a-z_][a-z0-9_-]{0,30}$")
@@ -155,6 +158,17 @@ def bool_env(name: str, default: bool = False, env: dict[str, str] | None = None
     return normalized in {"1", "true", "yes", "on"}
 
 
+def _config_int(env: Mapping[str, str], name: str, default: int) -> int:
+    raw = env.get(name)
+    if raw is None or str(raw).strip() == "":
+        return int(default)
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        warnings.warn(f"{name} must be an integer; using default {int(default)}", RuntimeWarning)
+        return int(default)
+
+
 def json_dumps(value: Any) -> str:
     return json.dumps(value, sort_keys=True)
 
@@ -197,6 +211,38 @@ def _safe_path_is_file(path: Path) -> bool:
         return path.is_file()
     except OSError:
         return False
+
+
+_CONFIG_ENV_CACHE_KEY: tuple[Any, ...] | None = None
+_CONFIG_ENV_CACHE_VALUE: dict[str, str] | None = None
+
+
+def _is_null_config_path(path: Path) -> bool:
+    try:
+        return path.expanduser().resolve(strict=False) == Path(os.devnull).resolve(strict=False)
+    except (OSError, RuntimeError):
+        return str(path) == os.devnull
+
+
+def _config_file_signature(path: Path | None) -> tuple[str, int | None, int | None] | None:
+    if path is None:
+        return None
+    try:
+        stat_result = path.stat()
+    except OSError:
+        return (str(path), None, None)
+    return (str(path), int(stat_result.st_mtime_ns), int(stat_result.st_size))
+
+
+def _config_env_cache_key(config_path: Path | None) -> tuple[Any, ...]:
+    return (tuple(sorted(os.environ.items())), _config_file_signature(config_path))
+
+
+def _cached_config_env(cache_key: tuple[Any, ...], merged: Mapping[str, str]) -> dict[str, str]:
+    global _CONFIG_ENV_CACHE_KEY, _CONFIG_ENV_CACHE_VALUE
+    _CONFIG_ENV_CACHE_KEY = cache_key
+    _CONFIG_ENV_CACHE_VALUE = dict(merged)
+    return dict(merged)
 
 
 def _artifact_value(raw_value: str) -> str:
@@ -245,8 +291,7 @@ def _resolve_user_home(user: str) -> Path | None:
 def _discover_config_file() -> Path | None:
     explicit = os.environ.get("ARCLINK_CONFIG_FILE")
     if explicit:
-        path = Path(explicit).expanduser()
-        return path if _safe_path_is_file(path) else path
+        return Path(explicit).expanduser()
 
     repo_root = Path(os.environ.get("ARCLINK_REPO_DIR", _python_repo_root())).expanduser().resolve()
     operator_artifact = Path(
@@ -300,27 +345,40 @@ def _discover_config_file() -> Path | None:
 
 
 def _load_config_env() -> dict[str, str]:
+    global _CONFIG_ENV_CACHE_KEY, _CONFIG_ENV_CACHE_VALUE
+    config_path = _discover_config_file()
+    cache_key = _config_env_cache_key(config_path)
+    if _CONFIG_ENV_CACHE_KEY == cache_key and _CONFIG_ENV_CACHE_VALUE is not None:
+        return dict(_CONFIG_ENV_CACHE_VALUE)
+
     # Safe: this merged environment is consumed only in-process for config discovery
     # and default resolution. It must never be handed to child processes as-is.
     merged = dict(os.environ)
-    config_path = _discover_config_file()
     if config_path is None:
-        return merged
+        return _cached_config_env(cache_key, merged)
 
     if not _safe_path_is_file(config_path):
+        if os.environ.get("ARCLINK_CONFIG_FILE") and not _is_null_config_path(config_path):
+            raise FileNotFoundError(f"ARCLINK_CONFIG_FILE does not point to a readable file: {config_path}")
         merged.setdefault("ARCLINK_CONFIG_FILE", str(config_path))
-        return merged
+        return _cached_config_env(cache_key, merged)
 
     try:
         config_text = config_path.read_text(encoding="utf-8")
-    except OSError:
+    except OSError as exc:
+        if os.environ.get("ARCLINK_CONFIG_FILE"):
+            raise OSError(f"failed to read ARCLINK_CONFIG_FILE: {config_path}") from exc
         merged.setdefault("ARCLINK_CONFIG_FILE", str(config_path))
-        return merged
+        return _cached_config_env(cache_key, merged)
 
     for raw_line in config_text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+            if not line or "=" not in line:
+                continue
         key, raw_value = line.split("=", 1)
         key = key.strip()
         raw_value = raw_value.strip()
@@ -328,13 +386,13 @@ def _load_config_env() -> dict[str, str]:
             continue
         try:
             parsed = shlex.split(raw_value, posix=True)
-            value = "" if not parsed else parsed[0]
+            value = " ".join(parsed)
         except ValueError:
             value = raw_value
         merged.setdefault(key, value)
 
     merged.setdefault("ARCLINK_CONFIG_FILE", str(config_path))
-    return merged
+    return _cached_config_env(cache_key, merged)
 
 
 def config_env_value(name: str, default: str = "") -> str:
@@ -395,7 +453,7 @@ class Config:
     org_provider_preset: str
     org_provider_model_id: str
     org_provider_reasoning_effort: str
-    model_presets: dict[str, str]
+    model_presets: Mapping[str, str]
     agent_dashboard_backend_port_base: int
     agent_dashboard_proxy_port_base: int
     agent_port_slot_span: int
@@ -410,9 +468,9 @@ class Config:
         state_dir = Path(env.get("STATE_DIR", private_dir / "state")).resolve()
         runtime_dir = Path(env.get("RUNTIME_DIR", state_dir / "runtime")).resolve()
         vault_dir = Path(env.get("VAULT_DIR", private_dir / "vault")).resolve()
-        public_mcp_port = int(env.get("ARCLINK_MCP_PORT", "8282"))
+        public_mcp_port = _config_int(env, "ARCLINK_MCP_PORT", 8282)
         public_mcp_host = env.get("ARCLINK_MCP_HOST", "127.0.0.1")
-        notion_webhook_port = int(env.get("ARCLINK_NOTION_WEBHOOK_PORT", "8283"))
+        notion_webhook_port = _config_int(env, "ARCLINK_NOTION_WEBHOOK_PORT", 8283)
         notion_webhook_host = env.get("ARCLINK_NOTION_WEBHOOK_HOST", "127.0.0.1")
         qmd_url = env.get("ARCLINK_QMD_URL", f"http://127.0.0.1:{env.get('QMD_MCP_PORT', '8181')}/mcp")
         extra_mcp_name = env.get("ARCLINK_EXTRA_MCP_NAME", "external-kb").strip() or "external-kb"
@@ -489,13 +547,13 @@ class Config:
             public_mcp_port=public_mcp_port,
             notion_webhook_host=notion_webhook_host,
             notion_webhook_port=notion_webhook_port,
-            bootstrap_window_seconds=int(env.get("ARCLINK_BOOTSTRAP_WINDOW_SECONDS", "3600")),
-            bootstrap_per_ip_limit=int(env.get("ARCLINK_BOOTSTRAP_PER_IP_LIMIT", "5")),
-            bootstrap_global_pending_limit=int(env.get("ARCLINK_BOOTSTRAP_GLOBAL_PENDING_LIMIT", "20")),
-            bootstrap_pending_ttl_seconds=int(env.get("ARCLINK_BOOTSTRAP_PENDING_TTL_SECONDS", "900")),
-            auto_provision_max_attempts=int(env.get("ARCLINK_AUTO_PROVISION_MAX_ATTEMPTS", "5")),
-            auto_provision_retry_base_seconds=int(env.get("ARCLINK_AUTO_PROVISION_RETRY_BASE_SECONDS", "60")),
-            auto_provision_retry_max_seconds=int(env.get("ARCLINK_AUTO_PROVISION_RETRY_MAX_SECONDS", "900")),
+            bootstrap_window_seconds=_config_int(env, "ARCLINK_BOOTSTRAP_WINDOW_SECONDS", 3600),
+            bootstrap_per_ip_limit=_config_int(env, "ARCLINK_BOOTSTRAP_PER_IP_LIMIT", 5),
+            bootstrap_global_pending_limit=_config_int(env, "ARCLINK_BOOTSTRAP_GLOBAL_PENDING_LIMIT", 20),
+            bootstrap_pending_ttl_seconds=_config_int(env, "ARCLINK_BOOTSTRAP_PENDING_TTL_SECONDS", 900),
+            auto_provision_max_attempts=_config_int(env, "ARCLINK_AUTO_PROVISION_MAX_ATTEMPTS", 5),
+            auto_provision_retry_base_seconds=_config_int(env, "ARCLINK_AUTO_PROVISION_RETRY_BASE_SECONDS", 60),
+            auto_provision_retry_max_seconds=_config_int(env, "ARCLINK_AUTO_PROVISION_RETRY_MAX_SECONDS", 900),
             curator_telegram_onboarding_enabled=bool_env(
                 "ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED",
                 default=("telegram" in curator_channels or operator_notify_platform == "telegram"),
@@ -506,18 +564,17 @@ class Config:
                 default=("discord" in curator_channels or operator_notify_platform == "discord"),
                 env=env,
             ),
-            onboarding_window_seconds=int(env.get("ARCLINK_ONBOARDING_WINDOW_SECONDS", "3600")),
-            onboarding_per_telegram_user_limit=int(
-                env.get(
-                    "ARCLINK_ONBOARDING_PER_USER_LIMIT",
-                    env.get("ARCLINK_ONBOARDING_PER_TELEGRAM_USER_LIMIT", "3"),
-                )
+            onboarding_window_seconds=_config_int(env, "ARCLINK_ONBOARDING_WINDOW_SECONDS", 3600),
+            onboarding_per_telegram_user_limit=_config_int(
+                env,
+                "ARCLINK_ONBOARDING_PER_USER_LIMIT",
+                _config_int(env, "ARCLINK_ONBOARDING_PER_TELEGRAM_USER_LIMIT", 3),
             ),
-            onboarding_global_pending_limit=int(env.get("ARCLINK_ONBOARDING_GLOBAL_PENDING_LIMIT", "20")),
-            onboarding_update_failure_limit=int(env.get("ARCLINK_ONBOARDING_UPDATE_FAILURE_LIMIT", "3")),
-            ssot_pending_write_ttl_seconds=int(env.get("ARCLINK_SSOT_PENDING_WRITE_TTL_SECONDS", "86400")),
-            curator_fanout_retry_base_seconds=int(env.get("ARCLINK_CURATOR_FANOUT_RETRY_BASE_SECONDS", "15")),
-            curator_fanout_retry_max_seconds=int(env.get("ARCLINK_CURATOR_FANOUT_RETRY_MAX_SECONDS", "300")),
+            onboarding_global_pending_limit=_config_int(env, "ARCLINK_ONBOARDING_GLOBAL_PENDING_LIMIT", 20),
+            onboarding_update_failure_limit=_config_int(env, "ARCLINK_ONBOARDING_UPDATE_FAILURE_LIMIT", 3),
+            ssot_pending_write_ttl_seconds=_config_int(env, "ARCLINK_SSOT_PENDING_WRITE_TTL_SECONDS", 86400),
+            curator_fanout_retry_base_seconds=_config_int(env, "ARCLINK_CURATOR_FANOUT_RETRY_BASE_SECONDS", 15),
+            curator_fanout_retry_max_seconds=_config_int(env, "ARCLINK_CURATOR_FANOUT_RETRY_MAX_SECONDS", 300),
             operator_notify_platform=operator_notify_platform,
             operator_notify_channel_id=operator_notify_channel_id,
             operator_telegram_user_ids=operator_telegram_user_ids,
@@ -540,10 +597,10 @@ class Config:
             org_provider_preset=org_provider_preset,
             org_provider_model_id=org_provider_model_id,
             org_provider_reasoning_effort=org_provider_reasoning_effort,
-            model_presets=model_presets,
-            agent_dashboard_backend_port_base=int(env.get("ARCLINK_AGENT_DASHBOARD_BACKEND_PORT_BASE", "19000")),
-            agent_dashboard_proxy_port_base=int(env.get("ARCLINK_AGENT_DASHBOARD_PROXY_PORT_BASE", "29000")),
-            agent_port_slot_span=int(env.get("ARCLINK_AGENT_PORT_SLOT_SPAN", "5000")),
+            model_presets=MappingProxyType(dict(model_presets)),
+            agent_dashboard_backend_port_base=_config_int(env, "ARCLINK_AGENT_DASHBOARD_BACKEND_PORT_BASE", 19000),
+            agent_dashboard_proxy_port_base=_config_int(env, "ARCLINK_AGENT_DASHBOARD_PROXY_PORT_BASE", 29000),
+            agent_port_slot_span=_config_int(env, "ARCLINK_AGENT_PORT_SLOT_SPAN", 5000),
             agent_enable_tailscale_serve=agent_enable_tailscale_serve,
         )
 
@@ -570,19 +627,38 @@ def connect_db(cfg: Config) -> sqlite3.Connection:
     if journal_mode not in {"DELETE", "TRUNCATE", "PERSIST", "MEMORY", "WAL", "OFF"}:
         journal_mode = default_journal_mode
     try:
-        conn.execute(f"PRAGMA journal_mode = {journal_mode}")
+        row = conn.execute(f"PRAGMA journal_mode = {journal_mode}").fetchone()
+        effective_journal_mode = str(row[0] if row else "").strip().upper()
+        if effective_journal_mode and effective_journal_mode != journal_mode:
+            warnings.warn(
+                f"SQLite journal_mode request {journal_mode} resolved to {effective_journal_mode}",
+                RuntimeWarning,
+            )
     except sqlite3.OperationalError as exc:
         locked = "database is locked" in str(exc).lower()
         if locked:
-            pass
+            warnings.warn(
+                f"SQLite journal_mode request {journal_mode} was skipped because the database is locked",
+                RuntimeWarning,
+            )
         elif journal_mode != "WAL":
             raise
         else:
             try:
-                conn.execute("PRAGMA journal_mode = DELETE")
+                row = conn.execute("PRAGMA journal_mode = DELETE").fetchone()
+                effective_journal_mode = str(row[0] if row else "").strip().upper()
+                if effective_journal_mode and effective_journal_mode != "DELETE":
+                    warnings.warn(
+                        f"SQLite journal_mode fallback DELETE resolved to {effective_journal_mode}",
+                        RuntimeWarning,
+                    )
             except sqlite3.OperationalError as fallback_exc:
                 if "database is locked" not in str(fallback_exc).lower():
                     raise
+                warnings.warn(
+                    "SQLite journal_mode fallback DELETE was skipped because the database is locked",
+                    RuntimeWarning,
+                )
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 15000")
     conn.execute("PRAGMA synchronous = NORMAL")
@@ -763,6 +839,12 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           requested_target TEXT NOT NULL DEFAULT '',
           requested_by TEXT NOT NULL,
           request_source TEXT NOT NULL DEFAULT '',
+          actor_id TEXT NOT NULL DEFAULT '',
+          authorization_kind TEXT NOT NULL DEFAULT '',
+          authorization_payload_json TEXT NOT NULL DEFAULT '',
+          authorization_mac TEXT NOT NULL DEFAULT '',
+          authorized_at TEXT,
+          authorization_expires_at TEXT,
           status TEXT NOT NULL,
           note TEXT NOT NULL DEFAULT '',
           created_at TEXT NOT NULL,
@@ -1861,6 +1943,12 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         ON operator_actions (status, action_kind, created_at)
         """
     )
+    _ensure_column(conn, "operator_actions", "actor_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "operator_actions", "authorization_kind", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "operator_actions", "authorization_payload_json", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "operator_actions", "authorization_mac", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "operator_actions", "authorized_at", "TEXT")
+    _ensure_column(conn, "operator_actions", "authorization_expires_at", "TEXT")
     _ensure_column(conn, "bootstrap_tokens", "activation_request_id", "TEXT")
     _ensure_column(conn, "bootstrap_tokens", "activated_at", "TEXT")
     _ensure_column(conn, "bootstrap_requests", "auto_provision", "INTEGER NOT NULL DEFAULT 0")
@@ -3231,15 +3319,24 @@ ARCLINK_PROVISIONING_JOB_TRANSITIONS = {
 }
 
 
-def _arclink_json(value: Mapping[str, Any] | Sequence[Any] | str | None, *, default: str = "{}") -> str:
+def _arclink_json(
+    value: Mapping[str, Any] | Sequence[Any] | str | None,
+    *,
+    default: str = "{}",
+    reject_secrets: bool = True,
+) -> str:
     if value is None:
         return default
     if isinstance(value, str):
         try:
-            json.loads(value)
+            parsed = json.loads(value)
         except json.JSONDecodeError as exc:
             raise ValueError("ArcLink JSON fields must contain valid JSON") from exc
+        if reject_secrets:
+            reject_secret_material(parsed, label="ArcLink control JSON field")
         return value
+    if reject_secrets:
+        reject_secret_material(value, label="ArcLink control JSON field")
     return json.dumps(value, sort_keys=True)
 
 
@@ -3606,7 +3703,7 @@ def reserve_arclink_deployment_prefix(
                 str(agent_title or "").strip(),
                 float(asu_weight or 1.0),
                 clean_status,
-                _arclink_json(metadata),
+                _arclink_json(metadata, reject_secrets=False),
                 now,
                 now,
             ),
@@ -4432,6 +4529,24 @@ def grant_arclink_refuel_credit(
     cents = int(credit_cents if credit_cents is not None else refuel_credit_sku_config()["credit_cents"])
     if cents <= 0:
         raise ValueError("ArcLink refuel credit cents must be positive")
+    clean_source_kind = str(source_kind or "").strip() or "manual"
+    clean_source_id = str(source_id or "").strip()
+    if clean_source_id:
+        existing = conn.execute(
+            """
+            SELECT *
+            FROM arclink_refuel_credits
+            WHERE user_id = ?
+              AND deployment_id = ?
+              AND source_kind = ?
+              AND source_id = ?
+            ORDER BY created_at ASC, credit_id ASC
+            LIMIT 1
+            """,
+            (clean_user, clean_deployment, clean_source_kind, clean_source_id),
+        ).fetchone()
+        if existing is not None:
+            return dict(existing)
     now = utc_now_iso()
     credit_id = _arclink_id("refuel")
     conn.execute(
@@ -4445,8 +4560,8 @@ def grant_arclink_refuel_credit(
             credit_id,
             clean_user,
             clean_deployment,
-            str(source_kind or "").strip() or "manual",
-            str(source_id or "").strip(),
+            clean_source_kind,
+            clean_source_id,
             cents,
             cents,
             _arclink_json(metadata),
@@ -6019,6 +6134,19 @@ def expire_stale_notion_identity_claims(conn: sqlite3.Connection) -> int:
 
 def expire_stale_ssot_pending_writes(conn: sqlite3.Connection) -> int:
     now_iso = utc_now_iso()
+    due = conn.execute(
+        """
+        SELECT 1
+        FROM ssot_pending_writes
+        WHERE status = 'pending'
+          AND expires_at != ''
+          AND expires_at < ?
+        LIMIT 1
+        """,
+        (now_iso,),
+    ).fetchone()
+    if due is None:
+        return 0
     cursor = conn.execute(
         """
         UPDATE ssot_pending_writes
@@ -6976,7 +7104,10 @@ def _write_private_text(path: Path, value: str) -> None:
         path.parent.chmod(0o700)
     except OSError:
         pass
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(path, flags, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write(value.strip() + "\n")
     try:
@@ -7007,6 +7138,18 @@ def onboarding_named_secret_path(cfg: Config, session_id: str, secret_name: str)
 def onboarding_platform_token_secret_path(cfg: Config, session_id: str, platform: str) -> Path:
     normalized = re.sub(r"[^a-z0-9_-]+", "-", str(platform or "bot").strip().lower()) or "bot"
     return onboarding_secret_dir(cfg) / session_id / f"{normalized}-bot-token"
+
+
+def _onboarding_secret_path_is_contained(cfg: Config, raw_path: str) -> bool:
+    if not raw_path:
+        return False
+    try:
+        root = onboarding_secret_dir(cfg).resolve(strict=False)
+        candidate = Path(raw_path).expanduser().resolve(strict=False)
+        candidate.relative_to(root)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return True
 
 
 def write_onboarding_secret(cfg: Config, session_id: str, secret_name: str, raw_value: str) -> str:
@@ -7083,7 +7226,7 @@ def _migrate_onboarding_bot_tokens(conn: sqlite3.Connection, cfg: Config) -> Non
         existing_path = str(row["pending_bot_token_path"] or "").strip()
         if not session_id or not token:
             continue
-        if existing_path:
+        if existing_path and _onboarding_secret_path_is_contained(cfg, existing_path):
             _write_private_text(Path(existing_path), token)
             secret_path = existing_path
         else:
@@ -8060,15 +8203,24 @@ def queue_notification(
     channel_kind: str,
     message: str,
     extra: dict[str, Any] | None = None,
+    commit: bool = True,
 ) -> int:
     cursor = conn.execute(
         """
         INSERT INTO notification_outbox (target_kind, target_id, channel_kind, message, extra_json, created_at)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (target_kind, target_id, channel_kind, message, json_dumps(extra or {}), utc_now_iso()),
+        (
+            target_kind,
+            target_id,
+            channel_kind,
+            message,
+            json_dumps_safe(extra or {}, label="ArcLink notification extra"),
+            utc_now_iso(),
+        ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return int(cursor.lastrowid)
 
 
@@ -8191,6 +8343,230 @@ def _record_curator_fanout_retry(
     return max_attempts
 
 
+HIGH_AUTHORITY_OPERATOR_ACTION_KINDS = {"upgrade", "pin-upgrade"}
+OPERATOR_ACTION_AUTH_KIND_OPERATOR_RAVEN = "operator-raven-confirmed"
+OPERATOR_ACTION_AUTH_SECRET_ENV = "ARCLINK_OPERATOR_ACTION_AUTH_SECRET"
+OPERATOR_ACTION_AUTH_TTL_SECONDS = 15 * 60
+OPERATOR_ACTION_AUTH_MAX_TTL_SECONDS = 60 * 60
+OPERATOR_ACTION_AUTH_MAC_PREFIX = "sha256="
+
+
+def operator_action_requires_authorization(action_kind: str) -> bool:
+    return str(action_kind or "").strip().lower() in HIGH_AUTHORITY_OPERATOR_ACTION_KINDS
+
+
+def operator_action_auth_secret_path(cfg: Config | None = None) -> Path:
+    effective_cfg = cfg or Config.from_env()
+    return effective_cfg.state_dir / "operator-secrets" / "operator-action-auth-secret"
+
+
+def operator_action_auth_secret(*, create: bool = False) -> str:
+    configured = str(config_env_value(OPERATOR_ACTION_AUTH_SECRET_ENV, "") or "").strip()
+    if configured:
+        return configured
+
+    path = operator_action_auth_secret_path()
+    try:
+        if path.is_file():
+            existing = path.read_text(encoding="utf-8").strip()
+            if existing:
+                return existing
+    except OSError:
+        if not create:
+            return ""
+        raise
+
+    if not create:
+        return ""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    secret_value = secrets.token_urlsafe(48)
+    try:
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        existing = path.read_text(encoding="utf-8").strip()
+        if existing:
+            return existing
+        fd = os.open(str(path), os.O_WRONLY | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(secret_value + "\n")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    return secret_value
+
+
+def _operator_action_auth_payload_json(payload: Mapping[str, Any]) -> str:
+    return json.dumps(dict(payload), sort_keys=True, separators=(",", ":"))
+
+
+def _operator_action_auth_payload_hash(payload_json: str) -> str:
+    return hashlib.sha256(str(payload_json or "").encode("utf-8")).hexdigest()
+
+
+def _operator_action_target_hash(requested_target: str) -> str:
+    return hashlib.sha256(str(requested_target or "").encode("utf-8")).hexdigest()
+
+
+def _operator_action_confirmation_id(payload: Mapping[str, Any]) -> str:
+    for key in ("confirmation_id", "nonce", "confirmation_nonce", "idempotency_key"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _operator_action_auth_mac_message(
+    *,
+    action_kind: str,
+    requested_target: str,
+    actor_id: str,
+    authorization_kind: str,
+    payload_json: str,
+    expires_at: str,
+) -> str:
+    payload = json_loads(str(payload_json or ""), {})
+    confirmation_id = _operator_action_confirmation_id(payload)
+    body = {
+        "v": 1,
+        "action_kind": str(action_kind or "").strip().lower(),
+        "requested_target_hash": _operator_action_target_hash(requested_target),
+        "actor_id": str(actor_id or "").strip(),
+        "authorization_kind": str(authorization_kind or "").strip(),
+        "confirmation_id": confirmation_id,
+        "authorization_payload_hash": _operator_action_auth_payload_hash(payload_json),
+        "expires_at": str(expires_at or "").strip(),
+    }
+    return json.dumps(body, sort_keys=True, separators=(",", ":"))
+
+
+def _operator_action_auth_mac(
+    *,
+    secret: str,
+    action_kind: str,
+    requested_target: str,
+    actor_id: str,
+    authorization_kind: str,
+    payload_json: str,
+    expires_at: str,
+) -> str:
+    message = _operator_action_auth_mac_message(
+        action_kind=action_kind,
+        requested_target=requested_target,
+        actor_id=actor_id,
+        authorization_kind=authorization_kind,
+        payload_json=payload_json,
+        expires_at=expires_at,
+    )
+    digest = hmac.new(secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
+    return OPERATOR_ACTION_AUTH_MAC_PREFIX + digest
+
+
+def _operator_action_auth_ttl_seconds(value: Any) -> int:
+    try:
+        ttl = int(value)
+    except (TypeError, ValueError):
+        ttl = OPERATOR_ACTION_AUTH_TTL_SECONDS
+    return min(OPERATOR_ACTION_AUTH_MAX_TTL_SECONDS, max(1, ttl))
+
+
+def _mint_operator_action_authorization(
+    *,
+    action_kind: str,
+    requested_target: str,
+    authorization: Mapping[str, Any] | None,
+    authorized_at: str,
+) -> dict[str, str | None]:
+    if not isinstance(authorization, Mapping):
+        raise PermissionError(f"{action_kind} operator action requires a signed authorization envelope")
+    authorization_kind = str(authorization.get("kind") or "").strip()
+    if authorization_kind != OPERATOR_ACTION_AUTH_KIND_OPERATOR_RAVEN:
+        raise PermissionError(f"{action_kind} operator action authorization kind is not allowed")
+    actor_id = str(authorization.get("actor_id") or "").strip()
+    if not actor_id:
+        raise PermissionError(f"{action_kind} operator action authorization is missing actor_id")
+    payload_value = authorization.get("payload") or {}
+    if not isinstance(payload_value, Mapping):
+        raise PermissionError(f"{action_kind} operator action authorization payload must be an object")
+    payload = dict(payload_value)
+    confirmation_id = _operator_action_confirmation_id(payload)
+    if not confirmation_id:
+        raise PermissionError(f"{action_kind} operator action authorization is missing confirmation_id")
+    payload_json = _operator_action_auth_payload_json(payload)
+    expires_at = expiry_from_iso(
+        authorized_at,
+        ttl_seconds=_operator_action_auth_ttl_seconds(
+            authorization.get("ttl_seconds", OPERATOR_ACTION_AUTH_TTL_SECONDS)
+        ),
+    )
+    secret = operator_action_auth_secret(create=True)
+    if not secret:
+        raise PermissionError(f"{action_kind} operator action authorization secret is not configured")
+    authorization_mac = _operator_action_auth_mac(
+        secret=secret,
+        action_kind=action_kind,
+        requested_target=requested_target,
+        actor_id=actor_id,
+        authorization_kind=authorization_kind,
+        payload_json=payload_json,
+        expires_at=expires_at,
+    )
+    return {
+        "actor_id": actor_id,
+        "authorization_kind": authorization_kind,
+        "authorization_payload_json": payload_json,
+        "authorization_mac": authorization_mac,
+        "authorized_at": authorized_at,
+        "authorization_expires_at": expires_at,
+    }
+
+
+def operator_action_authorization_valid(action: Mapping[str, Any]) -> tuple[bool, str]:
+    action_kind = str(action.get("action_kind") or "").strip().lower()
+    if not operator_action_requires_authorization(action_kind):
+        return True, "authorization not required"
+
+    authorization_kind = str(action.get("authorization_kind") or "").strip()
+    if authorization_kind != OPERATOR_ACTION_AUTH_KIND_OPERATOR_RAVEN:
+        return False, "missing or unsupported authorization_kind"
+    actor_id = str(action.get("actor_id") or "").strip()
+    if not actor_id:
+        return False, "missing actor_id"
+    payload_json = str(action.get("authorization_payload_json") or "").strip()
+    if not payload_json:
+        return False, "missing authorization_payload_json"
+    payload = json_loads(payload_json, {})
+    if not payload:
+        return False, "invalid authorization_payload_json"
+    if not _operator_action_confirmation_id(payload):
+        return False, "missing confirmation_id"
+    authorization_mac = str(action.get("authorization_mac") or "").strip()
+    if not authorization_mac:
+        return False, "missing authorization_mac"
+    expires_at = str(action.get("authorization_expires_at") or "").strip()
+    parsed_expires_at = parse_utc_iso(expires_at)
+    if parsed_expires_at is None:
+        return False, "missing or invalid authorization_expires_at"
+    if parsed_expires_at.timestamp() <= utc_now().timestamp():
+        return False, "authorization expired"
+    secret = operator_action_auth_secret(create=False)
+    if not secret:
+        return False, "authorization secret missing"
+    expected = _operator_action_auth_mac(
+        secret=secret,
+        action_kind=action_kind,
+        requested_target=str(action.get("requested_target") or ""),
+        actor_id=actor_id,
+        authorization_kind=authorization_kind,
+        payload_json=payload_json,
+        expires_at=expires_at,
+    )
+    if not hmac.compare_digest(expected, authorization_mac):
+        return False, "authorization MAC mismatch"
+    return True, "authorization valid"
+
+
 def _operator_action_row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     if row is None:
         return None
@@ -8201,18 +8577,34 @@ def get_active_operator_action(
     conn: sqlite3.Connection,
     *,
     action_kind: str,
+    request_source: str = "",
 ) -> dict[str, Any] | None:
-    row = conn.execute(
-        """
-        SELECT *
-        FROM operator_actions
-        WHERE action_kind = ?
-          AND status IN ('pending', 'running')
-        ORDER BY id DESC
-        LIMIT 1
-        """,
-        (str(action_kind or "").strip(),),
-    ).fetchone()
+    normalized_source = str(request_source or "").strip()
+    if normalized_source:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM operator_actions
+            WHERE action_kind = ?
+              AND request_source = ?
+              AND status IN ('pending', 'running')
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (str(action_kind or "").strip(), normalized_source),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM operator_actions
+            WHERE action_kind = ?
+              AND status IN ('pending', 'running')
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (str(action_kind or "").strip(),),
+        ).fetchone()
     return _operator_action_row_to_dict(row)
 
 
@@ -8265,47 +8657,85 @@ def request_operator_action(
     request_source: str = "",
     requested_target: str = "",
     dedupe_by_target: bool = False,
+    authorization: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], bool]:
     normalized_kind = str(action_kind or "").strip().lower()
     if not normalized_kind:
         raise ValueError("action_kind is required")
     requested_target_value = str(requested_target or "").strip()
-    if dedupe_by_target:
-        row = conn.execute(
+    normalized_source = str(request_source or "").strip()
+    own_txn = not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        if dedupe_by_target:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM operator_actions
+                WHERE action_kind = ?
+                  AND requested_target = ?
+                  AND status IN ('pending', 'running')
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (normalized_kind, requested_target_value),
+            ).fetchone()
+            active = _operator_action_row_to_dict(row)
+        else:
+            active = get_active_operator_action(conn, action_kind=normalized_kind, request_source=normalized_source)
+        if active is not None:
+            if not operator_action_requires_authorization(normalized_kind) or operator_action_authorization_valid(active)[0]:
+                if own_txn:
+                    conn.commit()
+                return active, False
+        now_iso = utc_now_iso()
+        auth_values: dict[str, str | None] = {
+            "actor_id": "",
+            "authorization_kind": "",
+            "authorization_payload_json": "",
+            "authorization_mac": "",
+            "authorized_at": None,
+            "authorization_expires_at": None,
+        }
+        if operator_action_requires_authorization(normalized_kind):
+            auth_values = _mint_operator_action_authorization(
+                action_kind=normalized_kind,
+                requested_target=requested_target_value,
+                authorization=authorization,
+                authorized_at=now_iso,
+            )
+        cursor = conn.execute(
             """
-            SELECT *
-            FROM operator_actions
-            WHERE action_kind = ?
-              AND requested_target = ?
-              AND status IN ('pending', 'running')
-            ORDER BY id DESC
-            LIMIT 1
+            INSERT INTO operator_actions (
+              action_kind, requested_target, requested_by, request_source,
+              actor_id, authorization_kind, authorization_payload_json, authorization_mac,
+              authorized_at, authorization_expires_at,
+              status, note, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', ?)
             """,
-            (normalized_kind, requested_target_value),
-        ).fetchone()
-        active = _operator_action_row_to_dict(row)
-    else:
-        active = get_active_operator_action(conn, action_kind=normalized_kind)
-    if active is not None:
-        return active, False
-    now_iso = utc_now_iso()
-    cursor = conn.execute(
-        """
-        INSERT INTO operator_actions (
-          action_kind, requested_target, requested_by, request_source, status, note, created_at
-        ) VALUES (?, ?, ?, ?, 'pending', '', ?)
-        """,
-        (
-            normalized_kind,
-            requested_target_value,
-            str(requested_by or "").strip() or "operator",
-            str(request_source or "").strip(),
-            now_iso,
-        ),
-    )
-    conn.commit()
-    row = conn.execute("SELECT * FROM operator_actions WHERE id = ?", (int(cursor.lastrowid),)).fetchone()
-    return _operator_action_row_to_dict(row) or {}, True
+            (
+                normalized_kind,
+                requested_target_value,
+                str(requested_by or "").strip() or "operator",
+                normalized_source,
+                str(auth_values["actor_id"] or ""),
+                str(auth_values["authorization_kind"] or ""),
+                str(auth_values["authorization_payload_json"] or ""),
+                str(auth_values["authorization_mac"] or ""),
+                auth_values["authorized_at"],
+                auth_values["authorization_expires_at"],
+                now_iso,
+            ),
+        )
+        row = conn.execute("SELECT * FROM operator_actions WHERE id = ?", (int(cursor.lastrowid),)).fetchone()
+        if own_txn:
+            conn.commit()
+        return _operator_action_row_to_dict(row) or {}, True
+    except Exception:
+        if own_txn and conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 def _contact_match_key(value: str) -> str:
@@ -8576,20 +9006,41 @@ def mark_operator_action_running(
     action_id: int,
     note: str = "",
     log_path: str = "",
+    reclaim_stale_running_seconds: int = 0,
 ) -> dict[str, Any]:
     now_iso = utc_now_iso()
-    conn.execute(
-        """
-        UPDATE operator_actions
-        SET status = 'running',
-            started_at = ?,
-            note = ?,
-            log_path = ?
-        WHERE id = ?
-        """,
-        (now_iso, str(note or ""), str(log_path or ""), int(action_id)),
-    )
-    conn.commit()
+    stale_before = auto_provision_stale_before_iso(int(reclaim_stale_running_seconds or 0)) if int(reclaim_stale_running_seconds or 0) > 0 else ""
+    own_txn = not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        cursor = conn.execute(
+            """
+            UPDATE operator_actions
+            SET status = 'running',
+                started_at = ?,
+                note = ?,
+                log_path = ?
+            WHERE id = ?
+              AND (
+                status = 'pending'
+                OR (
+                  ? != ''
+                  AND status = 'running'
+                  AND COALESCE(started_at, created_at, '') < ?
+                )
+              )
+            """,
+            (now_iso, str(note or ""), str(log_path or ""), int(action_id), stale_before, stale_before),
+        )
+        if own_txn:
+            conn.commit()
+        if cursor.rowcount != 1:
+            return {}
+    except Exception:
+        if own_txn and conn.in_transaction:
+            conn.rollback()
+        raise
     row = conn.execute("SELECT * FROM operator_actions WHERE id = ?", (int(action_id),)).fetchone()
     return _operator_action_row_to_dict(row) or {}
 
@@ -9400,10 +9851,35 @@ def mark_notification_delivered(conn: sqlite3.Connection, notification_id: int) 
     conn.commit()
 
 
+def notification_error_retry_delay_seconds(attempts: int) -> int:
+    step = max(1, int(attempts))
+    delay = 60 * (2 ** max(0, step - 1))
+    return max(60, min(3600, delay))
+
+
 def mark_notification_error(conn: sqlite3.Connection, notification_id: int, error: str) -> None:
+    row = conn.execute(
+        "SELECT attempt_count FROM notification_outbox WHERE id = ?",
+        (notification_id,),
+    ).fetchone()
+    attempts = int(row["attempt_count"] or 0) + 1 if row is not None else 1
+    now_iso = utc_now_iso()
     conn.execute(
-        "UPDATE notification_outbox SET delivery_error = ? WHERE id = ?",
-        (error[:500], notification_id),
+        """
+        UPDATE notification_outbox
+        SET attempt_count = ?,
+            last_attempt_at = ?,
+            next_attempt_at = ?,
+            delivery_error = ?
+        WHERE id = ?
+        """,
+        (
+            attempts,
+            now_iso,
+            utc_after_seconds_iso(notification_error_retry_delay_seconds(attempts)),
+            error[:500],
+            notification_id,
+        ),
     )
     conn.commit()
 
@@ -9415,11 +9891,14 @@ def fetch_undelivered_notifications(
     include_user_agent: bool = True,
     include_curator: bool = True,
 ) -> list[dict[str, Any]]:
-    where = ["delivered_at IS NULL"]
+    now_iso = utc_now_iso()
+    where = ["delivered_at IS NULL", "(next_attempt_at IS NULL OR next_attempt_at = '' OR next_attempt_at <= ?)"]
+    params: list[Any] = [now_iso]
     if not include_user_agent:
         where.append("target_kind != 'user-agent'")
     if not include_curator:
         where.append("target_kind != 'curator'")
+    params.append(limit)
     rows = conn.execute(
         f"""
         SELECT id, target_kind, target_id, channel_kind, message, extra_json, created_at, delivery_error,
@@ -9435,7 +9914,7 @@ def fetch_undelivered_notifications(
           id ASC
         LIMIT ?
         """,
-        (limit,),
+        tuple(params),
     ).fetchall()
     return [dict(row) for row in rows]
 
@@ -9599,6 +10078,7 @@ def _active_pin_upgrade_targets(conn: sqlite3.Connection) -> set[tuple[str, str]
         SELECT component, target_value
         FROM pin_upgrade_notifications
         WHERE applied_at IS NULL
+          AND COALESCE(silenced, 0) = 0
         """
     ).fetchall()
     return {
@@ -9703,6 +10183,10 @@ def dismiss_pin_upgrade_action(conn: sqlite3.Connection, token: str) -> dict[str
         )
         if cursor.rowcount:
             silenced.append(item["component"])
+    conn.execute(
+        "DELETE FROM settings WHERE key = ?",
+        (f"{_PIN_UPGRADE_ACTION_SETTING_PREFIX}{payload['token']}",),
+    )
     conn.commit()
     return {
         "token": payload["token"],
@@ -9870,7 +10354,7 @@ def consume_agent_notifications(
     """
     rows = conn.execute(
         """
-        SELECT id, target_kind, target_id, channel_kind, message, created_at
+        SELECT id, target_kind, target_id, channel_kind, message, extra_json, created_at
         FROM notification_outbox
         WHERE delivered_at IS NULL
           AND target_kind = 'user-agent'
@@ -9886,8 +10370,58 @@ def consume_agent_notifications(
             "UPDATE notification_outbox SET delivered_at = ? WHERE id = ?",
             [(now, int(r["id"])) for r in rows],
         )
+        for row in rows:
+            if str(row["channel_kind"] or "") != "pod-message":
+                continue
+            extra = json_loads(str(row["extra_json"] or "{}"), {})
+            message_id = str(extra.get("message_id") or "").strip()
+            if not message_id:
+                continue
+            cursor = conn.execute(
+                """
+                UPDATE arclink_pod_messages
+                SET status = 'delivered', delivered_at = ?
+                WHERE message_id = ?
+                  AND status = 'queued'
+                """,
+                (now, message_id),
+            )
+            if cursor.rowcount <= 0:
+                continue
+            message = conn.execute(
+                "SELECT sender_deployment_id, recipient_deployment_id FROM arclink_pod_messages WHERE message_id = ?",
+                (message_id,),
+            ).fetchone()
+            append_arclink_audit(
+                conn,
+                action="pod_message_delivered",
+                actor_id=f"agent-ack:{agent_id}",
+                target_kind="pod_message",
+                target_id=message_id,
+                reason="Pod Comms message delivered",
+                metadata={
+                    "sender_deployment_id": str(message["sender_deployment_id"] or "") if message else "",
+                    "recipient_deployment_id": str(message["recipient_deployment_id"] or "") if message else "",
+                },
+                commit=False,
+            )
+            append_arclink_event(
+                conn,
+                subject_kind="pod_message",
+                subject_id=message_id,
+                event_type="pod_message_delivered",
+                metadata={
+                    "recipient_deployment_id": str(message["recipient_deployment_id"] or "") if message else "",
+                },
+                commit=False,
+            )
         conn.commit()
-    return [dict(r) for r in rows]
+    notifications: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["extra"] = json_loads(str(item.get("extra_json") or "{}"), {})
+        notifications.append(item)
+    return notifications
 
 
 def list_notifications(
@@ -14818,6 +15352,60 @@ def _notion_index_full_sweep_due(conn: sqlite3.Connection) -> bool:
     return last_run <= utc_now() - dt.timedelta(seconds=_notion_index_full_sweep_interval_seconds())
 
 
+NOTION_REINDEX_CONSUMER_LEASE_KEY = "notion_reindex_consumer_lease"
+NOTION_REINDEX_CONSUMER_LEASE_SECONDS = 600
+
+
+def _try_acquire_notion_reindex_consumer_lease(conn: sqlite3.Connection) -> tuple[str, str]:
+    claim_id = f"notion_reindex_{secrets.token_hex(8)}"
+    expires_at = utc_after_seconds_iso(NOTION_REINDEX_CONSUMER_LEASE_SECONDS)
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        raw = str(get_setting(conn, NOTION_REINDEX_CONSUMER_LEASE_KEY, "") or "").strip()
+        payload = json_loads(raw, {}) if raw else {}
+        if isinstance(payload, dict):
+            active_until = parse_utc_iso(str(payload.get("expires_at") or ""))
+            active_claim = str(payload.get("claim_id") or "").strip()
+            if active_claim and active_until is not None and active_until > utc_now():
+                conn.commit()
+                return "", active_until.replace(microsecond=0).isoformat()
+        conn.execute(
+            """
+            INSERT INTO settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (
+                NOTION_REINDEX_CONSUMER_LEASE_KEY,
+                json_dumps({"claim_id": claim_id, "expires_at": expires_at}),
+                utc_now_iso(),
+            ),
+        )
+        conn.commit()
+        return claim_id, expires_at
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+
+
+def _release_notion_reindex_consumer_lease(conn: sqlite3.Connection, claim_id: str) -> None:
+    normalized_claim = str(claim_id or "").strip()
+    if not normalized_claim:
+        return
+    raw = str(get_setting(conn, NOTION_REINDEX_CONSUMER_LEASE_KEY, "") or "").strip()
+    payload = json_loads(raw, {}) if raw else {}
+    if not isinstance(payload, dict) or str(payload.get("claim_id") or "").strip() != normalized_claim:
+        return
+    conn.execute(
+        "UPDATE settings SET value = '', updated_at = ? WHERE key = ? AND value = ?",
+        (utc_now_iso(), NOTION_REINDEX_CONSUMER_LEASE_KEY, raw),
+    )
+    conn.commit()
+
+
 def consume_notion_reindex_queue(
     conn: sqlite3.Connection,
     cfg: Config,
@@ -14825,151 +15413,165 @@ def consume_notion_reindex_queue(
     limit: int = 50,
     actor: str = "curator-refresh",
 ) -> dict[str, Any]:
-    rows = conn.execute(
-        """
-        SELECT id, target_id, message, extra_json, next_attempt_at, attempt_count
-        FROM notification_outbox
-        WHERE delivered_at IS NULL
-          AND target_kind = 'curator'
-          AND channel_kind = 'notion-reindex'
-        ORDER BY id ASC
-        LIMIT ?
-        """,
-        (max(1, int(limit)),),
-    ).fetchall()
-    due_rows = [row for row in rows if _notification_due_now(str(row["next_attempt_at"] or ""))]
-    run_full = _notion_index_full_sweep_due(conn)
-    page_ids: list[str] = []
-    database_ids: list[str] = []
-    delivered_ids: list[int] = []
-    reindex_targets_by_id: dict[int, tuple[str, str, int]] = {}
-    for row in due_rows:
-        notification_id = int(row["id"])
-        delivered_ids.append(notification_id)
-        target_id = str(row["target_id"] or "").strip()
-        extra = json_loads(str(row["extra_json"] or "{}"), {})
-        source_kind = str((extra or {}).get("source_kind") or "page").strip()
-        reindex_targets_by_id[notification_id] = (
-            target_id,
-            source_kind,
-            int(row["attempt_count"] or 0),
-        )
-        if target_id == "full":
-            run_full = True
-            continue
-        if source_kind == "database":
-            database_ids.append(target_id)
-        else:
-            page_ids.append(target_id)
-    if not run_full and not page_ids and not database_ids:
+    lease_claim_id, lease_until = _try_acquire_notion_reindex_consumer_lease(conn)
+    if not lease_claim_id:
         return {
             "ok": True,
-            "status": "idle",
+            "status": "busy",
             "full": False,
             "processed_notifications": 0,
             "page_ids": [],
             "database_ids": [],
+            "lease_until": lease_until,
         }
     try:
-        result = sync_shared_notion_index(
-            conn,
-            cfg,
-            full=run_full,
-            page_ids=page_ids,
-            database_ids=database_ids,
-            actor=actor,
-        )
-    except Exception as exc:
-        if delivered_ids:
-            _record_notion_reindex_retry(conn, cfg, notification_ids=delivered_ids, error_message=str(exc))
-        note_refresh_job(
-            conn,
-            job_name="notion-index-sync" if run_full else "notion-index-sync-incremental",
-            job_kind="notion-index-sync",
-            target_id="notion",
-            schedule="webhook + 1h full sweep" if run_full else "webhook event",
-            status="fail",
-            note=f"notion reindex failed (full={run_full}): {exc}",
-        )
-        return {
-            "ok": False,
-            "status": "fail",
-            "error": str(exc),
-            "processed_notifications": len(delivered_ids),
-            "page_ids": sorted({*page_ids}),
-            "database_ids": sorted({*database_ids}),
-            "full": run_full,
-        }
-    retry_ids: list[int] = []
-    dropped_ids: list[int] = []
-    if not run_full and delivered_ids:
-        unresolved_pages = {
-            extract_notion_space_id(str(page_id or ""))
-            for page_id in (result.get("unresolved_pages") or [])
-            if str(page_id or "").strip()
-        }
-        unresolved_databases = {
-            extract_notion_space_id(str(database_id or ""))
-            for database_id in (result.get("unresolved_databases") or [])
-            if str(database_id or "").strip()
-        }
-        max_unresolved_attempts = _notion_reindex_unresolved_max_attempts()
-        for notification_id in delivered_ids:
-            target_id, source_kind, previous_attempts = reindex_targets_by_id.get(notification_id, ("", "page", 0))
-            normalized_target = extract_notion_space_id(target_id)
-            unresolved = (
-                source_kind == "database" and normalized_target in unresolved_databases
-            ) or (
-                source_kind != "database" and normalized_target in unresolved_pages
+        rows = conn.execute(
+            """
+            SELECT id, target_id, message, extra_json, next_attempt_at, attempt_count
+            FROM notification_outbox
+            WHERE delivered_at IS NULL
+              AND target_kind = 'curator'
+              AND channel_kind = 'notion-reindex'
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            (max(1, int(limit)),),
+        ).fetchall()
+        due_rows = [row for row in rows if _notification_due_now(str(row["next_attempt_at"] or ""))]
+        run_full = _notion_index_full_sweep_due(conn)
+        page_ids: list[str] = []
+        database_ids: list[str] = []
+        delivered_ids: list[int] = []
+        reindex_targets_by_id: dict[int, tuple[str, str, int]] = {}
+        for row in due_rows:
+            notification_id = int(row["id"])
+            delivered_ids.append(notification_id)
+            target_id = str(row["target_id"] or "").strip()
+            extra = json_loads(str(row["extra_json"] or "{}"), {})
+            source_kind = str((extra or {}).get("source_kind") or "page").strip()
+            reindex_targets_by_id[notification_id] = (
+                target_id,
+                source_kind,
+                int(row["attempt_count"] or 0),
             )
-            if not unresolved:
+            if target_id == "full":
+                run_full = True
                 continue
-            if previous_attempts + 1 >= max_unresolved_attempts:
-                dropped_ids.append(notification_id)
+            if source_kind == "database":
+                database_ids.append(target_id)
             else:
-                retry_ids.append(notification_id)
-        if retry_ids:
-            _record_notion_reindex_retry(
+                page_ids.append(target_id)
+        if not run_full and not page_ids and not database_ids:
+            return {
+                "ok": True,
+                "status": "idle",
+                "full": False,
+                "processed_notifications": 0,
+                "page_ids": [],
+                "database_ids": [],
+            }
+        try:
+            result = sync_shared_notion_index(
                 conn,
                 cfg,
-                notification_ids=retry_ids,
-                error_message=(
-                    "Notion entity is not reachable under configured index roots yet; "
-                    "retrying so eventual-consistency and transient access races do not drop recall."
-                ),
+                full=run_full,
+                page_ids=page_ids,
+                database_ids=database_ids,
+                actor=actor,
             )
-        for notification_id in dropped_ids:
-            conn.execute(
-                """
-                UPDATE notification_outbox
-                SET attempt_count = attempt_count + 1,
-                    last_attempt_at = ?,
-                    delivered_at = ?,
-                    delivery_error = ?
-                WHERE id = ?
-                """,
-                (
-                    utc_now_iso(),
-                    utc_now_iso(),
-                    "Notion entity stayed unresolved after retry budget; full sweep remains the backstop.",
-                    notification_id,
-                ),
+        except Exception as exc:
+            if delivered_ids:
+                _record_notion_reindex_retry(conn, cfg, notification_ids=delivered_ids, error_message=str(exc))
+            note_refresh_job(
+                conn,
+                job_name="notion-index-sync" if run_full else "notion-index-sync-incremental",
+                job_kind="notion-index-sync",
+                target_id="notion",
+                schedule="webhook + 1h full sweep" if run_full else "webhook event",
+                status="fail",
+                note=f"notion reindex failed (full={run_full}): {exc}",
             )
-            conn.commit()
+            return {
+                "ok": False,
+                "status": "fail",
+                "error": str(exc),
+                "processed_notifications": len(delivered_ids),
+                "page_ids": sorted({*page_ids}),
+                "database_ids": sorted({*database_ids}),
+                "full": run_full,
+            }
+        retry_ids: list[int] = []
+        dropped_ids: list[int] = []
+        if not run_full and delivered_ids:
+            unresolved_pages = {
+                extract_notion_space_id(str(page_id or ""))
+                for page_id in (result.get("unresolved_pages") or [])
+                if str(page_id or "").strip()
+            }
+            unresolved_databases = {
+                extract_notion_space_id(str(database_id or ""))
+                for database_id in (result.get("unresolved_databases") or [])
+                if str(database_id or "").strip()
+            }
+            max_unresolved_attempts = _notion_reindex_unresolved_max_attempts()
+            for notification_id in delivered_ids:
+                target_id, source_kind, previous_attempts = reindex_targets_by_id.get(notification_id, ("", "page", 0))
+                normalized_target = extract_notion_space_id(target_id)
+                unresolved = (
+                    source_kind == "database" and normalized_target in unresolved_databases
+                ) or (
+                    source_kind != "database" and normalized_target in unresolved_pages
+                )
+                if not unresolved:
+                    continue
+                if previous_attempts + 1 >= max_unresolved_attempts:
+                    dropped_ids.append(notification_id)
+                else:
+                    retry_ids.append(notification_id)
+            if retry_ids:
+                _record_notion_reindex_retry(
+                    conn,
+                    cfg,
+                    notification_ids=retry_ids,
+                    error_message=(
+                        "Notion entity is not reachable under configured index roots yet; "
+                        "retrying so eventual-consistency and transient access races do not drop recall."
+                    ),
+                )
+            for notification_id in dropped_ids:
+                conn.execute(
+                    """
+                    UPDATE notification_outbox
+                    SET attempt_count = attempt_count + 1,
+                        last_attempt_at = ?,
+                        delivered_at = ?,
+                        delivery_error = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        utc_now_iso(),
+                        utc_now_iso(),
+                        "Notion entity stayed unresolved after retry budget; full sweep remains the backstop.",
+                        notification_id,
+                    ),
+                )
+                conn.commit()
 
-    retry_or_drop = set(retry_ids) | set(dropped_ids)
-    for notification_id in delivered_ids:
-        if notification_id in retry_or_drop:
-            continue
-        mark_notification_delivered(conn, notification_id)
-    return {
-        **result,
-        "processed_notifications": len(delivered_ids),
-        "retry_notifications": len(retry_ids),
-        "dropped_unresolved_notifications": len(dropped_ids),
-        "page_ids": sorted({*page_ids}),
-        "database_ids": sorted({*database_ids}),
-    }
+        retry_or_drop = set(retry_ids) | set(dropped_ids)
+        for notification_id in delivered_ids:
+            if notification_id in retry_or_drop:
+                continue
+            mark_notification_delivered(conn, notification_id)
+        return {
+            **result,
+            "processed_notifications": len(delivered_ids),
+            "retry_notifications": len(retry_ids),
+            "dropped_unresolved_notifications": len(dropped_ids),
+            "page_ids": sorted({*page_ids}),
+            "database_ids": sorted({*database_ids}),
+        }
+    finally:
+        _release_notion_reindex_consumer_lease(conn, lease_claim_id)
 
 
 def _cached_shared_notion_digest(
@@ -18461,10 +19063,9 @@ def write_managed_memory_stubs(
     when encountered, but ArcLink no longer writes dynamic recall stubs through
     Hermes memory files.
 
-    `SOUL.md` remains the durable onboarding/orientation prompt. It is
-    materialized only when the payload carries org-profile agent context; a
-    dynamic refresh without org-profile context does not clear an existing
-    `SOUL.md` overlay.
+    `SOUL.md` remains the durable onboarding/orientation prompt. Org-profile
+    overlays are materialized when the payload carries agent context and cleared
+    when the payload no longer carries org-profile context.
 
     Returns the paths written. Called from the user-agent-refresh context
     running as the enrollment user - never from the central curator (which runs
@@ -18597,13 +19198,17 @@ def write_managed_memory_stubs(
 
     org_profile_context = payload.get("org_profile_agent_context")
     org_profile_paths: dict[str, Any] = {}
-    if isinstance(org_profile_context, dict) and org_profile_context:
-        try:
+    try:
+        if isinstance(org_profile_context, dict) and org_profile_context:
             from arclink_org_profile import materialize_agent_context
 
             org_profile_paths = materialize_agent_context(hermes_home, org_profile_context)
-        except Exception as exc:  # noqa: BLE001
-            org_profile_paths = {"org_profile_error": str(exc)}
+        else:
+            from arclink_org_profile import clear_materialized_agent_context
+
+            org_profile_paths = clear_materialized_agent_context(hermes_home)
+    except Exception as exc:  # noqa: BLE001
+        org_profile_paths = {"org_profile_error": str(exc)}
 
     org_profile_changed = bool(org_profile_paths.get("changed")) if org_profile_paths else False
     result = {

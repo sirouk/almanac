@@ -53,7 +53,12 @@ if [[ -z "$PUBKEY_VALUE" ]]; then
 fi
 PUBKEY_VALUE="$(printf '%s' "$PUBKEY_VALUE" | tr -d '\r' | sed 's/[[:space:]]*$//')"
 
-if [[ ! "$PUBKEY_VALUE" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521)[[:space:]]+[A-Za-z0-9+/=]+([[:space:]].*)?$ ]]; then
+if [[ "$PUBKEY_VALUE" == *$'\n'* ]]; then
+  echo "Refusing to install a multiline SSH public key." >&2
+  exit 1
+fi
+
+if [[ ! "$PUBKEY_VALUE" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521)[[:blank:]]+[A-Za-z0-9+/=]+([[:blank:]].*)?$ ]]; then
   echo "Refusing to install an invalid SSH public key." >&2
   exit 1
 fi
@@ -70,6 +75,10 @@ if [[ -z "$HOME_DIR" ]]; then
 fi
 
 ALLOWED_FROM="${ARCLINK_AGENT_REMOTE_SSH_FROM:-100.64.0.0/10,fd7a:115c:a1e0::/48}"
+if [[ -z "$ALLOWED_FROM" || "$ALLOWED_FROM" == *$'\n'* || "$ALLOWED_FROM" == *$'\r'* || "$ALLOWED_FROM" == *'"'* ]]; then
+  echo "Refusing to install SSH key with an invalid from= restriction." >&2
+  exit 1
+fi
 KEY_OPTIONS="from=\"$ALLOWED_FROM\",no-agent-forwarding,no-port-forwarding,no-user-rc,no-X11-forwarding"
 AUTHORIZED_KEY_LINE="$KEY_OPTIONS $PUBKEY_VALUE"
 
@@ -97,7 +106,7 @@ parts = pubkey.split()
 key_type = parts[0]
 key_body = parts[1]
 pattern = re.compile(
-    r"(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521)\s+([A-Za-z0-9+/=]+)(?:\s+.*)?$"
+    r"(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521)[ \t]+([A-Za-z0-9+/=]+)(?:[ \t]+.*)?$"
 )
 kept: list[str] = []
 for raw_line in src.read_text(encoding="utf-8").splitlines():

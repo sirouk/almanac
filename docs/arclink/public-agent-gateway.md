@@ -66,9 +66,11 @@ session store, the busy-session handler, and a `SessionSource`.
   `_handle_command` / `_handle_text_message` for text, `_handle_location_message` for
   location/venue, `_handle_media_message` for photo/video/audio/voice/document/sticker, and
   `_handle_callback_query` for inline callbacks.
-- Non-Raven inline callbacks with `data` prefix `ea:` (exec-approval) are bridged to a **durable
-  approval mapping on disk** (see §1.5). Raven's own callbacks use the `arclink:` namespace and
-  are handled by Raven ingress, not by the bridge.
+- Non-Raven inline callbacks preserve raw update JSON and a callback-family marker for `ea`,
+  `mp`, `sc`, and `cl`. `ea:` (exec-approval) is bridged to a **durable approval mapping on
+  disk** (see §1.5); the other families are replay/audit metadata until the
+  `durable_callback_replay_proof` gate lands. Raven's own callbacks use the `arclink:`
+  namespace and are handled by Raven ingress, not by the bridge.
 - If no raw update is present, the bridge falls back to a synthetic `MessageEvent`
   (`MessageType.COMMAND` for `/`-prefixed text, else `MessageType.TEXT`).
 
@@ -79,9 +81,10 @@ adapter, no attachment/voice/thread/member objects. Instead it uses a minimal `_
 (aiohttp) client against `https://discord.com/api/v10`, monkeypatches the adapter's `send`,
 `edit_message`, `send_typing`, and `stop_typing` to REST shims, plus a `_DiscordRawMessage` shim
 implementing `add_reaction`/`remove_reaction`, then dispatches a single synthetic `MessageEvent`
-(TEXT or COMMAND). Telegram is closer to native because raw updates replay through Hermes'
-real handlers; Discord is **text/slash + REST shims only**. Any doc describing the public Discord
-Agent surface must state this asymmetry.
+(TEXT or COMMAND). Outbound sends can carry components, embeds, and attachment metadata with
+default-deny mentions, but Telegram is still closer to native because raw updates replay through
+Hermes' real handlers; Discord remains **message/slash + REST shims**, not a full `discord.py`
+object graph. Any doc describing the public Discord Agent surface must state this asymmetry.
 
 ### 1.4 Streaming — default ON (GAP-023)
 
@@ -145,7 +148,8 @@ The `notification-delivery` worker does **not** shell into the deployment contai
 - **Live delivery is PG-BOTS / PG-HERMES.** The bridge is unit-tested only against a fake Hermes
   runtime. Real delivery requires a live `hermes-gateway` (or `control-operator-hermes-gateway`)
   container, a real bot token, and the Hermes runtime under `/opt/arclink/runtime`. No live
-  Telegram/Discord delivery or Hermes browser/workspace behavior has been proven.
+  Telegram/Discord delivery, durable callback replay, Discord media/components, free-text Gateway
+  ingress, or Hermes browser/workspace behavior has been proven.
 - **Degraded quiet fallback is fail-closed.** The `hermes chat -Q` text-only path
   (`ARCLINK_PUBLIC_AGENT_QUIET_FALLBACK`, in `arclink_notification_delivery`) is off by default;
   re-enabling it is an explicit operator opt-in because it hides bridge failures.

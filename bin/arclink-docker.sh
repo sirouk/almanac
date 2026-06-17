@@ -35,7 +35,16 @@ DOCKER_REQUIRED_RUNNING_SERVICES=(
   control-web
   control-provisioner
   control-action-worker
+  deployment-exec-broker
+  migration-capture-helper
+  agent-user-helper
+  agent-process-helper
+  agent-supervisor-broker
+  operator-upgrade-broker
+  gateway-exec-broker
   vault-watch
+  fleet-inventory-worker
+  fleet-share-reconcile
   agent-supervisor
   control-operator-qmd-mcp
   control-operator-hermes-gateway
@@ -734,6 +743,13 @@ health() {
   retry_compose_exec_quiet control-web curl -fsS http://127.0.0.1:3000
   retry_host_http_quiet "http://127.0.0.1:$web_port/api/v1/health"
   retry_host_http_quiet "http://127.0.0.1:$web_port/"
+  retry_compose_exec_quiet deployment-exec-broker curl -fsS http://127.0.0.1:8912/health
+  retry_compose_exec_quiet migration-capture-helper curl -fsS http://127.0.0.1:8914/health
+  retry_compose_exec_quiet agent-user-helper curl -fsS http://127.0.0.1:8915/health
+  retry_compose_exec_quiet agent-process-helper curl -fsS http://127.0.0.1:8916/health
+  retry_compose_exec_quiet agent-supervisor-broker curl -fsS http://127.0.0.1:8913/health
+  retry_compose_exec_quiet operator-upgrade-broker curl -fsS http://127.0.0.1:8917/health
+  retry_compose_exec_quiet gateway-exec-broker curl -fsS http://127.0.0.1:8911/health
   repair_running_nextcloud_data_dir
   retry_compose_exec_quiet nextcloud curl -fsS http://127.0.0.1/status.php || {
     diagnose_nextcloud_health_failure
@@ -744,8 +760,8 @@ health() {
   # shellcheck disable=SC2016
   retry_compose_exec_quiet postgres sh -lc 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
   compose exec -T health-watch ./bin/docker-health.sh
-  docker_publish_tailnet_deployment_apps || true
-  docker_refresh_deployment_service_health || true
+  docker_publish_tailnet_deployment_apps
+  docker_refresh_deployment_service_health
   echo "Docker health passed."
 }
 
@@ -1047,6 +1063,7 @@ docker_ensure_tailnet_forward() {
 
 docker_publish_tailnet_deployment_apps() {
   local ingress_mode="" strategy="" host="" web_port="" base_port="" db_path="" routes_file=""
+  local publish_failed=0
 
   ingress_mode="$(configured_or_default ARCLINK_INGRESS_MODE domain)"
   strategy="$(configured_or_default ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY path)"
@@ -1175,17 +1192,20 @@ PY
     local successful_roles=()
     if ! docker_ensure_tailnet_forward "$deployment_id" "$hermes_port" "$ssh_host" "$ssh_user" "$ssh_port"; then
       status="unavailable"
+      publish_failed=1
     fi
     if [[ "$status" == "published" ]] && tailscale serve --bg --yes --https="$hermes_port" "http://127.0.0.1:$hermes_port" >/dev/null; then
       successful_roles+=(hermes)
     else
       status="unavailable"
+      publish_failed=1
     fi
     docker_record_tailnet_deployment_app_publish \
       "$db_path" "$deployment_id" "$host" "$prefix" \
       "$hermes_port" "$status" "${successful_roles[*]}"
   done <"$routes_file"
   rm -f "$routes_file"
+  return "$publish_failed"
 }
 
 docker_record_tailnet_deployment_app_publish() {
@@ -2690,6 +2710,10 @@ PY
 }
 
 docker_live_agent_smoke() {
+  if [[ ! -x "$REPO_DIR/bin/live-agent-tool-smoke.sh" ]]; then
+    echo "Live agent tool smoke script is not executable; skipping."
+    return 0
+  fi
   compose_supervisor_command ./bin/live-agent-tool-smoke.sh "$@"
 }
 

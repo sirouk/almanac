@@ -717,6 +717,17 @@ async def _run_discord(payload: Mapping[str, Any]) -> None:
                     # @everyone/@here or roles, matching native Hermes policy.
                     "allowed_mentions": {"parse": ["users"], "replied_user": True},
                 }
+                meta = metadata or {}
+                if idx == 0:
+                    components = meta.get("discord_components")
+                    embeds = meta.get("discord_embeds")
+                    attachments = meta.get("discord_attachments")
+                    if isinstance(components, list):
+                        body["components"] = [dict(item) for item in components[:5] if isinstance(item, Mapping)]
+                    if isinstance(embeds, list):
+                        body["embeds"] = [dict(item) for item in embeds[:10] if isinstance(item, Mapping)]
+                    if isinstance(attachments, list):
+                        body["attachments"] = [dict(item) for item in attachments[:10] if isinstance(item, Mapping)]
                 if reply_to and idx == 0 and getattr(adapter, "_reply_to_mode", "first") != "off":
                     body["message_reference"] = {
                         "message_id": str(reply_to),

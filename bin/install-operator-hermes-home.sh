@@ -7,6 +7,7 @@ OPERATOR_STATE_DIR="${ARCLINK_OPERATOR_STATE_DIR:-/home/arclink/arclink/arclink-
 OPERATOR_SECRET_DIR="${ARCLINK_OPERATOR_SECRET_DIR:-$OPERATOR_STATE_DIR/secrets}"
 RUNTIME_DIR_TARGET="${RUNTIME_DIR:-/opt/arclink/runtime}"
 PYTHON_BIN="$RUNTIME_DIR_TARGET/hermes-venv/bin/python3"
+LOCK_TIMEOUT_SECONDS="${ARCLINK_OPERATOR_INSTALL_LOCK_TIMEOUT_SECONDS:-300}"
 
 if [[ ! -x "$PYTHON_BIN" ]]; then
   PYTHON_BIN="$(command -v python3 || true)"
@@ -20,7 +21,14 @@ fi
 mkdir -p "$HERMES_HOME_TARGET/state" "$OPERATOR_SECRET_DIR"
 
 (
-  flock 9
+  if [[ ! "$LOCK_TIMEOUT_SECONDS" =~ ^[0-9]+$ || "$LOCK_TIMEOUT_SECONDS" -lt 1 ]]; then
+    echo "ARCLINK_OPERATOR_INSTALL_LOCK_TIMEOUT_SECONDS must be a positive integer." >&2
+    exit 2
+  fi
+  if ! flock -w "$LOCK_TIMEOUT_SECONDS" 9; then
+    echo "Timed out waiting for operator Hermes home install lock after ${LOCK_TIMEOUT_SECONDS}s." >&2
+    exit 1
+  fi
 
   operator_router_key_file="${ARCLINK_OPERATOR_LLM_ROUTER_API_KEY_FILE:-$OPERATOR_SECRET_DIR/llm_router_api_key}"
   operator_router_key_ref="${ARCLINK_OPERATOR_LLM_ROUTER_API_KEY_REF:-secret://arclink/llm-router/operator/api-key}"

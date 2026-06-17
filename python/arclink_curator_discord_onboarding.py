@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
+import hmac
 import json
 import os
 import sys
@@ -49,6 +51,110 @@ from arclink_operator_raven import (
     operator_raven_command_requested,
     strip_operator_approval_code,
 )
+
+
+DISCORD_SEEN_MESSAGE_PREFIX = "curator_discord_onboarding_seen_message:"
+DISCORD_SEEN_MESSAGE_MAX_ROWS = 10000
+DISCORD_SEEN_MESSAGE_TTL_SECONDS = 30 * 24 * 60 * 60
+DISCORD_PROCESSING_CLAIM_TTL_SECONDS = 10 * 60
+
+
+def _discord_seen_message_key(message_id: str) -> str:
+    return f"{DISCORD_SEEN_MESSAGE_PREFIX}{str(message_id or '').strip()}"
+
+
+def _discord_seen_cutoff_iso(seconds: int) -> str:
+    return (dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=max(1, int(seconds)))).replace(microsecond=0).isoformat()
+
+
+def _prune_discord_seen_messages(conn) -> None:  # type: ignore[no-untyped-def]
+    prefix_len = len(DISCORD_SEEN_MESSAGE_PREFIX)
+    stale_seen_cutoff = _discord_seen_cutoff_iso(DISCORD_SEEN_MESSAGE_TTL_SECONDS)
+    stale_processing_cutoff = _discord_seen_cutoff_iso(DISCORD_PROCESSING_CLAIM_TTL_SECONDS)
+    conn.execute(
+        """
+        DELETE FROM settings
+        WHERE substr(key, 1, ?) = ?
+          AND (
+            updated_at < ?
+            OR (value = 'processing' AND updated_at < ?)
+          )
+        """,
+        (prefix_len, DISCORD_SEEN_MESSAGE_PREFIX, stale_seen_cutoff, stale_processing_cutoff),
+    )
+    conn.execute(
+        """
+        DELETE FROM settings
+        WHERE key IN (
+          SELECT key
+          FROM settings
+          WHERE substr(key, 1, ?) = ?
+          ORDER BY updated_at DESC, key DESC
+          LIMIT -1 OFFSET ?
+        )
+        """,
+        (prefix_len, DISCORD_SEEN_MESSAGE_PREFIX, DISCORD_SEEN_MESSAGE_MAX_ROWS),
+    )
+
+
+def _discord_operator_approval_code() -> str:
+    return operator_approval_code(
+        {
+            "ARCLINK_OPERATOR_TELEGRAM_APPROVAL_CODE": config_env_value(
+                "ARCLINK_OPERATOR_TELEGRAM_APPROVAL_CODE",
+                "",
+            ),
+            "ARCLINK_OPERATOR_APPROVAL_CODE": config_env_value("ARCLINK_OPERATOR_APPROVAL_CODE", ""),
+        }
+    )
+
+
+def _discord_operator_code_ok(supplied_code: str) -> bool:
+    code = _discord_operator_approval_code()
+    return not code or hmac.compare_digest(str(supplied_code or "").strip(), code)
+
+
+def _discord_operator_code_required_message() -> str:
+    return (
+        "Operator code required for this action. Include your configured operator code "
+        "as the operator_code field or as the token after the target id."
+    )
+
+
+def _discord_operator_action_tail(*, command: str, text: str) -> tuple[bool, str]:
+    code = _discord_operator_approval_code()
+    parts = text.strip().split(maxsplit=2)
+    if not code:
+        return True, parts[2].strip() if len(parts) > 2 and command == "/deny" else ""
+    tail = parts[2].strip() if len(parts) > 2 else ""
+    code_parts = tail.split(maxsplit=1)
+    if not code_parts or not hmac.compare_digest(code_parts[0], code):
+        return False, ""
+    return True, code_parts[1].strip() if len(code_parts) > 1 and command == "/deny" else ""
+
+
+def _discord_retry_contact_target(text: str) -> tuple[bool, str]:
+    parts = text.strip().split(maxsplit=1)
+    target_tail = parts[1].strip() if len(parts) > 1 else ""
+    code = _discord_operator_approval_code()
+    if not code:
+        return bool(target_tail), target_tail
+    target, _, supplied = target_tail.rpartition(" ")
+    if not target.strip() or not supplied.strip() or not hmac.compare_digest(supplied.strip(), code):
+        return False, ""
+    return True, target.strip()
+
+
+def _discord_component_requires_operator_code(*, scope: str, action: str) -> bool:
+    if not _discord_operator_approval_code():
+        return False
+    normalized_scope = scope.strip().lower()
+    normalized_action = action.strip().lower()
+    if normalized_scope == "ssot" and normalized_action in {"approve", "deny"}:
+        return True
+    if normalized_scope in {"upgrade", "pin-upgrade"} and normalized_action in {"dismiss", "install"}:
+        return True
+    return False
 
 
 def _discord_validator(curator_bot_id: str):
@@ -191,17 +297,43 @@ async def main() -> None:
         normalized = str(message_id or "").strip()
         if not normalized:
             return True
-        key = f"curator_discord_onboarding_seen_message:{normalized}"
+        key = _discord_seen_message_key(normalized)
         with connect_db(cfg) as conn:
+            _prune_discord_seen_messages(conn)
             cursor = conn.execute(
                 """
                 INSERT OR IGNORE INTO settings (key, value, updated_at)
                 VALUES (?, ?, ?)
                 """,
-                (key, "1", utc_now_iso()),
+                (key, "processing", utc_now_iso()),
             )
+            if cursor.rowcount == 1:
+                _prune_discord_seen_messages(conn)
             conn.commit()
             return cursor.rowcount == 1
+
+    def _mark_discord_message_processed(message_id: str) -> None:
+        normalized = str(message_id or "").strip()
+        if not normalized:
+            return
+        with connect_db(cfg) as conn:
+            conn.execute(
+                """
+                UPDATE settings
+                SET value = ?, updated_at = ?
+                WHERE key = ?
+                """,
+                ("processed", utc_now_iso(), _discord_seen_message_key(normalized)),
+            )
+            conn.commit()
+
+    def _release_discord_message_claim(message_id: str) -> None:
+        normalized = str(message_id or "").strip()
+        if not normalized:
+            return
+        with connect_db(cfg) as conn:
+            conn.execute("DELETE FROM settings WHERE key = ?", (_discord_seen_message_key(normalized),))
+            conn.commit()
 
     def _run_operator_action(*, target_id: str, action: str, actor: str, reason: str = "", scope: str = "") -> str:
         normalized_action = action.strip().lower()
@@ -269,7 +401,7 @@ async def main() -> None:
                 return f"Unknown pinned-component upgrade action: {normalized_action}"
             if normalized_action in {"preview", "install", "dismiss"}:
                 if normalized_action == "dismiss":
-                    upsert_setting(conn, "arclink_upgrade_last_dismissed_sha", target_id)
+                    upsert_setting(conn, "arclink_upgrade_last_notified_sha", target_id)
                     return f"Dismissed ArcLink update notice for {target_id[:12]}."
                 return (
                     "ArcLink upgrade preview only: no action was queued from this button. "
@@ -313,7 +445,7 @@ async def main() -> None:
                         "This Operator Raven action runs for real and must come from the operator channel "
                         "with an identified operator. It was refused."
                     )
-                approval_code = operator_approval_code(os.environ)
+                approval_code = _discord_operator_approval_code()
                 code_ok, dispatch_text = strip_operator_approval_code(content, approval_code)
                 if not code_ok:
                     return (
@@ -399,46 +531,34 @@ async def main() -> None:
                         await interaction.followup.send(reply.text)
                 else:
                     if reply.discord_components:
-                        try:
-                            discord_send_message(
-                                bot_token=bot_token,
-                                channel_id=str(origin_chat_id),
-                                text=reply.text,
-                                components=reply.discord_components,
-                            )
-                        except Exception:
-                            pass
+                        discord_send_message(
+                            bot_token=bot_token,
+                            channel_id=str(origin_chat_id),
+                            text=reply.text,
+                            components=reply.discord_components,
+                        )
                     else:
                         channel = client.get_channel(int(origin_chat_id))
                         if channel is None:
-                            try:
-                                channel = await client.fetch_channel(int(origin_chat_id))
-                            except Exception:
-                                channel = None
-                        if channel is not None:
-                            await channel.send(reply.text)
+                            channel = await client.fetch_channel(int(origin_chat_id))
+                        if channel is None:
+                            raise RuntimeError(f"Discord channel {origin_chat_id} was not available")
+                        await channel.send(reply.text)
                 continue
             if reply.discord_components:
-                try:
-                    discord_send_message(
-                        bot_token=bot_token,
-                        channel_id=str(reply.chat_id),
-                        text=reply.text,
-                        components=reply.discord_components,
-                    )
-                except Exception:
-                    continue
+                discord_send_message(
+                    bot_token=bot_token,
+                    channel_id=str(reply.chat_id),
+                    text=reply.text,
+                    components=reply.discord_components,
+                )
                 continue
-            try:
-                channel = client.get_channel(int(reply.chat_id))
-                if channel is None:
-                    channel = await client.fetch_channel(int(reply.chat_id))
-            except Exception:
-                continue
-            try:
-                await channel.send(reply.text)
-            except Exception:
-                continue
+            channel = client.get_channel(int(reply.chat_id))
+            if channel is None:
+                channel = await client.fetch_channel(int(reply.chat_id))
+            if channel is None:
+                raise RuntimeError(f"Discord channel {reply.chat_id} was not available")
+            await channel.send(reply.text)
 
     async def _handle_dm_command(interaction, text: str) -> None:  # type: ignore[no-untyped-def]
         if interaction.channel is None:
@@ -489,8 +609,14 @@ async def main() -> None:
         # registered /upgrade slash command still uses the operator-action queue.
 
         if command in {"/retry-contact", "/retry_contact"}:
-            retry_parts = content.strip().split(maxsplit=1)
-            if len(retry_parts) < 2 or not retry_parts[1].strip():
+            target_ok, retry_target = _discord_retry_contact_target(content)
+            if not target_ok:
+                if content.strip().split(maxsplit=1)[1:]:
+                    await message.channel.send(_discord_operator_code_required_message())
+                else:
+                    await message.channel.send("Use /retry-contact <unixusername|discordname>.")
+                return True
+            if not retry_target:
                 await message.channel.send("Use /retry-contact <unixusername|discordname>.")
                 return True
             actor = _format_actor_label(message.author)
@@ -499,7 +625,7 @@ async def main() -> None:
                     result = retry_discord_contact(
                         conn,
                         cfg,
-                        target=retry_parts[1].strip(),
+                        target=retry_target,
                         actor=actor,
                         request_source="discord-retry-contact",
                     )
@@ -545,12 +671,16 @@ async def main() -> None:
             return True
 
         target_id = parts[1].strip()
+        code_ok, operator_reason = _discord_operator_action_tail(command=command, text=content)
+        if not code_ok:
+            await message.channel.send(_discord_operator_code_required_message())
+            return True
         actor = _format_actor_label(message.author)
         response = _run_operator_action(
             target_id=target_id,
             action="approve" if command == "/approve" else "deny",
             actor=actor,
-            reason=parts[2].strip() if command == "/deny" and len(parts) > 2 else "",
+            reason=operator_reason if command == "/deny" else "",
         )
         await message.channel.send(response)
         return True
@@ -598,9 +728,15 @@ async def main() -> None:
         await _handle_dm_command(interaction, f"/ssh-key {public_key.strip()}")
 
     @tree.command(name="approve", description="Approve an onboarding session, provisioning request, or pending SSOT write.")
-    @app_commands.describe(target_id="onb_xxx, req_xxx, or ssotw_xxx")
-    async def approve_command(interaction, target_id: str) -> None:  # type: ignore[no-untyped-def]
+    @app_commands.describe(
+        target_id="onb_xxx, req_xxx, or ssotw_xxx",
+        operator_code="Required when an operator approval code is configured",
+    )
+    async def approve_command(interaction, target_id: str, operator_code: str = "") -> None:  # type: ignore[no-untyped-def]
         if not await _ensure_operator_channel(interaction):
+            return
+        if not _discord_operator_code_ok(operator_code):
+            await interaction.response.send_message(_discord_operator_code_required_message(), ephemeral=True)
             return
         actor = _format_actor_label(interaction.user)
         await interaction.response.send_message(
@@ -608,9 +744,16 @@ async def main() -> None:
         )
 
     @tree.command(name="deny", description="Deny an onboarding session, provisioning request, or pending SSOT write.")
-    @app_commands.describe(target_id="onb_xxx, req_xxx, or ssotw_xxx", reason="Optional deny reason")
-    async def deny_command(interaction, target_id: str, reason: str = "") -> None:  # type: ignore[no-untyped-def]
+    @app_commands.describe(
+        target_id="onb_xxx, req_xxx, or ssotw_xxx",
+        reason="Optional deny reason",
+        operator_code="Required when an operator approval code is configured",
+    )
+    async def deny_command(interaction, target_id: str, reason: str = "", operator_code: str = "") -> None:  # type: ignore[no-untyped-def]
         if not await _ensure_operator_channel(interaction):
+            return
+        if not _discord_operator_code_ok(operator_code):
+            await interaction.response.send_message(_discord_operator_code_required_message(), ephemeral=True)
             return
         actor = _format_actor_label(interaction.user)
         normalized_target = target_id.strip()
@@ -667,8 +810,11 @@ async def main() -> None:
         )
 
     @tree.command(name="retry-contact", description="Retry a Discord agent-bot contact handoff.")
-    @app_commands.describe(target="Operator use: Unix username, onboarding session id, Discord user id, username, or display name")
-    async def retry_contact_command(interaction, target: str = "") -> None:  # type: ignore[no-untyped-def]
+    @app_commands.describe(
+        target="Operator use: Unix username, onboarding session id, Discord user id, username, or display name",
+        operator_code="Required when an operator approval code is configured",
+    )
+    async def retry_contact_command(interaction, target: str = "", operator_code: str = "") -> None:  # type: ignore[no-untyped-def]
         operator_channel_id = _operator_channel_id()
         channel_id = str(getattr(interaction.channel, "id", "") or "")
         if interaction.guild is None and channel_id != operator_channel_id:
@@ -681,6 +827,9 @@ async def main() -> None:
                 "Use `/retry-contact <unixusername|discordname>` here. Onboarding users can DM me `/retry-contact` for their own handoff.",
                 ephemeral=True,
             )
+            return
+        if not _discord_operator_code_ok(operator_code):
+            await interaction.response.send_message(_discord_operator_code_required_message(), ephemeral=True)
             return
         actor = _format_actor_label(interaction.user)
         try:
@@ -924,27 +1073,46 @@ async def main() -> None:
         content = (message.content or "").strip()
         if not content:
             return
-        if not _claim_discord_message_once(str(getattr(message, "id", "") or "")):
+        message_id = str(getattr(message, "id", "") or "")
+        if not _claim_discord_message_once(message_id):
             return
-        if await _handle_operator_channel_message(message, content):
+        try:
+            if await _handle_operator_channel_message(message, content):
+                pass
+            elif message.guild is not None:
+                lower = content.lower()
+                if lower in {"/start", "/onboard", "start", "onboard"}:
+                    try:
+                        await message.author.send("Open a DM with me and send /start there. I only onboard in private.")
+                    except Exception:
+                        pass
+            else:
+                replies = await _process_discord_input(
+                    chat_id=str(message.channel.id),
+                    sender_id=str(message.author.id),
+                    sender_username=str(getattr(message.author, "name", "") or ""),
+                    sender_display_name=str(getattr(message.author, "display_name", "") or ""),
+                    text=content,
+                )
+                await _send_replies(replies=replies, origin_chat_id=str(message.channel.id))
+        except Exception as exc:  # noqa: BLE001
+            _release_discord_message_claim(message_id)
+            compact_error = (str(exc).strip() or exc.__class__.__name__).replace("\n", " ")[:240]
+            sys.stderr.write(f"Curator Discord onboarding failed on message {message_id or '<unknown>'}: {compact_error}\n")
+            sys.stderr.flush()
+            try:
+                await message.channel.send("Curator could not process that message. Please retry in a moment.")
+            except Exception:
+                pass
             return
-        if message.guild is not None:
-            lower = content.lower()
-            if lower in {"/start", "/onboard", "start", "onboard"}:
-                try:
-                    await message.author.send("Open a DM with me and send /start there. I only onboard in private.")
-                except Exception:
-                    pass
-            return
-
-        replies = await _process_discord_input(
-            chat_id=str(message.channel.id),
-            sender_id=str(message.author.id),
-            sender_username=str(getattr(message.author, "name", "") or ""),
-            sender_display_name=str(getattr(message.author, "display_name", "") or ""),
-            text=content,
-        )
-        await _send_replies(replies=replies, origin_chat_id=str(message.channel.id))
+        try:
+            _mark_discord_message_processed(message_id)
+        except Exception as exc:  # noqa: BLE001
+            compact_error = (str(exc).strip() or exc.__class__.__name__).replace("\n", " ")[:240]
+            sys.stderr.write(
+                f"Curator Discord onboarding could not mark message {message_id or '<unknown>'} processed: {compact_error}\n"
+            )
+            sys.stderr.flush()
 
     @client.event
     async def on_interaction(interaction) -> None:  # type: ignore[no-untyped-def]
@@ -959,9 +1127,16 @@ async def main() -> None:
             # Raven dispatch gate as typed commands.
             if not await _ensure_operator_channel(interaction):
                 return
+            raven_command = custom_id[len("arclink:"):].strip()
+            if operator_raven_command_is_mutating(raven_command):
+                await interaction.response.send_message(
+                    "Use the typed operator command with the approval code for this action.",
+                    ephemeral=True,
+                )
+                return
             actor = _format_actor_label(interaction.user)
             result = _operator_raven_result(
-                custom_id[len("arclink:"):].strip(),
+                raven_command,
                 actor_id=actor,
                 message_id=str(getattr(interaction, "id", "") or ""),
             )
@@ -984,6 +1159,9 @@ async def main() -> None:
                 return
             if scope not in {"upgrade", "pin-upgrade", "ssot"} or not target_id:
                 await interaction.response.send_message("That operator action is malformed.", ephemeral=True)
+                return
+            if _discord_component_requires_operator_code(scope=scope, action=action):
+                await interaction.response.send_message(_discord_operator_code_required_message(), ephemeral=True)
                 return
             actor = _format_actor_label(interaction.user)
             result_text = _run_operator_action(target_id=target_id, action=action, actor=actor, scope=scope)

@@ -16,6 +16,7 @@ Locks in:
 from __future__ import annotations
 
 import importlib.util
+import fcntl
 import json
 import os
 import sys
@@ -230,6 +231,8 @@ def test_detector_adds_operator_buttons_for_pinned_component_digest() -> None:
                     sorted(dismissed["silenced"]) == ["hermes-agent", "hermes-docs"],
                     str(dismissed),
                 )
+                expect(control.get_pin_upgrade_action_payload(conn, token) is None, "dismiss should remove the queueable action token")
+                expect(control.list_pin_upgrade_action_payloads(conn, active_only=True) == [], "dismissed actions must not remain active/listable")
                 state = conn.execute(
                     "SELECT component, silenced FROM pin_upgrade_notifications ORDER BY component"
                 ).fetchall()
@@ -238,6 +241,33 @@ def test_detector_adds_operator_buttons_for_pinned_component_digest() -> None:
             os.environ.clear()
             os.environ.update(old_env)
     print("PASS test_detector_adds_operator_buttons_for_pinned_component_digest")
+
+
+def test_detector_maps_docs_only_install_item_to_executable_parent() -> None:
+    detector = load_module(PIN_DETECTOR, "arclink_pin_upgrade_check_docs_parent")
+    target = "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222"
+    pins = {
+        "components": {
+            "hermes-agent": {"kind": "git-commit", "ref": "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111"},
+            "hermes-docs": {
+                "kind": "git-commit",
+                "ref": "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111",
+                "inherits_from": "hermes-agent",
+            },
+        }
+    }
+    result = detector.CheckResult(
+        component="hermes-docs",
+        kind="git-commit",
+        field="ref",
+        current="aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111",
+        target=target,
+        upgrade_available=True,
+    )
+    items = detector._pin_upgrade_install_items(pins, [(result, {})])
+    expect([item["component"] for item in items] == ["hermes-agent"], str(items))
+    expect(items[0]["kind"] == "git-commit" and items[0]["target"] == target, str(items))
+    print("PASS test_detector_maps_docs_only_install_item_to_executable_parent")
 
 
 def test_detector_digest_includes_git_commit_release_labels() -> None:
@@ -646,9 +676,36 @@ def test_run_check_marks_partial_nonzero_output_transient() -> None:
         detector.subprocess.run = original_run
 
 
+def test_detector_single_flight_lock_and_pins_read_failure_are_reported() -> None:
+    detector = load_module(PIN_DETECTOR, "arclink_pin_upgrade_check_lock_and_read")
+    control = load_module(CONTROL_PY, "arclink_control_pin_lock_and_read")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        old_env = _setup_env(root)
+        try:
+            cfg = control.Config.from_env()
+            with control.connect_db(cfg) as conn:
+                lock_path = detector._detector_lock_path(cfg)
+                lock_path.parent.mkdir(parents=True, exist_ok=True)
+                with lock_path.open("w", encoding="utf-8") as lock_handle:
+                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    detector._run_check = lambda component: (_ for _ in ()).throw(AssertionError("locked detector must not scan"))
+                    locked = detector.run_detector(conn, cfg)
+                    expect(locked["ok"] is True and locked.get("skipped_locked") is True, str(locked))
+
+                detector._read_pins = lambda: (_ for _ in ()).throw(RuntimeError("broken pins"))
+                failed = detector.run_detector(conn, cfg)
+                expect(failed["ok"] is False and "broken pins" in failed.get("error", ""), str(failed))
+                print("PASS test_detector_single_flight_lock_and_pins_read_failure_are_reported")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_detector_first_run_inserts_state_and_queues_one_digest_notification()
     test_detector_adds_operator_buttons_for_pinned_component_digest()
+    test_detector_maps_docs_only_install_item_to_executable_parent()
     test_detector_digest_includes_git_commit_release_labels()
     test_detector_uses_release_version_target_across_git_commit_churn()
     test_detector_silences_after_configured_strikes_against_same_target()
@@ -657,7 +714,8 @@ def main() -> int:
     test_detector_preserves_state_on_transient_upstream_failure()
     test_detector_preserves_state_on_check_runner_exception_output()
     test_run_check_marks_partial_nonzero_output_transient()
-    print("PASS all 10 pin-upgrade detector regression tests")
+    test_detector_single_flight_lock_and_pins_read_failure_are_reported()
+    print("PASS all 12 pin-upgrade detector regression tests")
     return 0
 
 

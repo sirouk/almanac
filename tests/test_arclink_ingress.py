@@ -136,6 +136,58 @@ def test_dns_teardown_removes_records_and_marks_torn_down() -> None:
     print("PASS test_dns_teardown_removes_records_and_marks_torn_down")
 
 
+def test_dns_teardown_marks_only_removed_records_torn_down() -> None:
+    control = load_module("arclink_control.py", "arclink_control_ingress_partial_tear_test")
+    ingress = load_module("arclink_ingress.py", "arclink_ingress_partial_tear_test")
+    conn = memory_db(control)
+    records = ingress.desired_arclink_dns_records(
+        prefix="partial",
+        base_domain="example.test",
+        target="edge.example.test",
+    )
+    ingress.persist_arclink_dns_records(conn, deployment_id="dep_partial", records=records)
+
+    ingress.mark_arclink_dns_torn_down(
+        conn,
+        deployment_id="dep_partial",
+        removed=[records["dashboard"].hostname],
+        metadata={"provider_status": "applied"},
+    )
+
+    rows = conn.execute(
+        "SELECT hostname, status FROM arclink_dns_records WHERE deployment_id = 'dep_partial'"
+    ).fetchall()
+    statuses = {row["hostname"]: row["status"] for row in rows}
+    expect(statuses[records["dashboard"].hostname] == "torn_down", str(statuses))
+    expect(statuses[records["hermes"].hostname] == "desired", str(statuses))
+    print("PASS test_dns_teardown_marks_only_removed_records_torn_down")
+
+
+def test_dns_teardown_helper_targets_only_provisioned_host_roles() -> None:
+    control = load_module("arclink_control.py", "arclink_control_ingress_helper_roles_test")
+    ingress = load_module("arclink_ingress.py", "arclink_ingress_helper_roles_test")
+    conn = memory_db(control)
+
+    class RecordingCloudflare:
+        def __init__(self):
+            self.hostnames: list[str] = []
+
+        def teardown_records(self, hostnames: list[str]) -> list[str]:
+            self.hostnames = list(hostnames)
+            return []
+
+    cloudflare = RecordingCloudflare()
+    ingress.teardown_arclink_dns(
+        conn,
+        deployment_id="dep_helper_roles",
+        prefix="roles",
+        base_domain="example.test",
+        cloudflare=cloudflare,
+    )
+    expect(cloudflare.hostnames == ["u-roles.example.test", "hermes-roles.example.test"], str(cloudflare.hostnames))
+    print("PASS test_dns_teardown_helper_targets_only_provisioned_host_roles")
+
+
 def test_dns_provision_is_idempotent_on_retry() -> None:
     control = load_module("arclink_control.py", "arclink_control_ingress_retry_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_ingress_retry_test")
@@ -157,6 +209,38 @@ def test_dns_provision_is_idempotent_on_retry() -> None:
     for rec in cloudflare.records.values():
         expect(rec.target == "edge2.example.test", f"expected updated target, got {rec.target}")
     print("PASS test_dns_provision_is_idempotent_on_retry")
+
+
+def test_dns_provision_does_not_retry_deterministic_errors() -> None:
+    control = load_module("arclink_control.py", "arclink_control_ingress_retry_filter_test")
+    ingress = load_module("arclink_ingress.py", "arclink_ingress_retry_filter_test")
+    conn = memory_db(control)
+
+    class DeterministicFailureCloudflare:
+        def __init__(self):
+            self.calls = 0
+
+        def upsert_record(self, record):
+            self.calls += 1
+            raise ValueError("deterministic failure")
+
+    cloudflare = DeterministicFailureCloudflare()
+    try:
+        ingress.provision_arclink_dns(
+            conn,
+            deployment_id="dep_retry_filter",
+            prefix="retryfilter",
+            base_domain="example.test",
+            target="edge.example.test",
+            cloudflare=cloudflare,
+            max_retries=3,
+        )
+    except ValueError as exc:
+        expect("deterministic failure" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected deterministic DNS failure to propagate without retry")
+    expect(cloudflare.calls == 1, str(cloudflare.calls))
+    print("PASS test_dns_provision_does_not_retry_deterministic_errors")
 
 
 def test_dns_persist_preserves_provisioned_status_for_unchanged_record() -> None:
@@ -187,14 +271,30 @@ def test_dns_persist_preserves_provisioned_status_for_unchanged_record() -> None
     print("PASS test_dns_persist_preserves_provisioned_status_for_unchanged_record")
 
 
+def test_dns_persist_empty_records_does_not_commit_outer_transaction() -> None:
+    control = load_module("arclink_control.py", "arclink_control_ingress_empty_persist_test")
+    ingress = load_module("arclink_ingress.py", "arclink_ingress_empty_persist_test")
+    conn = memory_db(control)
+    conn.execute("BEGIN")
+    expect(conn.in_transaction, "expected explicit transaction to be open")
+    ingress.persist_arclink_dns_records(conn, deployment_id="dep_empty", records={})
+    expect(conn.in_transaction, "empty DNS persist should not commit caller transaction")
+    conn.rollback()
+    print("PASS test_dns_persist_empty_records_does_not_commit_outer_transaction")
+
+
 def main() -> int:
     test_dns_reconciler_persists_desired_records_and_records_drift_events()
     test_traefik_dynamic_labels_match_golden_file_for_public_host_roles()
     test_dns_provision_creates_records_and_marks_provisioned()
     test_dns_teardown_removes_records_and_marks_torn_down()
+    test_dns_teardown_marks_only_removed_records_torn_down()
+    test_dns_teardown_helper_targets_only_provisioned_host_roles()
     test_dns_provision_is_idempotent_on_retry()
+    test_dns_provision_does_not_retry_deterministic_errors()
     test_dns_persist_preserves_provisioned_status_for_unchanged_record()
-    print("PASS all 6 ArcLink ingress tests")
+    test_dns_persist_empty_records_does_not_commit_outer_transaction()
+    print("PASS all 10 ArcLink ingress tests")
     return 0
 
 

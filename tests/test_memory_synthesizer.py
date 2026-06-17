@@ -393,6 +393,21 @@ def test_memory_synthesizer_source_signature_uses_file_content_hash() -> None:
             os.environ.update(old_env)
 
 
+def test_memory_synthesizer_zero_hash_cap_still_bounds_hashing() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        note = root / "note.md"
+        note.write_text("not empty\n", encoding="utf-8")
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_MEMORY_SYNTH_MAX_CONTENT_HASH_BYTES"] = "0"
+        try:
+            expect(synth._file_content_hash(note) == "", "zero hash cap must not disable the hash bound")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+    print("PASS test_memory_synthesizer_zero_hash_cap_still_bounds_hashing")
+
+
 def test_memory_synthesizer_local_fallback_runs_without_llm_config() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -801,6 +816,7 @@ def test_memory_synth_credentials_split_from_pdf_vision() -> None:
 def main() -> int:
     test_memory_synthesizer_caches_cards_and_injects_recall_stubs()
     test_memory_synthesizer_source_signature_uses_file_content_hash()
+    test_memory_synthesizer_zero_hash_cap_still_bounds_hashing()
     test_memory_synthesizer_local_fallback_runs_without_llm_config()
     test_memory_synth_credentials_split_from_pdf_vision()
     test_memory_synthesizer_ingests_academy_memory_seeds()
@@ -809,7 +825,7 @@ def main() -> int:
     test_memory_synthesizer_notion_paths_stay_inside_index_root()
     test_memory_synthesizer_redacts_secret_material_before_truncation()
     test_memory_synthesizer_rejects_unsafe_model_output()
-    print("PASS all 10 memory synthesizer tests")
+    print("PASS all 11 memory synthesizer tests")
     return 0
 
 

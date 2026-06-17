@@ -29,9 +29,9 @@ skill as "named and shipped; live plugin/runtime presence unverified
    `_compose_trainee_corpus`), then the central corpus/trainer-review layer
    deduplicates accepted public sources into a shared SME capsule. The live "LLM
    Trainer" routed through the central ArcLink router is **proof-gated behind
-   `PG-PROVIDER`** and enabled in the control stack by default with
-   `ARCLINK_ACADEMY_TRAINER_LIVE=1` plus a scoped router key; otherwise review
-   falls closed to deterministic curation. Everything in the mode is
+   `PG-PROVIDER`** and opt-in with `ARCLINK_ACADEMY_TRAINER_LIVE=1` plus a
+   scoped router key; otherwise review falls closed to deterministic curation.
+   Everything in the mode is
    **staged/draft -- no Agent-file write happens until the separate
    `academy_apply` action**.
 
@@ -310,8 +310,8 @@ phased plan below.
 - **LLM Trainer curation engine** (P1): `curate_academy_trainee` /
   `_compose_trainee_corpus` compose the governed corpus + application plan +
   review, and `end_academy_mode` curates on graduation. Uses lane-valid local
-  fixtures as a fallback; with the control-stack default
-  `ARCLINK_ACADEMY_TRAINER_LIVE=1` and a scoped router key present, the Trainer
+  fixtures as a fallback; with `ARCLINK_ACADEMY_TRAINER_LIVE=1` and a scoped
+  router key present, the Trainer
   review routes through the central `control-llm-router` under `PG-PROVIDER`,
   falling closed to deterministic review on any missing key, router error, or
   authorization gap.
@@ -483,8 +483,8 @@ dashboard, and CLI. The local layer returns `blocked_by_live_proof` until
   `end_academy_mode`. Opening and steering the mode now queue the selected Agent
   through the public Agent turn bridge with `source_kind=academy_mode`, and hosted
   webhooks kick the live worker for those Academy actions. Live LLM-Trainer review
-  is wired through the central router by default when a scoped router key is
-  present; otherwise it fails closed to deterministic review.
+  is wired through the central router only when explicitly enabled and a scoped
+  router key is present; otherwise it fails closed to deterministic review.
 - **P2 (`PG-PROVIDER`, per-lane policy)** -- live source acquisition, one lane at
   a time (lowest-risk first: `wikimedia` -> `github` -> `scholarly` -> `web` ->
   `video`+ASR -> `reddit` -> `skills` -> `organization_private`).

@@ -9,6 +9,7 @@ import hmac
 import json
 import os
 import pwd
+import re
 import secrets
 import shlex
 import sqlite3
@@ -59,6 +60,7 @@ from arclink_control import (
     NOTION_SLO_P99_SECONDS,
     note_refresh_job,
     operator_pin_upgrade_action_extra,
+    operator_action_authorization_valid,
     operator_upgrade_action_extra,
     queue_notification,
     read_onboarding_bot_token_secret,
@@ -97,6 +99,10 @@ from arclink_onboarding_provider_auth import (
 )
 
 OPERATOR_UPGRADE_BROKER_TOKEN_HEADER = "X-ArcLink-Operator-Upgrade-Broker-Token"
+OPERATOR_UPGRADE_BROKER_RESULT_GRACE_SECONDS = 30
+OPERATOR_UPGRADE_BROKER_HTTP_GRACE_SECONDS = 5
+SAFE_PIN_COMPONENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,80}$")
+ALLOWED_PIN_COMPONENTS = {"hermes-agent", "qmd", "nextcloud", "postgres", "redis", "nvm", "node"}
 
 
 _DEFAULT_USER_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -307,8 +313,14 @@ def _operator_upgrade_broker_request(
             "Docker-mode operator upgrades require ARCLINK_OPERATOR_UPGRADE_BROKER_URL "
             "and ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN"
         )
+    try:
+        requested_timeout_seconds = int(timeout_seconds)
+    except (TypeError, ValueError):
+        requested_timeout_seconds = 7200
+    operator_timeout_seconds = max(30, min(21600, requested_timeout_seconds))
     body = dict(payload)
     body["operation"] = operation
+    body.setdefault("timeout_seconds", operator_timeout_seconds)
     body_bytes = json.dumps(body, sort_keys=True).encode("utf-8")
     timestamp = str(int(time.time()))
     nonce = secrets.token_urlsafe(18)
@@ -330,16 +342,19 @@ def _operator_upgrade_broker_request(
         },
         method="POST",
     )
+    broker_wait_seconds = max(30, min(21630, operator_timeout_seconds + OPERATOR_UPGRADE_BROKER_RESULT_GRACE_SECONDS))
+    http_timeout_seconds = broker_wait_seconds + OPERATOR_UPGRADE_BROKER_HTTP_GRACE_SECONDS
     try:
-        with urllib.request.urlopen(request, timeout=max(30, int(timeout_seconds))) as response:  # noqa: S310 - internal broker URL
+        with urllib.request.urlopen(request, timeout=http_timeout_seconds) as response:  # noqa: S310 - internal broker URL
             data = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         try:
             data = json.loads(exc.read().decode("utf-8"))
         except Exception:
             data = {"error": str(exc)}
-        raise RuntimeError(str(data.get("error") or data)) from None
-    except (OSError, TimeoutError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        message = data.get("error") if isinstance(data, dict) else data
+        raise RuntimeError(str(message or data)) from None
+    except (OSError, TimeoutError, urllib.error.URLError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"operator upgrade broker request failed: {str(exc)[:220]}") from None
     if not isinstance(data, dict) or data.get("ok") is not True:
         raise RuntimeError(str(data.get("error") if isinstance(data, dict) else data))
@@ -432,6 +447,8 @@ def _pin_upgrade_command_args(
     flag = _pin_upgrade_apply_flag(kind)
     if not component:
         raise ValueError("pin upgrade action item is missing component")
+    if not SAFE_PIN_COMPONENT_RE.fullmatch(component) or component not in ALLOWED_PIN_COMPONENTS:
+        raise ValueError(f"pin upgrade action component is not allowlisted: {component}")
     if not target:
         raise ValueError(f"pin upgrade action for {component} is missing target")
     if not flag:
@@ -761,7 +778,7 @@ def _wait_for_user_bus(uid: str, timeout_seconds: int = 15) -> None:
 
 
 def _docker_mode() -> bool:
-    return str(os.environ.get("ARCLINK_DOCKER_MODE") or "").strip().lower() in {"1", "true", "yes"}
+    return str(os.environ.get("ARCLINK_DOCKER_MODE") or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _requires_root_entrypoint() -> bool:
@@ -2289,31 +2306,26 @@ def _run_pending_onboarding_notion_verifications_locked(conn, cfg: Config) -> No
     )
 
 
-CONFIRMED_OPERATOR_ACTION_SOURCES = {"operator-raven"}
-
-
-def _operator_action_has_confirmed_source(action: Mapping[str, Any]) -> bool:
-    source = str(action.get("request_source") or "").strip().lower()
-    return source in CONFIRMED_OPERATOR_ACTION_SOURCES
-
-
 def _fail_unconfirmed_operator_action(
     conn,
     cfg: Config,
     *,
     action: Mapping[str, Any],
     label: str,
+    reason: str,
 ) -> None:
     action_id = int(action["id"])
     source = str(action.get("request_source") or "").strip() or "unknown"
-    note = f"{label} request rejected: unconfirmed request source {source}"
+    clean_reason = str(reason or "invalid authorization").strip()
+    note = f"{label} request rejected: invalid operator authorization ({clean_reason})"
     finish_operator_action(conn, action_id=action_id, status="failed", note=note)
     _queue_operator_message(
         conn,
         cfg,
         (
-            f"{label} request {action_id} was not executed because it did not come from a confirmed Operator Raven command.\n"
-            f"Request source: {source}\n"
+            f"{label} request {action_id} was not executed because its operator authorization envelope was missing, expired, or invalid.\n"
+            f"Request source (audit only): {source}\n"
+            f"Authorization failure: {clean_reason}\n"
             "Use Operator Raven with an explicit confirm/code phrase to queue host mutations."
         ),
     )
@@ -2331,20 +2343,30 @@ def _run_pending_operator_actions(conn, cfg: Config) -> None:
     if action is None:
         _run_pending_pin_upgrade_actions(conn, cfg)
         return
-    if not _operator_action_has_confirmed_source(action):
-        _fail_unconfirmed_operator_action(conn, cfg, action=action, label="ArcLink upgrade")
+    authorized, authorization_reason = operator_action_authorization_valid(action)
+    if not authorized:
+        _fail_unconfirmed_operator_action(
+            conn,
+            cfg,
+            action=action,
+            label="ArcLink upgrade",
+            reason=authorization_reason,
+        )
         _run_pending_pin_upgrade_actions(conn, cfg)
         return
     action_id = int(action["id"])
     requested_by = str(action.get("requested_by") or "operator").strip() or "operator"
     requested_target = str(action.get("requested_target") or "").strip()
     log_path = _operator_action_log_dir(cfg) / f"upgrade-{action_id}.log"
-    mark_operator_action_running(
+    claimed = mark_operator_action_running(
         conn,
         action_id=action_id,
         note=f"starting upgrade requested by {requested_by}",
         log_path=str(log_path),
     )
+    if not claimed:
+        _run_pending_pin_upgrade_actions(conn, cfg)
+        return
     note_refresh_job(
         conn,
         job_name="operator-upgrade",
@@ -2448,8 +2470,15 @@ def _run_pending_pin_upgrade_actions(conn, cfg: Config) -> None:
     action = get_pending_operator_action(conn, action_kind="pin-upgrade", reclaim_stale_running_seconds=0)
     if action is None:
         return
-    if not _operator_action_has_confirmed_source(action):
-        _fail_unconfirmed_operator_action(conn, cfg, action=action, label="Pinned-component upgrade")
+    authorized, authorization_reason = operator_action_authorization_valid(action)
+    if not authorized:
+        _fail_unconfirmed_operator_action(
+            conn,
+            cfg,
+            action=action,
+            label="Pinned-component upgrade",
+            reason=authorization_reason,
+        )
         return
     action_id = int(action["id"])
     requested_by = str(action.get("requested_by") or "operator").strip() or "operator"
@@ -2471,12 +2500,14 @@ def _run_pending_pin_upgrade_actions(conn, cfg: Config) -> None:
 
     summary = _pin_upgrade_summary(payload)
     log_path = _operator_action_log_dir(cfg) / f"pin-upgrade-{action_id}.log"
-    mark_operator_action_running(
+    claimed = mark_operator_action_running(
         conn,
         action_id=action_id,
         note=f"starting pinned-component upgrade requested by {requested_by}: {summary}",
         log_path=str(log_path),
     )
+    if not claimed:
+        return
     note_refresh_job(
         conn,
         job_name="operator-pin-upgrade",
@@ -2683,11 +2714,14 @@ def _run_pending_discord_agent_dm_actions(conn, cfg: Config) -> None:
             _queue_operator_message(conn, cfg, f"Discord agent DM handoff request {action_id} failed before execution: {exc}")
             continue
 
-        mark_operator_action_running(
+        claimed = mark_operator_action_running(
             conn,
             action_id=action_id,
             note=f"send Discord agent DM for {session_id} requested by {requested_by}",
+            reclaim_stale_running_seconds=300,
         )
+        if not claimed:
+            continue
         note_refresh_job(
             conn,
             job_name="operator-send-discord-agent-dm",
@@ -2804,12 +2838,15 @@ def _run_pending_remote_ssh_key_actions(conn, cfg: Config) -> None:
             continue
 
         log_path = _operator_action_log_dir(cfg) / f"install-agent-ssh-key-{action_id}.log"
-        mark_operator_action_running(
+        claimed = mark_operator_action_running(
             conn,
             action_id=action_id,
             note=f"installing remote SSH key for {unix_user} requested by {requested_by}",
             log_path=str(log_path),
+            reclaim_stale_running_seconds=300,
         )
+        if not claimed:
+            continue
         note_refresh_job(
             conn,
             job_name="operator-install-agent-ssh-key",
@@ -2942,12 +2979,15 @@ def _run_pending_agent_backup_actions(conn, cfg: Config) -> None:
             continue
 
         log_path = _operator_action_log_dir(cfg) / f"configure-agent-backup-{phase}-{action_id}.log"
-        mark_operator_action_running(
+        claimed = mark_operator_action_running(
             conn,
             action_id=action_id,
             note=f"{phase} private agent backup for {unix_user} requested by {requested_by}",
             log_path=str(log_path),
+            reclaim_stale_running_seconds=300,
         )
+        if not claimed:
+            continue
         note_refresh_job(
             conn,
             job_name="operator-configure-agent-backup",

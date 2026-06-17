@@ -136,6 +136,23 @@ def slug_from_url(url: str) -> str:
     return slugify(last) or page_id_from_url(url).split("-")[0]
 
 
+def unique_pdf_output_path(out_dir: Path, slug: str, page_id: str, reserved_paths: set[Path]) -> Path:
+    base = slugify(slug)
+    page_suffix = re.sub(r"[^a-zA-Z0-9]+", "", page_id)[:12] or "page"
+    candidate = out_dir / f"{base}.pdf"
+    if candidate not in reserved_paths:
+        reserved_paths.add(candidate)
+        return candidate
+
+    candidate = out_dir / f"{base}-{page_suffix}.pdf"
+    counter = 2
+    while candidate in reserved_paths:
+        candidate = out_dir / f"{base}-{page_suffix}-{counter}.pdf"
+        counter += 1
+    reserved_paths.add(candidate)
+    return candidate
+
+
 def discover_children(page_id: str) -> list[tuple[str, str]]:
     body = {"pageId": page_id, "limit": 200, "cursor": {"stack": []},
             "chunkNumber": 0, "verticalColumns": False}
@@ -265,6 +282,7 @@ def main(argv: list[str]) -> int:
         queue.append((slug_from_url(url), url, 0))
 
     seen: set[str] = set()
+    reserved_output_paths: set[Path] = set()
     rendered: list[Path] = []
     failed: list[tuple[str, str]] = []
 
@@ -285,7 +303,7 @@ def main(argv: list[str]) -> int:
             if pid in seen:
                 continue
             seen.add(pid)
-            out_pdf = out_dir / f"{slug}.pdf"
+            out_pdf = unique_pdf_output_path(out_dir, slug, pid, reserved_output_paths)
             print(f"[{i}] depth={depth}  {slug}", flush=True)
             ok, err = render_page_pdf(
                 page, url, out_pdf,

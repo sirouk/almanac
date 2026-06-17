@@ -31,7 +31,6 @@ from arclink_control import (
     fail_arclink_operation_idempotency,
     generate_llm_router_raw_key,
     reserve_arclink_operation_idempotency,
-    upsert_arclink_service_health,
     utc_now_iso,
 )
 from arclink_executor import (
@@ -49,6 +48,8 @@ ROOT_CAPTURE_OPT_IN_ENV = "ARCLINK_ACTION_WORKER_ALLOW_ROOT_MIGRATION_CAPTURE"
 MIGRATION_CAPTURE_HELPER_URL_ENV = "ARCLINK_MIGRATION_CAPTURE_HELPER_URL"
 MIGRATION_CAPTURE_HELPER_TOKEN_ENV = "ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN"
 MIGRATION_CAPTURE_HELPER_TOKEN_HEADER = "X-ArcLink-Migration-Capture-Helper-Token"
+TERMINAL_MIGRATION_STATUSES = {"succeeded", "failed", "rolled_back", "cancelled"}
+ACTIVE_MIGRATION_STATUSES = {"planned", "running"}
 
 
 class ArcLinkPodMigrationError(ValueError):
@@ -185,6 +186,13 @@ def _validate_capture_paths(conn: sqlite3.Connection, row: Mapping[str, Any]) ->
         raise ArcLinkPodMigrationError("ArcLink Pod migration capture directory must not be inside the target root")
 
 
+def _begin_immediate_if_needed(conn: sqlite3.Connection) -> bool:
+    if conn.in_transaction:
+        return False
+    conn.execute("BEGIN IMMEDIATE")
+    return True
+
+
 def _load_deployment(conn: sqlite3.Connection, deployment_id: str) -> dict[str, Any]:
     row = conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = ?", (deployment_id,)).fetchone()
     if row is None:
@@ -213,6 +221,42 @@ def _host(conn: sqlite3.Connection, host_id: str) -> dict[str, Any]:
     if row is None:
         raise ArcLinkPodMigrationError(f"ArcLink Pod migration host not found: {host_id}")
     return dict(row)
+
+
+def _require_target_host_available(host: Mapping[str, Any]) -> None:
+    if str(host.get("status") or "") != "active" or int(host.get("drain") or 0):
+        raise ArcLinkPodMigrationError("ArcLink Pod migration target host is not available")
+
+
+def _row_is_dry_run(row: Mapping[str, Any]) -> bool:
+    metadata = json_loads_safe(str(row.get("target_host_metadata_json") or "{}"))
+    return bool(metadata.get("dry_run"))
+
+
+def _active_live_migration(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    exclude_migration_id: str = "",
+) -> dict[str, Any] | None:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM arclink_pod_migrations
+        WHERE deployment_id = ?
+          AND status IN ('planned', 'running')
+        ORDER BY updated_at DESC, migration_id DESC
+        """,
+        (deployment_id,),
+    ).fetchall()
+    for raw in rows:
+        row = dict(raw)
+        if str(row.get("migration_id") or "") == str(exclude_migration_id or ""):
+            continue
+        if _row_is_dry_run(row):
+            continue
+        return row
+    return None
 
 
 def _resolve_target_host(
@@ -321,80 +365,103 @@ def plan_pod_migration(
     clean_reason = str(reason or "").strip()
     _reject_secrets({"reason": clean_reason, "target_machine_id": target_machine_id}, path="$")
 
-    existing = _migration_row(conn, clean_migration)
-    if existing is not None:
-        if str(existing["deployment_id"]) != clean_deployment:
-            raise ArcLinkPodMigrationError("ArcLink Pod migration id is already bound to another deployment")
-        clean_target = str(target_machine_id or "").strip()
-        existing_target = str(existing.get("target_machine_id") or "").strip()
-        if clean_target and existing_target and clean_target != existing_target:
-            raise ArcLinkPodMigrationError("ArcLink Pod migration id is already bound to another target")
-        return existing
+    started_txn = _begin_immediate_if_needed(conn)
+    try:
+        existing = _migration_row(conn, clean_migration)
+        if existing is not None:
+            if str(existing["deployment_id"]) != clean_deployment:
+                raise ArcLinkPodMigrationError("ArcLink Pod migration id is already bound to another deployment")
+            clean_target = str(target_machine_id or "").strip()
+            existing_target = str(existing.get("target_machine_id") or "").strip()
+            if clean_target and existing_target and clean_target != existing_target:
+                raise ArcLinkPodMigrationError("ArcLink Pod migration id is already bound to another target")
+            if not dry_run and str(existing.get("status") or "") in ACTIVE_MIGRATION_STATUSES:
+                blocker = _active_live_migration(conn, deployment_id=clean_deployment, exclude_migration_id=clean_migration)
+                if blocker is not None:
+                    raise ArcLinkPodMigrationError(
+                        "ArcLink Pod migration already has an active migration for this deployment: "
+                        f"{blocker.get('migration_id')}"
+                    )
+                _require_target_host_available(_host(conn, str(existing["target_host_id"])))
+            if started_txn:
+                conn.commit()
+            return existing
 
-    deployment = _load_deployment(conn, clean_deployment)
-    source_placement = _active_placement(conn, clean_deployment)
-    source_host = _host(conn, str(source_placement["host_id"]))
-    source_roots, source_base = _metadata_roots(deployment, source_host)
-    target_host, resolved_target = _resolve_target_host(
-        conn,
-        source_host_id=str(source_placement["host_id"]),
-        target_machine_id=target_machine_id,
-    )
-    if str(target_host.get("status") or "") != "active" or int(target_host.get("drain") or 0):
-        raise ArcLinkPodMigrationError("ArcLink Pod migration target host is not available")
-    target_base = _target_state_root_base(target_host, source_base)
-    target_roots = render_arclink_state_roots(
-        deployment_id=clean_deployment,
-        prefix=str(deployment["prefix"]),
-        state_root_base=target_base,
-    )
-    target_placement_id = ""
-    if not dry_run:
-        target_placement_id = _ensure_removed_target_placement(
+        if not dry_run:
+            blocker = _active_live_migration(conn, deployment_id=clean_deployment)
+            if blocker is not None:
+                raise ArcLinkPodMigrationError(
+                    "ArcLink Pod migration already has an active migration for this deployment: "
+                    f"{blocker.get('migration_id')}"
+                )
+
+        deployment = _load_deployment(conn, clean_deployment)
+        source_placement = _active_placement(conn, clean_deployment)
+        source_host = _host(conn, str(source_placement["host_id"]))
+        source_roots, source_base = _metadata_roots(deployment, source_host)
+        target_host, resolved_target = _resolve_target_host(
             conn,
-            deployment_id=clean_deployment,
-            source_placement_id=str(source_placement["placement_id"]),
             source_host_id=str(source_placement["host_id"]),
-            target_host_id=str(target_host["host_id"]),
+            target_machine_id=target_machine_id,
         )
-    capture_dir = str(Path(target_base) / ".migrations" / clean_migration)
-    host_meta = {
-        "host_id": str(target_host["host_id"]),
-        "hostname": str(target_host["hostname"]),
-        "state_root_base": target_base,
-        "dry_run": bool(dry_run),
-    }
-    now = utc_now_iso()
-    conn.execute(
-        """
-        INSERT INTO arclink_pod_migrations (
-          migration_id, deployment_id, source_placement_id, target_placement_id,
-          source_host_id, target_host_id, target_machine_id, source_state_root,
-          target_state_root, capture_dir, status, operation_idempotency_key,
-          capture_manifest_json, rollback_metadata_json, target_host_metadata_json,
-          created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?, '{}', ?, ?, ?, ?)
-        """,
-        (
-            clean_migration,
-            clean_deployment,
-            str(source_placement["placement_id"]),
-            target_placement_id,
-            str(source_placement["host_id"]),
-            str(target_host["host_id"]),
-            resolved_target,
-            str(source_roots.get("root") or ""),
-            str(target_roots.get("root") or ""),
-            capture_dir,
-            f"arclink:migration:{clean_migration}",
-            _json_dumps({"source_placement_id": str(source_placement["placement_id"]), "reason": clean_reason}),
-            _json_dumps(host_meta),
-            now,
-            now,
-        ),
-    )
-    conn.commit()
-    return dict(conn.execute("SELECT * FROM arclink_pod_migrations WHERE migration_id = ?", (clean_migration,)).fetchone())
+        _require_target_host_available(target_host)
+        target_base = _target_state_root_base(target_host, source_base)
+        target_roots = render_arclink_state_roots(
+            deployment_id=clean_deployment,
+            prefix=str(deployment["prefix"]),
+            state_root_base=target_base,
+        )
+        target_placement_id = ""
+        if not dry_run:
+            target_placement_id = _ensure_removed_target_placement(
+                conn,
+                deployment_id=clean_deployment,
+                source_placement_id=str(source_placement["placement_id"]),
+                source_host_id=str(source_placement["host_id"]),
+                target_host_id=str(target_host["host_id"]),
+            )
+        capture_dir = str(Path(target_base) / ".migrations" / clean_migration)
+        host_meta = {
+            "host_id": str(target_host["host_id"]),
+            "hostname": str(target_host["hostname"]),
+            "state_root_base": target_base,
+            "dry_run": bool(dry_run),
+        }
+        now = utc_now_iso()
+        conn.execute(
+            """
+            INSERT INTO arclink_pod_migrations (
+              migration_id, deployment_id, source_placement_id, target_placement_id,
+              source_host_id, target_host_id, target_machine_id, source_state_root,
+              target_state_root, capture_dir, status, operation_idempotency_key,
+              capture_manifest_json, rollback_metadata_json, target_host_metadata_json,
+              created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?, '{}', ?, ?, ?, ?)
+            """,
+            (
+                clean_migration,
+                clean_deployment,
+                str(source_placement["placement_id"]),
+                target_placement_id,
+                str(source_placement["host_id"]),
+                str(target_host["host_id"]),
+                resolved_target,
+                str(source_roots.get("root") or ""),
+                str(target_roots.get("root") or ""),
+                capture_dir,
+                f"arclink:migration:{clean_migration}",
+                _json_dumps({"source_placement_id": str(source_placement["placement_id"]), "reason": clean_reason}),
+                _json_dumps(host_meta),
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        return dict(conn.execute("SELECT * FROM arclink_pod_migrations WHERE migration_id = ?", (clean_migration,)).fetchone())
+    except Exception:
+        if started_txn and conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 def _operation_intent(row: Mapping[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -439,12 +506,21 @@ def _copy_capture(source_root: Path, capture_dir: Path) -> dict[str, Any]:
 
     files: list[dict[str, Any]] = []
     for path in sorted(staged_root.rglob("*")):
+        rel = path.relative_to(staged_root).as_posix()
         if path.is_symlink():
-            path.unlink()
+            stat = path.lstat()
+            files.append(
+                {
+                    "path": rel,
+                    "boundary": _boundary_for(rel),
+                    "type": "symlink",
+                    "target": os.readlink(path),
+                    "mode": oct(stat.st_mode & 0o777),
+                }
+            )
             continue
         if not path.is_file():
             continue
-        rel = path.relative_to(staged_root).as_posix()
         stat = path.stat()
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
         files.append(
@@ -461,9 +537,15 @@ def _copy_capture(source_root: Path, capture_dir: Path) -> dict[str, Any]:
 
 def _materialize_capture(capture_dir: Path, target_root: Path) -> None:
     staged_root = capture_dir / "source-root"
-    target_root.mkdir(parents=True, exist_ok=True)
+    target_root.parent.mkdir(parents=True, exist_ok=True)
+    if target_root.is_symlink() or target_root.is_file():
+        target_root.unlink()
+    elif target_root.exists():
+        shutil.rmtree(target_root)
     if staged_root.exists():
-        shutil.copytree(staged_root, target_root, dirs_exist_ok=True, symlinks=True)
+        shutil.copytree(staged_root, target_root, symlinks=True)
+    else:
+        target_root.mkdir(parents=True, exist_ok=True)
 
 
 def _migration_capture_helper_payload(conn: sqlite3.Connection, row: Mapping[str, Any]) -> dict[str, Any]:
@@ -561,15 +643,30 @@ def _default_verifier(
     intent: Mapping[str, Any],
 ) -> dict[str, Any]:
     rows = conn.execute(
-        "SELECT service_name, status FROM arclink_service_health WHERE deployment_id = ?",
+        "SELECT service_name, status, checked_at FROM arclink_service_health WHERE deployment_id = ?",
         (str(migration["deployment_id"]),),
     ).fetchall()
-    blockers = {
-        str(row["service_name"]): str(row["status"])
-        for row in rows
-        if str(row["status"]) in {"failed", "unhealthy", "missing"}
+    checked_after = _parse_iso(str(migration.get("updated_at") or migration.get("created_at") or ""))
+    blockers: dict[str, str] = {}
+    fresh_services: list[str] = []
+    for row in rows:
+        service_name = str(row["service_name"])
+        status = str(row["status"])
+        checked_at = _parse_iso(str(row["checked_at"] or ""))
+        if checked_at is None or (checked_after is not None and checked_at < checked_after):
+            blockers[service_name] = "stale"
+            continue
+        fresh_services.append(service_name)
+        if status in {"failed", "unhealthy", "missing"}:
+            blockers[service_name] = status
+    if not rows:
+        blockers["service_health"] = "missing"
+    return {
+        "healthy": not blockers,
+        "blockers": blockers,
+        "checked": "service_health",
+        "fresh_service_count": len(fresh_services),
     }
-    return {"healthy": not blockers, "blockers": blockers, "checked": "service_health"}
 
 
 def _normalize_verification(value: Mapping[str, Any] | bool) -> dict[str, Any]:
@@ -852,6 +949,109 @@ def _cleanup_rolled_back_capture(row: Mapping[str, Any]) -> dict[str, Any]:
     return {"removed": True}
 
 
+def _record_pod_migration_health(conn: sqlite3.Connection, *, row: Mapping[str, Any], checked_at: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO arclink_service_health (deployment_id, service_name, status, checked_at, detail_json)
+        VALUES (?, 'pod-migration', 'healthy', ?, ?)
+        ON CONFLICT(deployment_id, service_name) DO UPDATE SET
+          status = excluded.status,
+          checked_at = excluded.checked_at,
+          detail_json = excluded.detail_json
+        """,
+        (
+            str(row["deployment_id"]),
+            checked_at,
+            _json_dumps({"migration_id": str(row["migration_id"]), "target_host_id": str(row["target_host_id"])}),
+        ),
+    )
+
+
+def _mark_migration_started(
+    conn: sqlite3.Connection,
+    *,
+    row: Mapping[str, Any],
+    reason: str,
+) -> dict[str, Any]:
+    started_txn = _begin_immediate_if_needed(conn)
+    try:
+        current = _migration_row(conn, str(row["migration_id"])) or row
+        status = str(current.get("status") or "")
+        if status != "planned":
+            if status == "running":
+                raise ArcLinkPodMigrationError(
+                    f"ArcLink Pod migration is already running: {current.get('migration_id')}"
+                )
+            if status in TERMINAL_MIGRATION_STATUSES:
+                return dict(current)
+            raise ArcLinkPodMigrationError(f"ArcLink Pod migration cannot start from status: {status or 'blank'}")
+        blocker = _active_live_migration(
+            conn,
+            deployment_id=str(current["deployment_id"]),
+            exclude_migration_id=str(current["migration_id"]),
+        )
+        if blocker is not None:
+            raise ArcLinkPodMigrationError(
+                "ArcLink Pod migration already has an active migration for this deployment: "
+                f"{blocker.get('migration_id')}"
+            )
+        _require_target_host_available(_host(conn, str(current["target_host_id"])))
+        now = utc_now_iso()
+        conn.execute(
+            "UPDATE arclink_pod_migrations SET status = 'running', updated_at = ? WHERE migration_id = ? AND status = 'planned'",
+            (now, str(current["migration_id"])),
+        )
+        append_arclink_event(
+            conn,
+            subject_kind="deployment",
+            subject_id=str(current["deployment_id"]),
+            event_type="pod_migration_started",
+            metadata={"migration_id": str(current["migration_id"]), "target_host_id": str(current["target_host_id"])},
+            commit=False,
+        )
+        append_arclink_audit(
+            conn,
+            action="pod_migration_started",
+            actor_id="system:pod_migration",
+            target_kind="deployment",
+            target_id=str(current["deployment_id"]),
+            reason=str(reason or "operator requested Pod migration"),
+            metadata={"migration_id": str(current["migration_id"]), "target_host_id": str(current["target_host_id"])},
+            commit=False,
+        )
+        conn.commit()
+        return dict(conn.execute("SELECT * FROM arclink_pod_migrations WHERE migration_id = ?", (str(current["migration_id"]),)).fetchone())
+    except Exception:
+        if started_txn and conn.in_transaction:
+            conn.rollback()
+        raise
+
+
+def _retention_days_from_config(retention_days: int | None, env: Mapping[str, str] | None) -> int:
+    if retention_days is not None:
+        try:
+            return int(retention_days)
+        except (TypeError, ValueError) as exc:
+            raise ArcLinkPodMigrationError("ArcLink Pod migration retention days must be an integer") from exc
+    raw = str((env or os.environ).get("ARCLINK_MIGRATION_GC_DAYS") or DEFAULT_GC_DAYS).strip()
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ArcLinkPodMigrationError("ArcLink Pod migration ARCLINK_MIGRATION_GC_DAYS must be an integer") from exc
+
+
+def _apply_docker_status_gate(verification: dict[str, Any], docker_status: str) -> dict[str, Any]:
+    verification["docker_status"] = docker_status
+    if docker_status == "applied":
+        return verification
+    raw_blockers = verification.get("blockers")
+    blockers = dict(raw_blockers) if isinstance(raw_blockers, Mapping) else {}
+    blockers["docker_compose_apply"] = docker_status or "missing"
+    verification["blockers"] = blockers
+    verification["healthy"] = False
+    return verification
+
+
 def _mark_success(
     conn: sqlite3.Connection,
     *,
@@ -860,6 +1060,7 @@ def _mark_success(
     capture_manifest: Mapping[str, Any],
     verification: Mapping[str, Any],
     retention_days: int,
+    commit: bool = True,
 ) -> dict[str, Any]:
     now_dt = _utc()
     now = _iso(now_dt)
@@ -900,7 +1101,7 @@ def _mark_success(
     }
     conn.execute(
         "UPDATE arclink_deployments SET metadata_json = ?, updated_at = ? WHERE deployment_id = ?",
-        (json.dumps(metadata, sort_keys=True), now, str(row["deployment_id"])),
+        (_json_dumps(metadata), now, str(row["deployment_id"])),
     )
     conn.execute(
         """
@@ -922,13 +1123,7 @@ def _mark_success(
             str(row["migration_id"]),
         ),
     )
-    upsert_arclink_service_health(
-        conn,
-        deployment_id=str(row["deployment_id"]),
-        service_name="pod-migration",
-        status="healthy",
-        detail={"migration_id": str(row["migration_id"]), "target_host_id": str(row["target_host_id"])},
-    )
+    _record_pod_migration_health(conn, row=row, checked_at=now)
     append_arclink_event(
         conn,
         subject_kind="deployment",
@@ -951,7 +1146,8 @@ def _mark_success(
         },
         commit=False,
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return dict(conn.execute("SELECT * FROM arclink_pod_migrations WHERE migration_id = ?", (str(row["migration_id"]),)).fetchone())
 
 
@@ -986,10 +1182,13 @@ def migrate_pod(
     verifier: Verifier | None = None,
     retention_days: int | None = None,
 ) -> dict[str, Any]:
+    days: int | None = None
+    if not dry_run:
+        days = _retention_days_from_config(retention_days, env)
     existing = _migration_row(conn, str(migration_id or "").strip()) if str(migration_id or "").strip() else None
     if not dry_run and (
         existing is None
-        or str(existing.get("status") or "") not in {"succeeded", "failed", "rolled_back", "cancelled"}
+        or str(existing.get("status") or "") not in TERMINAL_MIGRATION_STATUSES
     ):
         _require_root_capture_opt_in(env)
         _migration_capture_helper_config(env, require_for_docker=True)
@@ -1013,7 +1212,7 @@ def migrate_pod(
     if bool(replay.get("replay")):
         refreshed = _migration_row(conn, str(row["migration_id"])) or row
         return _result_from_row(refreshed, idempotent_replay=True, dry_run=dry_run)
-    if str(row["status"]) in {"succeeded", "failed", "rolled_back", "cancelled"}:
+    if str(row["status"]) in TERMINAL_MIGRATION_STATUSES:
         return _result_from_row(row, idempotent_replay=True, dry_run=dry_run)
     if not dry_run:
         _validate_capture_paths(conn, row)
@@ -1086,29 +1285,9 @@ def migrate_pod(
         )
         return result
 
-    conn.execute(
-        "UPDATE arclink_pod_migrations SET status = 'running', updated_at = ? WHERE migration_id = ?",
-        (utc_now_iso(), str(row["migration_id"])),
-    )
-    append_arclink_event(
-        conn,
-        subject_kind="deployment",
-        subject_id=str(row["deployment_id"]),
-        event_type="pod_migration_started",
-        metadata={"migration_id": str(row["migration_id"]), "target_host_id": str(row["target_host_id"])},
-        commit=False,
-    )
-    append_arclink_audit(
-        conn,
-        action="pod_migration_started",
-        actor_id="system:pod_migration",
-        target_kind="deployment",
-        target_id=str(row["deployment_id"]),
-        reason=str(reason or "operator requested Pod migration"),
-        metadata={"migration_id": str(row["migration_id"]), "target_host_id": str(row["target_host_id"])},
-        commit=False,
-    )
-    conn.commit()
+    row = _mark_migration_started(conn, row=row, reason=reason)
+    if str(row.get("status") or "") in TERMINAL_MIGRATION_STATUSES:
+        return _result_from_row(row, idempotent_replay=True, dry_run=dry_run)
 
     capture_manifest: dict[str, Any] = {}
     source_stopped = False
@@ -1135,6 +1314,7 @@ def migrate_pod(
 
         deployment = _load_deployment(conn, str(row["deployment_id"]))
         target_host = _host(conn, str(row["target_host_id"]))
+        _require_target_host_available(target_host)
         target_intent = _render_target_intent(
             conn,
             deployment_id=str(row["deployment_id"]),
@@ -1152,7 +1332,7 @@ def migrate_pod(
             )
         )
         verification = _normalize_verification((verifier or _default_verifier)(conn, row, target_intent))
-        verification["docker_status"] = docker_result.status
+        verification = _apply_docker_status_gate(verification, str(docker_result.status))
         if not bool(verification.get("healthy")):
             error = "ArcLink Pod migration verification failed"
             lifecycle_metadata = _rollback_lifecycle(
@@ -1174,26 +1354,31 @@ def migrate_pod(
             )
             return _result_from_row(failed_row)
 
-        days = retention_days
-        if days is None:
-            days = int(str((env or os.environ).get("ARCLINK_MIGRATION_GC_DAYS") or DEFAULT_GC_DAYS))
-        succeeded = _mark_success(
-            conn,
-            row=row,
-            target_intent=target_intent,
-            capture_manifest=capture_manifest,
-            verification=verification,
-            retention_days=days,
-        )
-        result = _result_from_row(succeeded)
-        complete_arclink_operation_idempotency(
-            conn,
-            operation_kind=OPERATION_KIND,
-            idempotency_key=operation_key,
-            intent=intent,
-            provider_refs={"target_host_id": str(row["target_host_id"])},
-            result=result,
-        )
+        try:
+            succeeded = _mark_success(
+                conn,
+                row=row,
+                target_intent=target_intent,
+                capture_manifest=capture_manifest,
+                verification=verification,
+                retention_days=int(days if days is not None else DEFAULT_GC_DAYS),
+                commit=False,
+            )
+            result = _result_from_row(succeeded)
+            complete_arclink_operation_idempotency(
+                conn,
+                operation_kind=OPERATION_KIND,
+                idempotency_key=operation_key,
+                intent=intent,
+                provider_refs={"target_host_id": str(row["target_host_id"])},
+                result=result,
+                commit=False,
+            )
+            conn.commit()
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
         return result
     except Exception as exc:
         error = str(exc)[:1000]
@@ -1251,7 +1436,8 @@ def garbage_collect_pod_migrations(
         retention_until = _parse_iso(str(row.get("source_retention_until") or ""))
         if retention_until is None or retention_until > cutoff:
             continue
-        capture_dir = Path(str(row.get("capture_dir") or ""))
+        _validate_capture_paths(conn, row)
+        capture_dir = Path(str(row.get("capture_dir") or "")).resolve(strict=False)
         removed = False
         if remove_artifacts and capture_dir.exists():
             shutil.rmtree(capture_dir)

@@ -5,6 +5,7 @@ import importlib.util
 import asyncio
 import json
 import os
+import stat
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -828,6 +829,7 @@ def test_operator_agent_turn_delivery_uses_control_stack_gateway() -> None:
                             "source_kind": "operator_chat",
                             "telegram_update_kind": "callback_query",
                             "telegram_native_callback": True,
+                            "telegram_callback_family": "ea",
                             "telegram_update_json": json.dumps(
                                 {
                                     "update_id": 123,
@@ -849,6 +851,7 @@ def test_operator_agent_turn_delivery_uses_control_stack_gateway() -> None:
             bridge_extra = bridge_calls[0]["extra"]
             expect(bridge_extra["telegram_update_kind"] == "callback_query", str(bridge_extra))
             expect(bridge_extra["telegram_native_callback"] is True, str(bridge_extra))
+            expect(bridge_extra["telegram_callback_family"] == "ea", str(bridge_extra))
             native_update = json.loads(str(bridge_extra["telegram_update_json"]))
             expect(native_update["callback_query"]["data"] == "ea:always:1", str(native_update))
             print("PASS test_operator_agent_turn_delivery_uses_control_stack_gateway")
@@ -1018,6 +1021,84 @@ def test_public_agent_live_trigger_claims_and_defers_until_detached_bridge_finis
             os.environ.update(old_env)
 
 
+def test_public_agent_live_trigger_skips_not_due_head_of_line() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_notification_delivery_live_due_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_live_due_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(
+            config_path,
+            {
+                "ARCLINK_USER": "arclink",
+                "ARCLINK_HOME": str(root / "home-arclink"),
+                "ARCLINK_REPO_DIR": str(REPO),
+                "ARCLINK_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ARCLINK_DB_PATH": str(root / "state" / "arclink-control.sqlite3"),
+                "ARCLINK_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ARCLINK_CURATOR_DIR": str(root / "state" / "curator"),
+                "ARCLINK_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ARCLINK_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ARCLINK_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ARCLINK_RELEASE_STATE_FILE": str(root / "state" / "arclink-release.json"),
+                "ARCLINK_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "TELEGRAM_BOT_TOKEN": "telegram-public-token",
+            },
+        )
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            with control.connect_db(cfg) as conn:
+                first = control.queue_notification(
+                    conn,
+                    target_kind="public-agent-turn",
+                    target_id="tg:123",
+                    channel_kind="telegram",
+                    message="not due",
+                    extra={"deployment_id": "arcdep_test", "prefix": "arc-testpod"},
+                )
+                second = control.queue_notification(
+                    conn,
+                    target_kind="public-agent-turn",
+                    target_id="tg:123",
+                    channel_kind="telegram",
+                    message="due now",
+                    extra={"deployment_id": "arcdep_test", "prefix": "arc-testpod"},
+                )
+                conn.execute(
+                    "UPDATE notification_outbox SET next_attempt_at = ? WHERE id = ?",
+                    (control.utc_after_seconds_iso(3600), first),
+                )
+                conn.commit()
+
+            prompts: list[str] = []
+
+            def fake_gateway_turn(**kwargs):
+                prompts.append(str(kwargs.get("prompt") or ""))
+                return True, ""
+
+            delivery._run_public_agent_gateway_turn = fake_gateway_turn
+            summary = delivery.run_public_agent_turns_once(cfg, channel_kind="telegram", target_id="tg:123", limit=1)
+            expect(summary["processed"] == 1 and summary["delivered"] == 1, str(summary))
+            expect(prompts == ["due now"], str(prompts))
+            with control.connect_db(cfg) as conn:
+                rows = conn.execute(
+                    "SELECT id, delivered_at FROM notification_outbox ORDER BY id ASC"
+                ).fetchall()
+            expect(rows[0]["id"] == first and rows[0]["delivered_at"] is None, str([dict(row) for row in rows]))
+            expect(rows[1]["id"] == second and rows[1]["delivered_at"], str([dict(row) for row in rows]))
+            print("PASS test_public_agent_live_trigger_skips_not_due_head_of_line")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_public_agent_turn_runner_prefers_running_gateway_container() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -1131,6 +1212,43 @@ def test_public_agent_gateway_bridge_detaches_long_running_turns() -> None:
             os.environ.update(old_env)
 
 
+def test_public_agent_gateway_bridge_unlinks_job_when_worker_spawn_fails() -> None:
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_bridge_spawn_cleanup_test")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        old_env = os.environ.copy()
+        os.environ["STATE_DIR"] = str(root / "state")
+        original_popen = delivery.subprocess.Popen
+
+        def fail_popen(*args, **kwargs):
+            raise OSError("spawn failed")
+
+        delivery.subprocess.Popen = fail_popen
+        try:
+            ok, error = delivery._spawn_public_agent_gateway_bridge(
+                cmd=[
+                    "docker",
+                    "exec",
+                    "-i",
+                    "arclink-arcdep_test-hermes-gateway-1",
+                    "/opt/arclink/runtime/hermes-venv/bin/python3",
+                    "/home/arclink/arclink/python/arclink_public_agent_bridge.py",
+                ],
+                payload={"platform": "telegram", "bot_token": "runtime-token", "text": "hello"},
+                notification_id=77,
+                project_name="arclink-arcdep_test",
+            )
+            expect(ok is False and "could not start" in error, error)
+            job_dir = root / "state" / "docker" / "jobs" / "public-agent-bridge-jobs"
+            expect(not list(job_dir.glob("*.json")), "bridge job file should be removed on spawn failure")
+            print("PASS test_public_agent_gateway_bridge_unlinks_job_when_worker_spawn_fails")
+        finally:
+            delivery.subprocess.Popen = original_popen
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_public_agent_bridge_worker_marks_delivery_after_bridge_success() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -1158,6 +1276,7 @@ def test_public_agent_bridge_worker_marks_delivery_after_bridge_success() -> Non
                 "ARCLINK_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
                 "ARCLINK_RELEASE_STATE_FILE": str(root / "state" / "arclink-release.json"),
                 "ARCLINK_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "TELEGRAM_BOT_TOKEN": "telegram-public-token",
             },
         )
         old_env = os.environ.copy()
@@ -1207,9 +1326,11 @@ def test_public_agent_bridge_worker_marks_delivery_after_bridge_success() -> Non
                         "/opt/arclink/runtime/hermes-venv/bin/python3",
                         "/home/arclink/arclink/python/arclink_public_agent_bridge.py",
                     ],
-                    payload={"platform": "telegram", "text": "finish later"},
+                    payload={"platform": "telegram", "bot_token": "detached-command-secret", "text": "finish later"},
                     project_name="arclink-arcdep_test",
                 )
+                job_text = job_path.read_text(encoding="utf-8")
+                expect("detached-command-secret" not in job_text and '"bot_token"' not in job_text, job_text)
                 result = delivery._run_public_agent_bridge_worker(job_path)
                 expect(result == 0, str(result))
                 expect(
@@ -1225,7 +1346,9 @@ def test_public_agent_bridge_worker_marks_delivery_after_bridge_success() -> Non
                     ],
                     str(run_calls),
                 )
-                expect(json.loads(str(run_calls[0]["input"]))["text"] == "finish later", str(run_calls))
+                bridge_input = json.loads(str(run_calls[0]["input"]))
+                expect(bridge_input["text"] == "finish later", str(run_calls))
+                expect(bridge_input["bot_token"] == "telegram-public-token", str(run_calls))
                 expect(not job_path.exists(), "bridge job file should be removed after worker loads it")
                 with control.connect_db(cfg) as conn:
                     row = conn.execute("SELECT delivered_at, delivery_error FROM notification_outbox WHERE id = ?", (notification_id,)).fetchone()
@@ -1399,6 +1522,18 @@ def test_public_agent_bridge_command_validator_confines_compose_paths() -> None:
                 project_name="arclink-arcdep_test",
             )
             expect(ok is False and "not allowlisted" in error, error)
+            ok, _kind, error = delivery._validate_public_agent_bridge_cmd(
+                [
+                    "docker",
+                    "exec",
+                    "-i",
+                    "arclink-arcdep_test-not-hermes-gateway-1",
+                    "/opt/arclink/runtime/hermes-venv/bin/python3",
+                    "/home/arclink/arclink/python/arclink_public_agent_bridge.py",
+                ],
+                project_name="arclink-arcdep_test",
+            )
+            expect(ok is False and "hermes-gateway service" in error, error)
             print("PASS test_public_agent_bridge_command_validator_confines_compose_paths")
         finally:
             os.environ.clear()
@@ -1559,6 +1694,7 @@ def test_public_agent_bridge_worker_uses_gateway_exec_broker_request_jobs() -> N
                 "ARCLINK_QMD_URL": "http://127.0.0.1:8181/mcp",
                 "ARCLINK_GATEWAY_EXEC_BROKER_URL": "http://gateway-exec-broker:8911",
                 "ARCLINK_GATEWAY_EXEC_BROKER_TOKEN": "broker-token",
+                "TELEGRAM_BOT_TOKEN": "telegram-public-token",
             },
         )
         old_env = os.environ.copy()
@@ -1589,16 +1725,25 @@ def test_public_agent_bridge_worker_uses_gateway_exec_broker_request_jobs() -> N
                         "deployment_id": "arcdep_test",
                         "prefix": "arc-test",
                         "project_name": "arclink-arcdep_test",
-                        "payload": {"platform": "telegram", "bot_token": "token", "chat_id": "123", "user_id": "123", "text": "finish"},
+                        "payload": {
+                            "platform": "telegram",
+                            "bot_token": "detached-broker-secret",
+                            "chat_id": "123",
+                            "user_id": "123",
+                            "text": "finish",
+                        },
                         "timeout_seconds": 60,
                     },
                 )
+                job_text = job_path.read_text(encoding="utf-8")
+                expect("detached-broker-secret" not in job_text and '"bot_token"' not in job_text, job_text)
                 result = delivery._run_public_agent_bridge_worker(job_path)
             finally:
                 delivery._run_gateway_exec_broker_request = original_broker_request
 
             expect(result == 0, str(result))
             expect(broker_requests and broker_requests[0]["deployment_id"] == "arcdep_test", broker_requests)
+            expect(broker_requests[0]["payload"]["bot_token"] == "telegram-public-token", broker_requests)
             expect(not job_path.exists(), "broker bridge job file should be removed after worker loads it")
             with control.connect_db(cfg) as conn:
                 row = conn.execute("SELECT delivered_at, delivery_error FROM notification_outbox WHERE id = ?", (notification_id,)).fetchone()
@@ -1785,6 +1930,69 @@ def test_gateway_exec_broker_records_redacted_rejection_incident_before_subproce
             broker._docker_binary = original_docker_binary
             os.environ.clear()
             os.environ.update(old_env)
+
+
+def test_rejection_incident_helpers_redact_and_refuse_unsafe_paths() -> None:
+    incidents = load_module(PYTHON_DIR / "arclink_rejection_incidents.py", "arclink_rejection_incidents_direct_test")
+    old_env = os.environ.copy()
+    try:
+        os.environ["ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED"] = "accepted"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "state"
+            root.mkdir()
+            os.environ["ARCLINK_STATE_ROOT_BASE"] = str(root)
+            broker_path = incidents.state_root_rejection_path("gateway-exec-broker")
+            helper_path = incidents.state_root_rejection_path("agent-process-helper", helper=True)
+            expect(broker_path == root / "_broker-incidents" / "gateway-exec-broker" / "rejections.jsonl", str(broker_path))
+            expect(helper_path == root / "_helper-incidents" / "agent-process-helper" / "rejections.jsonl", str(helper_path))
+            expect(broker_path.parent.is_dir() and helper_path.parent.is_dir(), "incident path helpers must create safe parents")
+
+            incidents.record_rejection_incident(
+                broker_path,
+                service="gateway-exec-broker",
+                event="rejected_request",
+                reason="invalid_payload",
+                message="blocked before subprocess",
+                error_class="ValueError",
+                metadata={
+                    "request_id": "req_123",
+                    "attempt": 2,
+                    "safe": True,
+                    "bad key": "ignored",
+                    "raw_body": '{"bot_token":"123:SECRET"}',
+                },
+            )
+            raw = broker_path.read_text(encoding="utf-8")
+            row = json.loads(raw)
+            expect(row["trusted_host_acknowledged"] is True, str(row))
+            expect(row["request_id"] == "req_123" and row["attempt"] == 2 and row["safe"] is True, str(row))
+            expect("bad key" not in row and "raw_body" not in row and "SECRET" not in raw, raw)
+            expect(stat.S_IMODE(broker_path.stat().st_mode) & 0o077 == 0, oct(stat.S_IMODE(broker_path.stat().st_mode)))
+
+            os.environ["ARCLINK_STATE_ROOT_BASE"] = "relative-state"
+            expect(incidents.state_root_rejection_path("gateway-exec-broker") is None, "relative roots must be rejected")
+            symlink_root = Path(tmp) / "state-link"
+            symlink_root.symlink_to(root, target_is_directory=True)
+            os.environ["ARCLINK_STATE_ROOT_BASE"] = str(symlink_root)
+            expect(incidents.state_root_rejection_path("gateway-exec-broker") is None, "symlink roots must be rejected")
+
+            target = Path(tmp) / "target.jsonl"
+            target.write_text("unchanged\n", encoding="utf-8")
+            link = Path(tmp) / "link.jsonl"
+            link.symlink_to(target)
+            incidents.record_rejection_incident(
+                link,
+                service="gateway-exec-broker",
+                event="rejected_request",
+                reason="invalid_payload",
+                message="blocked before subprocess",
+                error_class="ValueError",
+            )
+            expect(target.read_text(encoding="utf-8") == "unchanged\n", "symlink leaf must not be followed")
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+    print("PASS test_rejection_incident_helpers_redact_and_refuse_unsafe_paths")
 
 
 def test_gateway_exec_broker_rejects_raw_commands_and_builds_vetted_exec() -> None:
@@ -2059,6 +2267,56 @@ def test_gateway_exec_broker_rejects_symlinked_compose_fallback_config_before_do
     expect(ok is False and "symlink" in error.lower(), error)
     expect(subprocess_calls == [], f"unsafe fallback config reached subprocess dispatch: {subprocess_calls}")
     print("PASS test_gateway_exec_broker_rejects_symlinked_compose_fallback_config_before_docker")
+
+
+def test_gateway_exec_broker_sanitizes_subprocess_failure_tail() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    broker = load_module(PYTHON_DIR / "arclink_gateway_exec_broker.py", "arclink_gateway_exec_broker_failure_tail_test")
+
+    class Proc:
+        returncode = 42
+        stdout = "stdout leaked-private-path\n"
+        stderr = "stderr leaked-secret-tail\n"
+
+    def fake_run(cmd, input="", check=False, text=True, capture_output=True, timeout=None):
+        del cmd, input, check, text, capture_output, timeout
+        return Proc()
+
+    original_container_lookup = broker.delivery._deployment_service_container
+    original_run = broker.subprocess.run
+    original_docker_binary = broker._docker_binary
+    try:
+        broker._docker_binary = lambda: "/usr/bin/docker"
+        broker.delivery._deployment_service_container = (
+            lambda *, project_name, service, docker_binary="docker": f"{project_name}-hermes-gateway-1"
+        )
+        broker.subprocess.run = fake_run
+        ok, error = broker.run_gateway_exec_request(
+            {
+                "deployment_id": "arcdep_test",
+                "prefix": "arc-test",
+                "project_name": "arclink-arcdep_test",
+                "payload": {
+                    "platform": "telegram",
+                    "bot_token": "request-secret-token",
+                    "chat_id": "123",
+                    "user_id": "123",
+                    "text": "hello",
+                },
+                "timeout_seconds": 60,
+            }
+        )
+    finally:
+        broker.delivery._deployment_service_container = original_container_lookup
+        broker.subprocess.run = original_run
+        broker._docker_binary = original_docker_binary
+
+    expect(ok is False, "failed subprocess should not succeed")
+    expect("exit status 42" in error, error)
+    for forbidden in ("leaked-secret-tail", "leaked-private-path", "request-secret-token"):
+        expect(forbidden not in error, error)
+    print("PASS test_gateway_exec_broker_sanitizes_subprocess_failure_tail")
 
 
 def test_upgrade_notification_delivery_defers_during_deploy_operation() -> None:
@@ -2344,8 +2602,10 @@ def main() -> int:
     test_operator_agent_turn_delivery_uses_control_stack_gateway()
     test_public_agent_turn_delivery_bridges_discord_channel_metadata()
     test_public_agent_live_trigger_claims_and_defers_until_detached_bridge_finishes()
+    test_public_agent_live_trigger_skips_not_due_head_of_line()
     test_public_agent_turn_runner_prefers_running_gateway_container()
     test_public_agent_gateway_bridge_detaches_long_running_turns()
+    test_public_agent_gateway_bridge_unlinks_job_when_worker_spawn_fails()
     test_public_agent_bridge_worker_marks_delivery_after_bridge_success()
     test_public_agent_bridge_worker_rejects_unallowlisted_commands()
     test_public_agent_bridge_command_validator_confines_compose_paths()
@@ -2353,8 +2613,10 @@ def main() -> int:
     test_public_agent_gateway_turn_uses_gateway_exec_broker_when_configured()
     test_public_agent_bridge_worker_uses_gateway_exec_broker_request_jobs()
     test_gateway_exec_broker_records_redacted_rejection_incident_before_subprocess()
+    test_rejection_incident_helpers_redact_and_refuse_unsafe_paths()
     test_gateway_exec_broker_rejects_raw_commands_and_builds_vetted_exec()
     test_gateway_exec_broker_rejects_symlinked_compose_fallback_config_before_docker()
+    test_gateway_exec_broker_sanitizes_subprocess_failure_tail()
     test_upgrade_notification_delivery_defers_during_deploy_operation()
     test_public_agent_bridge_defaults_to_streaming_progress_without_reasoning()
     test_public_agent_bridge_persists_telegram_approval_button_state()

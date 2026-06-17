@@ -136,6 +136,16 @@ def test_nextcloud_runtime_mounts_pre_install_hook() -> None:
     print("PASS test_nextcloud_runtime_mounts_pre_install_hook")
 
 
+def test_nextcloud_compose_gates_app_on_db_and_redis_health() -> None:
+    compose_body = (REPO / "compose" / "nextcloud-compose.yml").read_text(encoding="utf-8")
+    expect('test: ["CMD", "redis-cli", "ping"]' in compose_body, compose_body)
+    app_block = extract(compose_body, "  app:", "\n    ports:")
+    expect("depends_on:" in app_block, app_block)
+    expect("db:\n        condition: service_healthy" in app_block, app_block)
+    expect("redis:\n        condition: service_healthy" in app_block, app_block)
+    print("PASS test_nextcloud_compose_gates_app_on_db_and_redis_health")
+
+
 def test_nextcloud_vault_acl_skips_git_internals() -> None:
     script_body = NEXTCLOUD_UP.read_text(encoding="utf-8")
     expect("find \"$VAULT_DIR\" -path '*/.git' -prune -o -type d -print" in script_body, script_body)
@@ -158,9 +168,10 @@ def main() -> int:
     test_ensure_nextcloud_vault_mount_skips_duplicate_option_writes()
     test_nextcloud_bootstrap_disables_default_files_and_clears_admin_home()
     test_nextcloud_runtime_mounts_pre_install_hook()
+    test_nextcloud_compose_gates_app_on_db_and_redis_health()
     test_nextcloud_vault_acl_skips_git_internals()
     test_nextcloud_docker_mode_uses_compose_backend()
-    print("PASS all 5 nextcloud regression tests")
+    print("PASS all 6 nextcloud regression tests")
     return 0
 
 

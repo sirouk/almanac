@@ -186,6 +186,34 @@ printf 'deleted_pdf_dir=%s/%s\\n' "$vault_watch_need_qmd" "$vault_watch_need_pdf
     print("PASS test_directory_events_only_trigger_pdf_reconcile_when_needed")
 
 
+def test_unreadable_pdf_manifest_does_not_trigger_directory_reconcile() -> None:
+    body = VAULT_WATCH_SH.read_text(encoding="utf-8")
+    snippet = extract(body, "is_pdf_path() {", "\nstart_event_stream() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        deleted_pdf_dir = root / "DeletedPdfTree"
+        manifest_db = root / "pdf-manifest.sqlite3"
+        manifest_db.write_bytes(b"not a sqlite database")
+        script = f"""
+{snippet}
+PDF_INGEST_ENABLED=1
+VAULT_DIR={root}
+PDF_INGEST_MANIFEST_DB={manifest_db}
+
+vault_watch_need_qmd=0
+vault_watch_need_pdf=0
+vault_watch_need_vault_reload=0
+vault_watch_notify_paths=()
+fold_event_into_flags {deleted_pdf_dir} 'DELETE,ISDIR'
+printf 'deleted_pdf_dir=%s/%s\\n' "$vault_watch_need_qmd" "$vault_watch_need_pdf"
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"corrupt manifest case failed: stdout={result.stdout!r} stderr={result.stderr!r}")
+        expect("deleted_pdf_dir=1/0" in result.stdout, result.stdout)
+        expect("cannot read PDF ingest manifest" in result.stderr, result.stderr)
+    print("PASS test_unreadable_pdf_manifest_does_not_trigger_directory_reconcile")
+
+
 def test_qmd_pending_embeddings_count_reads_qmd_status_output() -> None:
     body = COMMON_SH.read_text(encoding="utf-8")
     snippet = extract(body, "qmd_pending_embeddings_count() {", "\nconfigure_qmd_collections() {")
@@ -253,9 +281,10 @@ def main() -> int:
     test_vault_watch_caps_continuous_burst_batches()
     test_vault_watch_requests_async_memory_synthesis_without_blocking()
     test_directory_events_only_trigger_pdf_reconcile_when_needed()
+    test_unreadable_pdf_manifest_does_not_trigger_directory_reconcile()
     test_qmd_pending_embeddings_count_reads_qmd_status_output()
     test_qmd_collection_setup_recovers_from_duplicate_add()
-    print("PASS all 7 vault watch regression tests")
+    print("PASS all 8 vault watch regression tests")
     return 0
 
 

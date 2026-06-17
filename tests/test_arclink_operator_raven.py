@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import sys
@@ -13,6 +14,7 @@ PYTHON_DIR = REPO / "python"
 CONTROL_PY = PYTHON_DIR / "arclink_control.py"
 FLEET_PY = PYTHON_DIR / "arclink_fleet.py"
 OPERATOR_RAVEN_PY = PYTHON_DIR / "arclink_operator_raven.py"
+UPGRADE_POLICY_PY = PYTHON_DIR / "arclink_upgrade_policy.py"
 CURATOR_TELEGRAM_PY = PYTHON_DIR / "arclink_curator_onboarding.py"
 CURATOR_DISCORD_PY = PYTHON_DIR / "arclink_curator_discord_onboarding.py"
 
@@ -157,6 +159,7 @@ def seed_pin_upgrade_payload(
     target: str = "bbbb2222",
     throttle_target: str = "",
     kind: str = "git-commit",
+    silenced: int = 0,
 ) -> str:
     import arclink_control as control
 
@@ -167,13 +170,14 @@ def seed_pin_upgrade_payload(
         INSERT OR REPLACE INTO pin_upgrade_notifications (
           component, field, current_pin, target_value, first_seen_at,
           last_notified_at, notify_count, silenced, applied_at, extra_json
-        ) VALUES (?, ?, ?, ?, '2026-06-01T00:00:00+00:00', NULL, 1, 0, NULL, ?)
+        ) VALUES (?, ?, ?, ?, '2026-06-01T00:00:00+00:00', NULL, 1, ?, NULL, ?)
         """,
         (
             component,
             field,
             current,
             effective_throttle,
+            int(silenced),
             json.dumps({"raw_target": target, "throttle_target": effective_throttle}),
         ),
     )
@@ -201,6 +205,28 @@ def seed_pin_upgrade_payload(
             }
         ],
     )
+
+
+def operator_raven_authorization(
+    control,
+    *,
+    actor_id: str,
+    action_kind: str,
+    target: str = "",
+    confirmation_id: str = "test-confirmation",
+) -> dict[str, object]:
+    return {
+        "kind": control.OPERATOR_ACTION_AUTH_KIND_OPERATOR_RAVEN,
+        "actor_id": actor_id,
+        "payload": {
+            "source": "operator-raven",
+            "command": action_kind.replace("-", "_"),
+            "action_kind": action_kind,
+            "target_hash": hashlib.sha256(str(target or "").encode("utf-8")).hexdigest(),
+            "confirmation_id": confirmation_id,
+            "reason": "test confirmed operator action",
+        },
+    }
 
 
 def test_operator_raven_status_is_read_only_and_truthful() -> None:
@@ -316,6 +342,39 @@ def test_operator_raven_upgrade_policy_is_read_only_and_component_specific() -> 
         print("PASS test_operator_raven_upgrade_policy_is_read_only_and_component_specific")
     finally:
         cleanup_db(tmp, old_env)
+
+
+def test_upgrade_policy_catalog_is_sorted_grouped_and_read_only() -> None:
+    policy = load_module(UPGRADE_POLICY_PY, "arclink_upgrade_policy_direct_test")
+    catalog = policy.upgrade_policy_catalog()
+    components = [item["component"] for item in catalog]
+    rollout_order = [item["rollout_order"] for item in catalog]
+    expect(components[0] == "arclink-control", str(components))
+    expect(rollout_order == sorted(rollout_order), str(rollout_order))
+    expect(set(policy.PIN_UPGRADE_COMPONENTS).issubset(set(components)), str(components))
+    expect(policy.STATEFUL_PIN_UPGRADE_COMPONENTS == {"nextcloud", "postgres", "redis"}, str(policy.STATEFUL_PIN_UPGRADE_COMPONENTS))
+
+    summary = policy.upgrade_policy_summary()
+    expect(summary["mode"] == "catalog" and summary["mutation_performed"] is False, str(summary))
+    expect(summary["default_sequence"] == components, str(summary))
+    grouped = dict(policy.policy_components_by_scope(summary))
+    expect("hermes" in grouped["arcpod-runtime"], str(grouped))
+    expect("postgres" in grouped["stateful-infra"], str(grouped))
+
+    hermes = policy.upgrade_policy_summary("hermes")
+    expect(hermes["mode"] == "component" and hermes["mutation_performed"] is False, str(hermes))
+    expect(hermes["policy"]["component"] == "hermes", str(hermes))
+    expect("PG-HERMES" in hermes["policy"]["proof_gates"], str(hermes))
+    expect(policy.upgrade_policy_for("plugins")["component"] == "dashboard-plugins", "plugins alias must normalize")
+    expect(policy.upgrade_policy_for("wg")["component"] == "wireguard", "wg alias must normalize")
+
+    try:
+        policy.upgrade_policy_for("imaginary")
+    except ValueError as exc:
+        expect("unknown ArcLink upgrade component" in str(exc) and "hermes" in str(exc), str(exc))
+    else:
+        raise AssertionError("unknown components must fail closed")
+    print("PASS test_upgrade_policy_catalog_is_sorted_grouped_and_read_only")
 
 
 def test_operator_raven_fleet_drain_and_resume_are_gated_and_audited() -> None:
@@ -751,9 +810,20 @@ def test_operator_raven_host_and_pin_upgrade_queue_operator_actions() -> None:
         applied = raven.dispatch_operator_raven_command(conn, one_tap_command, actor_id="telegram:42")
         expect("queued an ArcLink upgrade" in applied["message"], applied["message"])
         expect(applied["mutation_performed"] is True, str(applied))
-        row = conn.execute("SELECT action_kind, requested_by, status FROM operator_actions ORDER BY id DESC LIMIT 1").fetchone()
+        row = conn.execute(
+            """
+            SELECT action_kind, requested_by, actor_id, authorization_kind, authorization_mac, authorization_expires_at, status
+            FROM operator_actions
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
         expect(row["action_kind"] == "upgrade", dict(row))
         expect(row["requested_by"] == "telegram:42", dict(row))
+        expect(row["actor_id"] == "telegram:42", dict(row))
+        expect(row["authorization_kind"] == "operator-raven-confirmed", dict(row))
+        expect(str(row["authorization_mac"] or "").startswith("sha256="), dict(row))
+        expect(str(row["authorization_expires_at"] or "").strip(), dict(row))
 
         # Replaying the same button nonce fails closed and queues nothing new.
         after_apply = conn.execute("SELECT COUNT(*) AS n FROM operator_actions").fetchone()["n"]
@@ -770,6 +840,16 @@ def test_operator_raven_host_and_pin_upgrade_queue_operator_actions() -> None:
 
         no_payload = raven.dispatch_operator_raven_command(conn, "/pin_upgrade hermes confirm", actor_id="telegram:42")
         expect("no active detector payload" in no_payload["message"], no_payload["message"])
+        silenced_token = seed_pin_upgrade_payload(
+            conn,
+            component="qmd",
+            target="cccc3333",
+            throttle_target="v0.13.0",
+            silenced=1,
+        )
+        silenced_preview = raven.dispatch_operator_raven_command(conn, "/pin_upgrade qmd --dry-run", actor_id="telegram:42")
+        expect(silenced_token not in silenced_preview["message"], silenced_preview["message"])
+        expect("no active detector payload" in silenced_preview["message"], silenced_preview["message"])
 
         token = seed_pin_upgrade_payload(conn, component="hermes-agent", target="bbbb2222", throttle_target="v0.12.0")
         pin_preview = raven.dispatch_operator_raven_command(conn, "/pin_upgrade hermes --dry-run", actor_id="telegram:42")
@@ -784,8 +864,18 @@ def test_operator_raven_host_and_pin_upgrade_queue_operator_actions() -> None:
         expect("pinned-component upgrade for hermes" in pin["message"], pin["message"])
         expect(token in pin["message"], pin["message"])
         expect(pin["mutation_performed"] is True, str(pin))
-        pin_row = conn.execute("SELECT action_kind, requested_target FROM operator_actions ORDER BY id DESC LIMIT 1").fetchone()
+        pin_row = conn.execute(
+            """
+            SELECT action_kind, requested_target, actor_id, authorization_kind, authorization_mac
+            FROM operator_actions
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
         expect(pin_row["action_kind"] == "pin-upgrade" and pin_row["requested_target"] == token, dict(pin_row))
+        expect(pin_row["actor_id"] == "telegram:42", dict(pin_row))
+        expect(pin_row["authorization_kind"] == "operator-raven-confirmed", dict(pin_row))
+        expect(str(pin_row["authorization_mac"] or "").startswith("sha256="), dict(pin_row))
 
         # Typed component confirm still works and dedupes against the one-tap queue row.
         typed_pin = raven.dispatch_operator_raven_command(conn, "/pin_upgrade hermes confirm", actor_id="telegram:42")
@@ -794,6 +884,62 @@ def test_operator_raven_host_and_pin_upgrade_queue_operator_actions() -> None:
         bad = raven.dispatch_operator_raven_command(conn, "/pin_upgrade not-a-component", actor_id="telegram:42")
         expect("unknown component" in bad["message"], bad["message"])
         print("PASS test_operator_raven_host_and_pin_upgrade_queue_operator_actions")
+    finally:
+        cleanup_db(tmp, old_env)
+
+
+def test_operator_actions_queue_source_dedupe_and_claim_guard() -> None:
+    tmp, old_env, conn, raven = with_seeded_db()
+    try:
+        import arclink_control as control
+
+        traces: list[str] = []
+        conn.set_trace_callback(traces.append)
+        system_row, system_created = control.request_operator_action(
+            conn,
+            action_kind="upgrade",
+            requested_by="system:test",
+            request_source="system-test",
+            authorization=operator_raven_authorization(
+                control,
+                actor_id="system:test",
+                action_kind="upgrade",
+                confirmation_id="system-test-confirmation",
+            ),
+        )
+        conn.set_trace_callback(None)
+        expect(system_created is True, str(system_row))
+        expect(any(trace.strip().upper() == "BEGIN IMMEDIATE" for trace in traces), str(traces))
+
+        raven_result = raven.dispatch_operator_raven_command(conn, "/upgrade confirm", actor_id="telegram:42")
+        expect(raven_result["mutation_performed"] is True, str(raven_result))
+        sources = [
+            str(row["request_source"])
+            for row in conn.execute("SELECT request_source FROM operator_actions WHERE action_kind = 'upgrade' ORDER BY id").fetchall()
+        ]
+        expect(sources == ["system-test", "operator-raven"], str(sources))
+
+        repeat, repeat_created = control.request_operator_action(
+            conn,
+            action_kind="upgrade",
+            requested_by="telegram:42",
+            request_source="operator-raven",
+            authorization=operator_raven_authorization(
+                control,
+                actor_id="telegram:42",
+                action_kind="upgrade",
+                confirmation_id="repeat-confirmation",
+            ),
+        )
+        expect(repeat_created is False and int(repeat["id"]) != int(system_row["id"]), str(repeat))
+
+        pending = control.get_pending_operator_action(conn, action_kind="upgrade")
+        expect(pending is not None and int(pending["id"]) == int(system_row["id"]), str(pending))
+        claimed = control.mark_operator_action_running(conn, action_id=int(pending["id"]), note="first claim")
+        expect(claimed and claimed["status"] == "running", str(claimed))
+        duplicate = control.mark_operator_action_running(conn, action_id=int(pending["id"]), note="second claim")
+        expect(duplicate == {}, str(duplicate))
+        print("PASS test_operator_actions_queue_source_dedupe_and_claim_guard")
     finally:
         cleanup_db(tmp, old_env)
 
@@ -945,6 +1091,18 @@ def test_operator_raven_mutation_helpers_and_approval_code() -> None:
     expect(bad is False, (bad, raw))
     no_code_ok, passthrough = raven.strip_operator_approval_code("/upgrade", "")
     expect(no_code_ok is True and passthrough == "/upgrade", (no_code_ok, passthrough))
+    redacted = raven._redact_text(
+        "\n".join(
+            [
+                "Authorization: Bearer sk-proj-aaaaaaaaaaaaaaaaaaaaaaaa",
+                '{"token": "sk-ant-bbbbbbbbbbbbbbbbbbbbbbbbb"}',
+                "plain=ok",
+            ]
+        )
+    )
+    expect("sk-proj-" not in redacted and "sk-ant-" not in redacted, redacted)
+    expect("Authorization:" in redacted and "[REDACTED]" in redacted, redacted)
+    expect("plain=ok" in redacted, redacted)
     print("PASS test_operator_raven_mutation_helpers_and_approval_code")
 
 
@@ -989,6 +1147,7 @@ def test_operator_raven_chat_adapters_preserve_authorization_boundaries() -> Non
     expect("@tree.command(name=\"pin-upgrade\"" in discord_text, "Discord should expose a confirmed pinned-component upgrade command")
     expect("_queue_upgrade_operator_action" not in discord_text, "Discord /upgrade must not bypass Operator Raven confirmation")
     expect('request_source="discord-button"' not in discord_text, "Discord upgrade buttons must not queue operator actions directly")
+    expect("operator_raven_command_is_mutating(raven_command)" in discord_text, "Discord Operator Raven callbacks must reject direct mutating commands")
     expect("_ensure_operator_channel" in discord_text, "Discord operator commands must keep channel authorization")
     expect("ARCLINK_OPERATOR_DISCORD_USER_IDS" in discord_text, "Discord operator commands must support an explicit operator user allowlist")
     expect("ARCLINK_OPERATOR_DISCORD_ROLE_IDS" in discord_text, "Discord operator guild commands must support an explicit operator role allowlist")
@@ -996,6 +1155,7 @@ def test_operator_raven_chat_adapters_preserve_authorization_boundaries() -> Non
     expect('dispatch_text = f"{dispatch_text} --confirm"' in CURATOR_TELEGRAM_PY.read_text(encoding="utf-8"), "Curator Telegram approval code should satisfy confirmation")
     curator_telegram_text = CURATOR_TELEGRAM_PY.read_text(encoding="utf-8")
     expect('request_source="telegram-button"' not in curator_telegram_text, "Telegram upgrade buttons must not queue operator actions directly")
+    expect("operator_raven_command_is_mutating(raw_command)" in curator_telegram_text, "Telegram Operator Raven callbacks must reject direct mutating commands")
     expect('dispatch_text = f"{dispatch_text} --confirm"' in (PYTHON_DIR / "arclink_telegram.py").read_text(encoding="utf-8"), "Public Telegram approval code should satisfy confirmation")
     print("PASS test_operator_raven_chat_adapters_preserve_authorization_boundaries")
 
@@ -1084,6 +1244,7 @@ if __name__ == "__main__":
     test_operator_raven_agents_reports_arclink_arcpods_not_hermes_tasks()
     test_operator_raven_fleet_and_worker_probe_are_dry_run_only()
     test_operator_raven_upgrade_policy_is_read_only_and_component_specific()
+    test_upgrade_policy_catalog_is_sorted_grouped_and_read_only()
     test_operator_raven_fleet_drain_and_resume_are_gated_and_audited()
     test_operator_raven_user_lookup_and_pod_repair_do_not_expose_or_queue_secrets()
     test_operator_raven_billing_backup_and_workspace_statuses_are_read_only()
@@ -1093,10 +1254,11 @@ if __name__ == "__main__":
     test_operator_raven_academy_roster_is_read_only()
     test_operator_raven_pod_repair_queues_real_intent_with_actor()
     test_operator_raven_host_and_pin_upgrade_queue_operator_actions()
+    test_operator_actions_queue_source_dedupe_and_claim_guard()
     test_operator_raven_upgrade_sweep_queues_pending_detector_payloads()
     test_operator_raven_rollout_queues_real_admin_action_with_actor()
     test_operator_raven_action_status_reads_both_queues()
     test_operator_raven_mutation_helpers_and_approval_code()
     test_operator_raven_chat_adapters_preserve_authorization_boundaries()
     test_operator_telegram_gate_unified_across_transports()
-    print("PASS all 18 Operator Raven tests")
+    print("PASS all Operator Raven tests")

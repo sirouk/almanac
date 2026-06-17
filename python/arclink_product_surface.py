@@ -145,6 +145,16 @@ def _surface_truthy(value: str) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on", "confirm"}
 
 
+def _safe_navigation_href(value: Any) -> str:
+    href = str(value or "").strip()
+    if not href:
+        return ""
+    parsed = urlparse(href)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return href
+
+
 def _rows(conn: sqlite3.Connection, sql: str, args: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
     return [dict(row) for row in conn.execute(sql, args).fetchall()]
 
@@ -394,8 +404,9 @@ def _session_page(conn: sqlite3.Connection, session_id: str, *, error: str = "")
     )
     event_rows = "".join(f"<tr><td>{escape(row['event_type'])}</td><td>{escape(row['created_at'])}</td></tr>" for row in events)
     checkout = ""
-    if session.get("checkout_url"):
-        checkout = f"<p>Checkout URL: <a href=\"{escape(session['checkout_url'])}\">{escape(session['checkout_url'])}</a></p>"
+    checkout_url = _safe_navigation_href(session.get("checkout_url"))
+    if checkout_url:
+        checkout = f"<p>Checkout URL: <a href=\"{escape(checkout_url)}\">{escape(checkout_url)}</a></p>"
     error_html = f"<p class=\"warn\">{escape(error)}</p>" if error else ""
     user_link = (
         f"<a class=\"button secondary\" href=\"/user?user_id={quote(str(session['user_id']))}\">Open Captain Dashboard</a>"
@@ -466,11 +477,11 @@ def _user_dashboard(conn: sqlite3.Connection, user_id: str = "") -> ArcLinkSurfa
             for item in dep["service_health"]
         ) or "<tr><td colspan=\"3\">No service health yet.</td></tr>"
         access_section = next((section for section in dep.get("sections", []) if section.get("section") == "access_links"), {})
-        links = "".join(
-            f"<a class=\"button secondary\" href=\"{escape(str(link.get('url') or ''))}\">{escape(str(link.get('role') or ''))}</a>"
-            for link in access_section.get("links", [])
-            if str(link.get("url") or "")
-        )
+        links = ""
+        for link in access_section.get("links", []):
+            href = _safe_navigation_href(link.get("url"))
+            if href:
+                links += f"<a class=\"button secondary\" href=\"{escape(href)}\">{escape(str(link.get('role') or ''))}</a>"
         sections = "".join(
             f"<span class=\"tag\">{escape(section['label'])}: {escape(section['status'])}</span>"
             for section in dep.get("sections", [])
@@ -779,23 +790,37 @@ def make_arclink_product_surface_app(
             length = int(str(environ.get("CONTENT_LENGTH") or "0") or 0)
         except (TypeError, ValueError):
             length = 0
-        if length > MAX_PRODUCT_SURFACE_BODY_BYTES:
+        if length < 0:
+            response = ArcLinkSurfaceResponse(
+                status=400,
+                body=json.dumps({"error": "invalid content length"}),
+                content_type="application/json; charset=utf-8",
+            )
+        elif length > MAX_PRODUCT_SURFACE_BODY_BYTES:
             response = ArcLinkSurfaceResponse(
                 status=413,
                 body=json.dumps({"error": "request body too large"}),
                 content_type="application/json; charset=utf-8",
             )
         else:
-            body = environ["wsgi.input"].read(length).decode("utf-8") if length else ""
-            params = {key: values for key, values in parse_qs(body).items()}
-            response = handle_arclink_product_surface_request(
-                conn,
-                method=method,
-                path=f"{path}?{query}" if query else path,
-                params=params,
-                stripe_client=stripe_client,
-                env=env,
-            )
+            try:
+                body = environ["wsgi.input"].read(length).decode("utf-8") if length else ""
+                params = {key: values for key, values in parse_qs(body).items()}
+            except UnicodeDecodeError:
+                response = ArcLinkSurfaceResponse(
+                    status=400,
+                    body=json.dumps({"error": "invalid request body encoding"}),
+                    content_type="application/json; charset=utf-8",
+                )
+            else:
+                response = handle_arclink_product_surface_request(
+                    conn,
+                    method=method,
+                    path=f"{path}?{query}" if query else path,
+                    params=params,
+                    stripe_client=stripe_client,
+                    env=env,
+                )
         status_text = {
             200: "200 OK",
             202: "202 Accepted",

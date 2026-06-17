@@ -201,6 +201,14 @@ def test_qmd_pending_embeddings_age_alert() -> None:
         checks = mod.diagnose_qmd_pending_embeddings(env=env, now=1_000_000 + 30 * 3600)
         expect(len(checks) == 1 and not checks[0].ok, str(checks))
         expect("stale" in checks[0].detail, checks[0].detail)
+        # Future marker epochs fail closed instead of clamping to a healthy age.
+        marker.write_text(
+            json.dumps({"pending": 4, "pending_since_epoch": 3_000_000}),
+            encoding="utf-8",
+        )
+        checks = mod.diagnose_qmd_pending_embeddings(env=env, now=2_000_000)
+        expect(len(checks) == 1 and not checks[0].ok, str(checks))
+        expect("future" in checks[0].detail, checks[0].detail)
         # Zero pending: ok regardless of age fields.
         marker.write_text(json.dumps({"pending": 0, "pending_since_epoch": 0}), encoding="utf-8")
         checks = mod.diagnose_qmd_pending_embeddings(env=env, now=2_000_000)

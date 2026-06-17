@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sqlite3
 import sys
 import time
@@ -30,10 +31,19 @@ def load_module(filename: str, name: str):
 
 
 def memory_db(control):
+    use_explicit_local_session_hash_env()
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     control.ensure_schema(conn)
     return conn
+
+
+def use_explicit_local_session_hash_env() -> None:
+    os.environ["ARCLINK_CONFIG_FILE"] = os.devnull
+    os.environ["ARCLINK_BASE_DOMAIN"] = "example.test"
+    os.environ["ARCLINK_OPERATOR_ACTION_AUTH_SECRET"] = "test-operator-action-auth-secret"
+    os.environ.pop("ARCLINK_SESSION_HASH_PEPPER", None)
+    os.environ.pop("ARCLINK_SESSION_HASH_PEPPER_REQUIRED", None)
 
 
 def seed_active_public_bot_deployment(

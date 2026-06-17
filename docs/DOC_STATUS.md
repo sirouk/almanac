@@ -56,15 +56,16 @@ tests as truth, then update the closest canonical doc.
 | `research/RALPHIE_ARCLINK_ECOSYSTEM_GAP_REPAIR_STEERING.md` | Historical | Steering backlog and audit-derived rationale. |
 | `research/*` | Historical | Research and phase notes unless a specific file says otherwise. |
 | `docs/arclink/CREATIVE_BRIEF.md` | Speculative | Product voice and public copy direction; verify against implemented web/bot behavior before treating as shipped. |
-| `docs/arclink/sovereign-control-node-symphony.md` | Speculative | Intended dream-shape architecture narrative; describes direction ahead of implementation. Verify against code and the ground-truth brief before treating any claim as shipped. |
+| `docs/arclink/sovereign-control-node-symphony.md` | Proof-gated | Vision plus post-repair evidence/governance ledger. It names source-real and proof-gated seams, but `architecture.md`, `GAPS.md`, CANON, and focused tests remain the operating truth before treating any claim as shipped. |
 | `FUTURE_SHARED_ARCLINK.md` | Speculative | North-star cross-sovereign-node sharing vision; today only single-control-plane share grants, Linked resources, the claim-nonce/share-request brokers, and the git fleet shared folder are built. The keypair/mesh/cross-node layer is unbuilt. |
 | `docs/arclink/CHANGELOG.md` | Historical | Phase changelog. Useful context, but nearby canonical docs own current behavior. |
 | `docs/arclink/document-phase-status.md` | Historical | Documentation phase audit status. |
 
 ## Stale Queue
 
-No tracked doc is intentionally left in `Stale` status after the May 2026
-documentation repair pass. If future audits find stale guidance, add it to the
+No tracked doc is intentionally left in `Stale` status after the post-repair
+refresh. Historical and proof-gated docs may still describe older phases or
+future ambition; if a future audit finds stale operating guidance, add it to the
 map with `Stale` status until the same change repairs or retires it.
 
 ## Maintenance Rule

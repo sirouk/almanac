@@ -4,18 +4,39 @@ from __future__ import annotations
 import io
 import importlib.util
 import json
+import os
 import sqlite3
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[1]
 PYTHON_DIR = REPO / "python"
+os.environ.setdefault("ARCLINK_SESSION_HASH_PEPPER", "product-surface-test-pepper")
 
 
 def expect(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
+
+
+@contextmanager
+def temp_env(values: dict[str, str | None]):
+    previous = {key: os.environ.get(key) for key in values}
+    try:
+        for key, value in values.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def load_module(filename: str, name: str):
@@ -99,12 +120,13 @@ def test_product_surface_user_and_admin_dashboards_are_secret_free_and_queue_onl
         email="admin-surface@example.test",
         role="ops",
     )
-    admin_session = api_auth.create_arclink_admin_session(
-        conn,
-        admin_id="admin_surface",
-        session_id="asess_surface",
-        mfa_verified=True,
-    )
+    with temp_env({"ARCLINK_SESSION_HASH_PEPPER": "product-surface-test-pepper"}):
+        admin_session = api_auth.create_arclink_admin_session(
+            conn,
+            admin_id="admin_surface",
+            session_id="asess_surface",
+            mfa_verified=True,
+        )
 
     user = surface.handle_arclink_product_surface_request(conn, method="GET", path=f"/user?user_id={prepared['user_id']}")
     expect(user.status == 200, user.body)
@@ -231,6 +253,30 @@ def test_product_surface_favicon_does_not_fall_through_to_404() -> None:
     print("PASS test_product_surface_favicon_does_not_fall_through_to_404")
 
 
+def test_product_surface_rejects_non_http_rendered_hrefs() -> None:
+    control = load_module("arclink_control.py", "arclink_control_product_surface_safe_href_test")
+    surface = load_module("arclink_product_surface.py", "arclink_product_surface_safe_href_test")
+    conn = memory_db(control)
+    started = surface.handle_arclink_product_surface_request(
+        conn,
+        method="POST",
+        path="/onboarding/start",
+        params={"email": "safe-href@example.test", "name": "Safe Href", "plan": "founders"},
+    )
+    session_id = started.headers[0][1].rsplit("/", 1)[-1]
+    conn.execute(
+        "UPDATE arclink_onboarding_sessions SET checkout_url = ? WHERE session_id = ?",
+        ("javascript:alert(1)", session_id),
+    )
+
+    page = surface.handle_arclink_product_surface_request(conn, method="GET", path=f"/onboarding/{session_id}")
+    expect(page.status == 200, page.body)
+    expect('href="javascript:' not in page.body.lower(), page.body)
+    expect(surface._safe_navigation_href("https://checkout.stripe.com/test") == "https://checkout.stripe.com/test", "safe href rejected")
+    expect(surface._safe_navigation_href("data:text/html,<script>x</script>") == "", "unsafe href accepted")
+    print("PASS test_product_surface_rejects_non_http_rendered_hrefs")
+
+
 def test_product_surface_generic_errors_do_not_expose_internal_exception_text() -> None:
     control = load_module("arclink_control.py", "arclink_control_product_surface_generic_error_test")
     surface = load_module("arclink_product_surface.py", "arclink_product_surface_generic_error_test")
@@ -290,6 +336,36 @@ def test_product_surface_wsgi_rejects_oversized_bodies() -> None:
     joined = b"".join(response).decode("utf-8")
     expect(str(captured.get("status") or "").startswith("413"), str(captured))
     expect("too large" in joined, joined)
+
+    captured.clear()
+    negative_response = app(
+        {
+            "REQUEST_METHOD": "POST",
+            "PATH_INFO": "/api/admin/actions",
+            "QUERY_STRING": "",
+            "CONTENT_LENGTH": "-1",
+            "wsgi.input": io.BytesIO(body),
+        },
+        start_response,
+    )
+    negative_joined = b"".join(negative_response).decode("utf-8")
+    expect(str(captured.get("status") or "").startswith("400"), str(captured))
+    expect("invalid content length" in negative_joined, negative_joined)
+
+    captured.clear()
+    invalid_utf8_response = app(
+        {
+            "REQUEST_METHOD": "POST",
+            "PATH_INFO": "/api/admin/actions",
+            "QUERY_STRING": "",
+            "CONTENT_LENGTH": "1",
+            "wsgi.input": io.BytesIO(b"\xff"),
+        },
+        start_response,
+    )
+    invalid_utf8_joined = b"".join(invalid_utf8_response).decode("utf-8")
+    expect(str(captured.get("status") or "").startswith("400"), str(captured))
+    expect("invalid request body encoding" in invalid_utf8_joined, invalid_utf8_joined)
     print("PASS test_product_surface_wsgi_rejects_oversized_bodies")
 
 
@@ -298,9 +374,10 @@ def main() -> int:
     test_product_surface_user_and_admin_dashboards_are_secret_free_and_queue_only()
     test_product_surface_css_contains_mobile_overflow_guards()
     test_product_surface_favicon_does_not_fall_through_to_404()
+    test_product_surface_rejects_non_http_rendered_hrefs()
     test_product_surface_generic_errors_do_not_expose_internal_exception_text()
     test_product_surface_wsgi_rejects_oversized_bodies()
-    print("PASS all 6 ArcLink product surface tests")
+    print("PASS all 7 ArcLink product surface tests")
     return 0
 
 

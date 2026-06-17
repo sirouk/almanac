@@ -303,7 +303,6 @@ def send_pod_message(
         },
         commit=False,
     )
-    conn.commit()
 
     notification_id = queue_notification(
         conn,
@@ -318,7 +317,9 @@ def send_pod_message(
             "sender_agent_name": str(sender.get("agent_name") or ""),
             "attachments": clean_attachments,
         },
+        commit=False,
     )
+    conn.commit()
     message = rowdict(conn.execute("SELECT * FROM arclink_pod_messages WHERE message_id = ?", (message_id,)).fetchone())
     return {"ok": True, "message": _public_message(message), "notification_id": notification_id}
 

@@ -268,6 +268,45 @@ def test_academy_mode_records_steer_and_resource_proposals() -> None:
         cleanup(tmp, old_env)
 
 
+def test_academy_resource_proposal_insert_race_returns_deduped() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        trainee = ap.enroll_academy_trainee(conn, program_id="research_analyst", user_id="user-race", deployment_id="dep-race")
+        ap.open_academy_mode(conn, trainee_id=trainee["trainee_id"], opened_by="captain")
+
+        class RaceConn:
+            def __init__(self, inner):
+                self.inner = inner
+                self.raced = False
+
+            def execute(self, sql, params=()):
+                if not self.raced and "INSERT INTO academy_resource_proposals" in str(sql):
+                    self.raced = True
+                    self.inner.execute(sql, params)
+                    raise ap.sqlite3.IntegrityError("UNIQUE constraint failed: academy_resource_proposals.proposal_id")
+                return self.inner.execute(sql, params)
+
+            def commit(self):
+                return self.inner.commit()
+
+        raced = ap.record_academy_resource_proposal(
+            RaceConn(conn),
+            deployment_id="dep-race",
+            lane_id="web_article",
+            title="Race source",
+            origin_url="https://example.test/race-source",
+            summary="Compressed race source notes.",
+            proposed_by="agent-race",
+        )
+        expect(raced["status"] == "deduped", str(raced))
+        rows = conn.execute("SELECT proposal_id, status FROM academy_resource_proposals").fetchall()
+        expect(len(rows) == 1 and rows[0]["proposal_id"] == raced["proposal_id"], str([dict(row) for row in rows]))
+        print("PASS test_academy_resource_proposal_insert_race_returns_deduped")
+    finally:
+        cleanup(tmp, old_env)
+
+
 def test_academy_cancel_mode_returns_to_enrolled() -> None:
     tmp, old_env, conn, _control, ap = with_db()
     try:
@@ -381,6 +420,50 @@ def test_academy_many_types_as_data_and_lane_validation() -> None:
         expect(raised, "unknown source lane must be rejected")
         print("PASS test_academy_many_types_as_data_and_lane_validation")
     finally:
+        cleanup(tmp, old_env)
+
+
+def test_academy_source_lane_registry_failure_fails_closed() -> None:
+    tmp, old_env, _conn, _control, ap = with_db()
+    sentinel = object()
+    original = sys.modules.get("arclink_academy_trainer", sentinel)
+    try:
+        sys.modules["arclink_academy_trainer"] = None
+        raised = False
+        try:
+            ap._validate_source_lanes(["web_article"])
+        except ap.ArcLinkAcademyProgramError as exc:
+            raised = "registry" in str(exc)
+        expect(raised, "source lanes must not be accepted when the governed registry cannot load")
+        print("PASS test_academy_source_lane_registry_failure_fails_closed")
+    finally:
+        if original is sentinel:
+            sys.modules.pop("arclink_academy_trainer", None)
+        else:
+            sys.modules["arclink_academy_trainer"] = original
+        cleanup(tmp, old_env)
+
+
+def test_academy_enroll_surfaces_subscription_failure() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    original = ap.subscribe_trainee_to_specialist
+
+    def fail_subscribe(*args, **kwargs):
+        raise RuntimeError("subscription row corrupt")
+
+    try:
+        ap.seed_default_academy_programs(conn)
+        ap.subscribe_trainee_to_specialist = fail_subscribe
+        trainee = ap.enroll_academy_trainee(conn, program_id="research_analyst", user_id="capt-sub", deployment_id="dep-sub")
+        expect(trainee["status"] == "enrolled", str(trainee))
+        event = conn.execute(
+            "SELECT subject_id, metadata_json FROM arclink_events WHERE event_type = 'academy_specialist_subscription_failed'"
+        ).fetchone()
+        expect(event is not None and event["subject_id"] == trainee["trainee_id"], str(dict(event) if event else None))
+        expect("subscription row corrupt" in str(event["metadata_json"]), str(event["metadata_json"]))
+        print("PASS test_academy_enroll_surfaces_subscription_failure")
+    finally:
+        ap.subscribe_trainee_to_specialist = original
         cleanup(tmp, old_env)
 
 
@@ -500,6 +583,22 @@ def _graduate(ap, conn, program_id, user_id, deployment_id):
     return t
 
 
+def _mark_provider_reviewed(ap, conn, program_id):
+    class ApplyLiveTrainer:
+        live = True
+
+        def review(self, *, role_title, topic, sources):
+            return {
+                "engine": "apply-live-router",
+                "live": True,
+                "summary": f"Provider reviewed {role_title}",
+                "verdicts": [{"source_uid": source["source_uid"], "verdict": "keep"} for source in sources],
+            }
+
+    spec_uid, _ = ap.specialist_uid_for_program(ap.get_academy_program(conn, program_id))
+    return ap.run_academy_trainer_review(conn, specialist_uid=spec_uid, client=ApplyLiveTrainer(), live_authorized=True)
+
+
 def test_academy_apply_is_fail_closed() -> None:
     tmp, old_env, conn, _control, ap = with_db()
     try:
@@ -519,11 +618,19 @@ def test_academy_apply_is_fail_closed() -> None:
         expect(closed["status"] == "failed_closed", str(closed))
         expect(closed["writes_enabled"] is False, "live adapter without authorization never writes")
 
-        # Live adapter WITH authorization -> handoff to the PG-HERMES Hermes-home seam.
+        # PG-HERMES alone is not enough: apply also advertises PG-PROVIDER, so the
+        # central Trainer capsule must carry a live provider review before writes.
+        provider_pending = ap.stage_academy_apply(conn, trainee_id=t["trainee_id"], adapter_name="ssh", live_authorized=True)
+        expect(provider_pending["status"] == "failed_closed", str(provider_pending))
+        expect(provider_pending["writes_enabled"] is False, "PG-PROVIDER must be enforced before live apply")
+        expect(provider_pending["academy_trainer_review_ready"] is True, str(provider_pending))
+        expect(provider_pending["academy_provider_review_ready"] is False, str(provider_pending))
+
+        _mark_provider_reviewed(ap, conn, "systems_practice_engineer")
         authd = ap.stage_academy_apply(conn, trainee_id=t["trainee_id"], adapter_name="ssh", live_authorized=True)
         expect(authd["status"] == "handoff_to_hermes_home", str(authd))
-        expect(authd["writes_enabled"] is True, "authorized live apply hands off to the imparting seam")
-        expect(authd["academy_trainer_review_ready"] is True, str(authd))
+        expect(authd["writes_enabled"] is True, "authorized live apply hands off only after PG-PROVIDER and PG-HERMES")
+        expect(authd["academy_provider_review_ready"] is True, str(authd))
         expect(authd["mutation_performed"] is False, "control plane itself performs no filesystem write")
         print("PASS test_academy_apply_is_fail_closed")
     finally:
@@ -554,6 +661,7 @@ def test_academy_apply_validates_staged_contract_and_fails_closed_on_major_drift
         staged = ap.get_academy_trainee(conn, t["trainee_id"])
 
         # Fresh graduate: recomputed contract matches the Captain-approved staged ids.
+        _mark_provider_reviewed(ap, conn, "research_analyst")
         fresh = ap.stage_academy_apply(conn, trainee_id=t["trainee_id"], adapter_name="ssh", live_authorized=True)
         expect(fresh["contract_fresh"] is True, str(fresh))
         expect(fresh["manifest_id"] == staged["staged_manifest_id"], "apply reports the approved staged manifest")
@@ -1006,8 +1114,9 @@ def test_academy_opt_out_private_capsule_can_apply_without_public_corpus() -> No
         expect("Captain teaching notes" in staged["academy_soul_section"], staged["academy_soul_section"])
 
         live = ap.stage_academy_apply(conn, trainee_id=t["trainee_id"], adapter_name="ssh", live_authorized=True)
-        expect(live["status"] == "handoff_to_hermes_home" and live["writes_enabled"] is True, str(live))
+        expect(live["status"] == "failed_closed" and live["writes_enabled"] is False, str(live))
         expect(live["academy_trainer_review_ready"] is True, str(live))
+        expect(live["academy_provider_review_ready"] is False, str(live))
         print("PASS test_academy_opt_out_private_capsule_can_apply_without_public_corpus")
     finally:
         cleanup(tmp, old_env)
@@ -1142,6 +1251,13 @@ class _FakeLiveTrainer:
             "summary": f"Live Trainer review for {role_title}",
             "verdicts": [{"source_uid": s["source_uid"], "verdict": "keep"} for s in sources],
         }
+
+
+class _FailingLiveTrainer:
+    live = True
+
+    def review(self, *, role_title, topic, sources):
+        raise RuntimeError("router down sk-proj-" + "A" * 32)
 
 
 class _FakeRouterResponse:
@@ -1343,6 +1459,37 @@ def test_academy_trainer_deep_dive_reviews_and_stamps_and_supports_live() -> Non
         cleanup(tmp, old_env)
 
 
+def test_academy_live_trainer_failure_notifies_captain_and_blocks_provider_proof() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        t = ap.enroll_academy_trainee(conn, program_id="systems_practice_engineer", user_id="capt-fail", deployment_id="dep-fail")
+        s = ap.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by="capt-fail")
+        _propose(ap, conn, "dep-fail", lane_id="github_repository", title="Failing live source",
+                 origin_url="https://example.test/live-fail", summary="Derived source notes.")
+        ended = ap.end_academy_mode(conn, session_id=s["session"]["session_id"], actor="capt-fail", graduate=True)
+        spec_uid = ended["session"]["commit_summary"]["central_specialist_uid"]
+
+        result = ap.run_academy_trainer_review(conn, specialist_uid=spec_uid, client=_FailingLiveTrainer(), live_authorized=True)
+        expect(result["live"] is False and result["live_enrichment_status"] == "pending_pg_provider", str(result))
+        event = conn.execute(
+            "SELECT metadata_json FROM arclink_events WHERE event_type = 'academy_trainer_live_review_failed'"
+        ).fetchone()
+        expect(event is not None, "live Trainer failure should record an event")
+        expect("sk-proj-" not in str(event["metadata_json"]), str(event["metadata_json"]))
+        note = conn.execute(
+            "SELECT target_kind, target_id, channel_kind, message, extra_json FROM notification_outbox WHERE channel_kind = 'academy'"
+        ).fetchone()
+        expect(note is not None and note["target_id"] == "capt-fail", str(dict(note) if note else None))
+        expect("PG-PROVIDER live review failed" in note["message"], str(dict(note)))
+        expect("sk-proj-" not in str(note["extra_json"]), str(note["extra_json"]))
+        applied = ap.stage_academy_apply(conn, trainee_id=t["trainee_id"], adapter_name="ssh", live_authorized=True)
+        expect(applied["writes_enabled"] is False and applied["academy_provider_review_ready"] is False, str(applied))
+        print("PASS test_academy_live_trainer_failure_notifies_captain_and_blocks_provider_proof")
+    finally:
+        cleanup(tmp, old_env)
+
+
 def test_academy_apply_stages_replaceable_soul_section() -> None:
     tmp, old_env, conn, _control, ap = with_db()
     try:
@@ -1410,6 +1557,7 @@ if __name__ == "__main__":
     test_academy_router_trainer_redacts_secret_shaped_payload_fields()
     test_academy_mode_end_uses_live_trainer_when_pg_provider_authorized()
     test_academy_trainer_deep_dive_reviews_and_stamps_and_supports_live()
+    test_academy_live_trainer_failure_notifies_captain_and_blocks_provider_proof()
     test_academy_apply_stages_replaceable_soul_section()
     test_academy_apply_validates_staged_contract_and_fails_closed_on_major_drift()
     test_academy_apply_rejects_target_owner_mismatch()
@@ -1430,9 +1578,12 @@ if __name__ == "__main__":
     test_academy_catalog_seed_is_idempotent_and_browsable()
     test_academy_enroll_open_sticky_and_graduate()
     test_academy_mode_records_steer_and_resource_proposals()
+    test_academy_resource_proposal_insert_race_returns_deduped()
     test_academy_cancel_mode_returns_to_enrolled()
     test_academy_browse_graduates_and_adopt()
     test_academy_adopts_central_specialist_for_new_captain()
     test_academy_many_types_as_data_and_lane_validation()
+    test_academy_source_lane_registry_failure_fails_closed()
+    test_academy_enroll_surfaces_subscription_failure()
     test_academy_rejects_secret_material_and_unknown_program()
     print("PASS all academy programs tests")

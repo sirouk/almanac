@@ -58,6 +58,10 @@ _SECRET_REF_EXEMPT_SUFFIXES = (
     "_ids",
     "_kind",
     "_type",
+    # content-addressed action hashes (e.g. pin_upgrade_action_token) are sha256[:16]
+    # routing handles, not credentials; the value-based contains_secret_material() check
+    # still runs, so a real secret stored under such a key would still be rejected.
+    "_action_token",
 )
 
 

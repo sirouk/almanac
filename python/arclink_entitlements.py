@@ -292,14 +292,6 @@ def _stripe_user_id_from_local_state(
     return ""
 
 
-def _arclink_user_exists(conn: sqlite3.Connection, user_id: str) -> bool:
-    clean_user = str(user_id or "").strip()
-    if not clean_user:
-        return False
-    row = conn.execute("SELECT 1 FROM arclink_users WHERE user_id = ? LIMIT 1", (clean_user,)).fetchone()
-    return row is not None
-
-
 def _stripe_subscription_id(obj: Mapping[str, Any]) -> str:
     for key in ("subscription", "id"):
         value = str(obj.get(key) or "").strip()
@@ -473,14 +465,15 @@ def _resolve_stripe_entitlement_owner(
         )
     if checkout_owner is not None:
         return checkout_owner
-    if metadata_user and _arclink_user_exists(conn, metadata_user):
-        if event_type != "checkout.session.completed":
-            raise ArcLinkEntitlementError("Stripe webhook did not resolve a local ArcLink user id")
-        return StripeEntitlementOwner(
-            user_id=metadata_user,
-            source="local_existing_user",
-            metadata_user_id=metadata_user,
-        )
+    # Stripe metadata may only AGREE with a locally-resolved owner (the conflict
+    # cross-check in the local_owner branch above); it must NEVER originate a first
+    # binding. A checkout.session.completed whose obj.id / onboarding link matches no
+    # local checkout ArcLink created is unowned even when metadata names an existing
+    # user — binding it would let attacker-influenced metadata repoint a named victim
+    # to an attacker customer. Fail closed (replayable). All legitimate checkouts are
+    # locally recorded (arclink_onboarding.open_arclink_onboarding_checkout stores
+    # checkout_session_id), so checkout_owner already covers them.
+    # (CANON-07 D1 — federation review hardening; closes the existing-user bypass.)
     raise ArcLinkEntitlementError("Stripe webhook did not resolve a local ArcLink user id")
 
 
@@ -1037,6 +1030,11 @@ def process_stripe_webhook(
 
         subscription_id = _stripe_subscription_id(obj)
         stripe_customer_id = str(obj.get("customer") or "").strip()
+        # An unpaid checkout.session.completed is invalid regardless of who it names —
+        # reject it BEFORE resolving an owner (also keeps the "not paid" signal from
+        # being masked by the fail-closed "did not resolve a local owner" error).
+        if event_type == "checkout.session.completed":
+            _require_paid_checkout_session(obj, purchase_kind="subscription")
         owner = _resolve_stripe_entitlement_owner(
             conn,
             event_type=event_type,
@@ -1045,8 +1043,6 @@ def process_stripe_webhook(
             stripe_customer_id=stripe_customer_id,
         )
         user_id = owner.user_id
-        if event_type == "checkout.session.completed":
-            _require_paid_checkout_session(obj, purchase_kind="subscription")
         entitlement_state = _entitlement_for_stripe_event(event_type, obj)
 
         # Email-driven user merge: a single human can show up under multiple

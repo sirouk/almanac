@@ -1475,6 +1475,57 @@ def test_metadata_only_checkout_does_not_auto_create_paid_user() -> None:
     print("PASS test_metadata_only_checkout_does_not_auto_create_paid_user")
 
 
+def test_checkout_session_completed_rejects_existing_user_metadata_without_local_checkout() -> None:
+    control = load_module("arclink_control.py", "arclink_control_entitlement_existing_metadata_no_checkout_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_existing_metadata_no_checkout_test")
+    entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_existing_metadata_no_checkout_test")
+    conn = memory_db(control)
+    control.upsert_arclink_user(
+        conn,
+        user_id="arcusr_existing_metadata",
+        email="existing-metadata@example.test",
+        entitlement_state="none",
+    )
+    payload = json.dumps({
+        "id": "evt_existing_metadata_no_checkout",
+        "type": "checkout.session.completed",
+        "data": {"object": {
+            "id": "cs_existing_metadata_no_checkout",
+            "status": "complete",
+            "payment_status": "paid",
+            "amount_total": 1000,
+            "customer": "cus_existing_metadata_no_checkout",
+            "subscription": "sub_existing_metadata_no_checkout",
+            "client_reference_id": "arcusr_existing_metadata",
+            "customer_details": {"email": "existing-metadata@example.test"},
+            "metadata": {"arclink_user_id": "arcusr_existing_metadata"},
+        }},
+    }, sort_keys=True)
+
+    try:
+        entitlements.process_stripe_webhook(
+            conn,
+            payload=payload,
+            signature=sign(adapters, payload),
+            secret="whsec_test",
+        )
+    except entitlements.ArcLinkEntitlementError as exc:
+        expect("local ArcLink user id" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected existing-user metadata without local checkout to fail closed")
+
+    user = conn.execute(
+        "SELECT entitlement_state, stripe_customer_id FROM arclink_users WHERE user_id = 'arcusr_existing_metadata'"
+    ).fetchone()
+    sub_count = conn.execute("SELECT COUNT(*) AS n FROM arclink_subscriptions").fetchone()["n"]
+    webhook = conn.execute("SELECT status FROM arclink_webhook_events WHERE event_id = 'evt_existing_metadata_no_checkout'").fetchone()
+    expect(user["entitlement_state"] == "none", str(dict(user)))
+    expect(user["stripe_customer_id"] == "", str(dict(user)))
+    expect(sub_count == 0, str(sub_count))
+    expect(webhook["status"] == "failed", str(dict(webhook)))
+    print("PASS test_checkout_session_completed_rejects_existing_user_metadata_without_local_checkout")
+
+
 def test_operator_stripe_entitlement_recovery_dry_run_and_apply_audit() -> None:
     control = load_module("arclink_control.py", "arclink_control_entitlement_recovery_action_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_recovery_action_test")
@@ -1774,7 +1825,9 @@ def test_stripe_webhook_merges_users_when_email_matches_existing_account() -> No
     control = load_module("arclink_control.py", "arclink_control_entitlement_merge_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_merge_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_merge_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_entitlement_merge_test")
     conn = memory_db(control)
+    stripe = adapters.FakeStripeClient()
 
     secret = "whsec_test_merge"
     # Pre-existing email-owning user (from an earlier Telegram session).
@@ -1784,33 +1837,43 @@ def test_stripe_webhook_merges_users_when_email_matches_existing_account() -> No
         email="captain@example.test",
         entitlement_state="none",
     )
-    # Fresh web-onboarding user_id (no email yet) plus a reserved deployment.
-    control.upsert_arclink_user(
+    # Fresh web onboarding has no email yet, but it did open a real local
+    # checkout, so checkout.session.completed resolves ownership from local
+    # state instead of Stripe metadata.
+    session = onboarding.create_or_resume_arclink_onboarding_session(
         conn,
-        user_id="arcusr_fresh_web",
-        entitlement_state="none",
+        channel="web",
+        channel_identity="fresh-web-merge",
+        session_id="onb_merge_fresh_web",
+        selected_plan_id="starter",
     )
-    control.reserve_arclink_deployment_prefix(
+    opened = onboarding.open_arclink_onboarding_checkout(
         conn,
-        deployment_id="arcdep_fresh_web",
-        user_id="arcusr_fresh_web",
-        prefix="freshweb",
-        status="entitlement_required",
+        session_id=session["session_id"],
+        stripe_client=stripe,
+        price_id="price_starter",
+        success_url="https://example.test/success",
+        cancel_url="https://example.test/cancel",
+        base_domain="example.test",
     )
+    fresh_user_id = str(opened["user_id"])
+    deployment_id = str(opened["deployment_id"])
+    expect(fresh_user_id != "arcusr_existing_email", fresh_user_id)
 
-    # Stripe webhook carries the canonical email and references the fresh web user_id.
+    # Stripe webhook carries the canonical email and references the locally
+    # opened checkout session for the fresh web user.
     payload = json.dumps({
         "id": "evt_merge_1",
         "type": "checkout.session.completed",
         "data": {"object": {
-            "id": "cs_merge_1",
+            "id": opened["checkout_session_id"],
             "payment_status": "paid",
             "amount_total": 1000,
             "customer": "cus_merge_1",
             "subscription": "sub_merge_1",
-            "client_reference_id": "arcusr_fresh_web",
+            "client_reference_id": fresh_user_id,
             "customer_details": {"email": "captain@example.test"},
-            "metadata": {"arclink_user_id": "arcusr_fresh_web"},
+            "metadata": {},
         }},
     }, sort_keys=True)
     sig = adapters.sign_stripe_webhook(payload, secret)
@@ -1821,7 +1884,8 @@ def test_stripe_webhook_merges_users_when_email_matches_existing_account() -> No
 
     # The existing user now owns the deployment.
     dep = conn.execute(
-        "SELECT user_id, status FROM arclink_deployments WHERE deployment_id = 'arcdep_fresh_web'"
+        "SELECT user_id, status FROM arclink_deployments WHERE deployment_id = ?",
+        (deployment_id,),
     ).fetchone()
     expect(dep["user_id"] == "arcusr_existing_email", f"deployment user_id not re-pointed: {dep['user_id']}")
 
@@ -1835,7 +1899,8 @@ def test_stripe_webhook_merges_users_when_email_matches_existing_account() -> No
     # The fresh web user_id stays in the table (no orphan rows produced) but
     # has no deployment any more.
     fresh_dep = conn.execute(
-        "SELECT COUNT(*) AS c FROM arclink_deployments WHERE user_id = 'arcusr_fresh_web'"
+        "SELECT COUNT(*) AS c FROM arclink_deployments WHERE user_id = ?",
+        (fresh_user_id,),
     ).fetchone()
     expect(fresh_dep["c"] == 0, f"expected no deployments left under fresh web user, got {fresh_dep['c']}")
 
@@ -2010,6 +2075,7 @@ def main() -> int:
     test_checkout_session_completed_binds_by_local_checkout_session_id_without_metadata()
     test_out_of_order_subscription_replays_after_checkout_binds_subscription()
     test_metadata_only_checkout_does_not_auto_create_paid_user()
+    test_checkout_session_completed_rejects_existing_user_metadata_without_local_checkout()
     test_operator_stripe_entitlement_recovery_dry_run_and_apply_audit()
     test_checkout_onboarding_sync_does_not_commit_before_webhook_processed()
     test_checkout_onboarding_sync_skip_is_observable()
@@ -2019,7 +2085,7 @@ def main() -> int:
     test_reconciliation_drift_detects_subscription_without_deployment_and_vice_versa()
     test_stripe_webhook_merges_users_when_email_matches_existing_account()
     test_entitlement_webhook_rejects_customer_bound_to_another_account()
-    print("PASS all 39 ArcLink entitlement tests")
+    print("PASS all 40 ArcLink entitlement tests")
     return 0
 
 

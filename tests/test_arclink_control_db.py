@@ -7,6 +7,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+import warnings
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -35,6 +36,131 @@ def memory_db(mod):
     return conn
 
 
+def config_for_root(mod, root: Path):
+    config_path = root / "config" / "arclink.env"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        "\n".join(
+            [
+                f"ARCLINK_REPO_DIR={root}",
+                f"ARCLINK_PRIV_DIR={root / 'priv'}",
+                f"STATE_DIR={root / 'state'}",
+                f"RUNTIME_DIR={root / 'runtime'}",
+                f"VAULT_DIR={root / 'vault'}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    old_env = os.environ.copy()
+    try:
+        os.environ.clear()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        return mod.Config.from_env()
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+
+
+def test_config_loader_preserves_multi_token_values_and_export_prefix() -> None:
+    mod = load_module(CONTROL_PY, "arclink_control_db_config_parser_test")
+    old_env = os.environ.copy()
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "arclink.env"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "ARCLINK_BACKEND_ALLOWED_CIDRS=10.0.0.0/8 192.168.0.0/16",
+                        "export ARCLINK_MCP_PORT=9999",
+                        'ARCLINK_EXTRA_MCP_LABEL="External knowledge rail"',
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.environ.clear()
+            os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+            merged = mod._load_config_env()
+            expect(
+                merged["ARCLINK_BACKEND_ALLOWED_CIDRS"] == "10.0.0.0/8 192.168.0.0/16",
+                str(merged),
+            )
+            expect(merged["ARCLINK_MCP_PORT"] == "9999", str(merged))
+            expect("export ARCLINK_MCP_PORT" not in merged, str(merged))
+            expect(merged["ARCLINK_EXTRA_MCP_LABEL"] == "External knowledge rail", str(merged))
+            cfg = mod.Config.from_env()
+            expect(cfg.public_mcp_port == 9999, str(cfg.public_mcp_port))
+        print("PASS test_config_loader_preserves_multi_token_values_and_export_prefix")
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+
+
+def test_explicit_missing_config_file_fails_loudly_but_devnull_remains_sentinel() -> None:
+    mod = load_module(CONTROL_PY, "arclink_control_db_missing_config_test")
+    old_env = os.environ.copy()
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ.clear()
+            os.environ["ARCLINK_CONFIG_FILE"] = str(Path(tmp) / "missing.env")
+            try:
+                mod._load_config_env()
+            except FileNotFoundError:
+                pass
+            else:
+                raise AssertionError("expected missing explicit ARCLINK_CONFIG_FILE to fail")
+            os.environ["ARCLINK_CONFIG_FILE"] = os.devnull
+            merged = mod._load_config_env()
+            expect(merged["ARCLINK_CONFIG_FILE"] == os.devnull, str(merged))
+        print("PASS test_explicit_missing_config_file_fails_loudly_but_devnull_remains_sentinel")
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+
+
+def test_config_from_env_defaults_invalid_int_values_without_crashing() -> None:
+    mod = load_module(CONTROL_PY, "arclink_control_db_invalid_int_test")
+    old_env = os.environ.copy()
+    try:
+        os.environ.clear()
+        os.environ["ARCLINK_CONFIG_FILE"] = os.devnull
+        os.environ["ARCLINK_MCP_PORT"] = "not-a-port"
+        os.environ["ARCLINK_BOOTSTRAP_WINDOW_SECONDS"] = "not-seconds"
+        os.environ["ARCLINK_AGENT_PORT_SLOT_SPAN"] = "not-span"
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            cfg = mod.Config.from_env()
+        expect(cfg.public_mcp_port == 8282, str(cfg.public_mcp_port))
+        expect(cfg.bootstrap_window_seconds == 3600, str(cfg.bootstrap_window_seconds))
+        expect(cfg.agent_port_slot_span == 5000, str(cfg.agent_port_slot_span))
+        expect(len(caught) >= 3, str([str(item.message) for item in caught]))
+        print("PASS test_config_from_env_defaults_invalid_int_values_without_crashing")
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+
+
+def test_config_model_presets_are_deeply_immutable() -> None:
+    mod = load_module(CONTROL_PY, "arclink_control_db_model_presets_test")
+    old_env = os.environ.copy()
+    try:
+        os.environ.clear()
+        os.environ["ARCLINK_CONFIG_FILE"] = os.devnull
+        cfg = mod.Config.from_env()
+        try:
+            cfg.model_presets["codex"] = "changed"
+        except TypeError:
+            pass
+        else:
+            raise AssertionError("expected Config.model_presets to reject in-place mutation")
+        print("PASS test_config_model_presets_are_deeply_immutable")
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+
+
 def test_connect_db_tolerates_locked_journal_mode_pragma() -> None:
     mod = load_module(CONTROL_PY, "arclink_control_db_lock_test")
 
@@ -49,6 +175,9 @@ def test_connect_db_tolerates_locked_journal_mode_pragma() -> None:
             if sql == "PRAGMA journal_mode = DELETE":
                 raise sqlite3.OperationalError("database is locked")
             return self
+
+        def fetchone(self):
+            return None
 
     fake_conn = FakeConn()
     original_connect = mod.sqlite3.connect
@@ -81,10 +210,13 @@ def test_connect_db_tolerates_locked_journal_mode_pragma() -> None:
             )
             os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
             cfg = mod.Config.from_env()
-            conn = mod.connect_db(cfg)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                conn = mod.connect_db(cfg)
         expect(conn is fake_conn, "connect_db should return the opened connection")
         expect(fake_conn.statements[0] == "PRAGMA busy_timeout = 15000", str(fake_conn.statements))
         expect("PRAGMA foreign_keys = ON" in fake_conn.statements, str(fake_conn.statements))
+        expect(any("database is locked" in str(item.message) for item in caught), str([str(item.message) for item in caught]))
         print("PASS test_connect_db_tolerates_locked_journal_mode_pragma")
     finally:
         mod.sqlite3.connect = original_connect
@@ -140,6 +272,109 @@ def test_operation_idempotency_reserve_complete_and_replay() -> None:
     expect(reserved_again["reserved"] is False, str(reserved_again))
     expect(reserved_again["replay"] is True, str(reserved_again))
     print("PASS test_operation_idempotency_reserve_complete_and_replay")
+
+
+def test_event_and_notification_json_reject_plaintext_secrets() -> None:
+    mod = load_module(CONTROL_PY, "arclink_control_db_secret_json_test")
+    conn = memory_db(mod)
+    secret_payload = {"token": "sk-ant-abc123SECRET"}
+    for call in (
+        lambda: mod.append_arclink_event(
+            conn,
+            subject_kind="deployment",
+            subject_id="dep_secret",
+            event_type="secret_test",
+            metadata=secret_payload,
+        ),
+        lambda: mod.append_arclink_event(
+            conn,
+            subject_kind="deployment",
+            subject_id="dep_secret",
+            event_type="secret_test",
+            metadata='{"token":"sk-ant-abc123SECRET"}',
+        ),
+        lambda: mod.queue_notification(
+            conn,
+            target_kind="user-agent",
+            target_id="agent-secret",
+            channel_kind="telegram",
+            message="secret",
+            extra=secret_payload,
+        ),
+    ):
+        try:
+            call()
+        except ValueError as exc:
+            expect("secret material" in str(exc), str(exc))
+        else:
+            raise AssertionError("expected plaintext secret payload to be rejected")
+    event_count = conn.execute("SELECT COUNT(*) AS count FROM arclink_events").fetchone()["count"]
+    notification_count = conn.execute("SELECT COUNT(*) AS count FROM notification_outbox").fetchone()["count"]
+    expect(event_count == 0, str(event_count))
+    expect(notification_count == 0, str(notification_count))
+    print("PASS test_event_and_notification_json_reject_plaintext_secrets")
+
+
+def test_expire_stale_ssot_pending_writes_skips_write_when_nothing_due() -> None:
+    mod = load_module(CONTROL_PY, "arclink_control_db_ssot_expiry_noop_test")
+
+    class FakeCursor:
+        rowcount = 0
+
+        def fetchone(self):
+            return None
+
+    class FakeConn:
+        def __init__(self) -> None:
+            self.update_count = 0
+            self.commit_count = 0
+
+        def execute(self, sql: str, *_args):
+            if "UPDATE ssot_pending_writes" in sql:
+                self.update_count += 1
+            return FakeCursor()
+
+        def commit(self) -> None:
+            self.commit_count += 1
+
+    conn = FakeConn()
+    expired = mod.expire_stale_ssot_pending_writes(conn)
+    expect(expired == 0, str(expired))
+    expect(conn.update_count == 0, str(conn.update_count))
+    expect(conn.commit_count == 0, str(conn.commit_count))
+    print("PASS test_expire_stale_ssot_pending_writes_skips_write_when_nothing_due")
+
+
+def test_legacy_onboarding_token_migration_ignores_uncontained_stored_path() -> None:
+    mod = load_module(CONTROL_PY, "arclink_control_db_token_migration_path_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        cfg = config_for_root(mod, root)
+        conn = memory_db(mod)
+        outside_path = root / "outside-token"
+        conn.execute(
+            """
+            INSERT INTO onboarding_sessions (
+              session_id, platform, chat_id, sender_id, state,
+              pending_bot_token, pending_bot_token_path, created_at, updated_at
+            ) VALUES (
+              'onb_path_escape', 'telegram', 'chat', 'sender', 'awaiting_bot_token',
+              '123456:telegram-token', ?, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00'
+            )
+            """,
+            (str(outside_path),),
+        )
+        conn.commit()
+        mod._migrate_onboarding_bot_tokens(conn, cfg)
+        expect(not outside_path.exists(), f"outside path should not be written: {outside_path}")
+        row = conn.execute(
+            "SELECT pending_bot_token, pending_bot_token_path FROM onboarding_sessions WHERE session_id = 'onb_path_escape'"
+        ).fetchone()
+        secret_path = Path(row["pending_bot_token_path"])
+        expect(row["pending_bot_token"] == "", str(dict(row)))
+        expect(secret_path.read_text(encoding="utf-8").strip() == "123456:telegram-token", str(secret_path))
+        secret_path.resolve(strict=False).relative_to(mod.onboarding_secret_dir(cfg).resolve(strict=False))
+    print("PASS test_legacy_onboarding_token_migration_ignores_uncontained_stored_path")
 
 
 def test_parse_utc_iso_normalizes_z_and_offset_timestamps() -> None:
@@ -440,8 +675,15 @@ def test_wave4_fresh_schema_rejects_invalid_high_value_status() -> None:
 
 
 if __name__ == "__main__":
+    test_config_loader_preserves_multi_token_values_and_export_prefix()
+    test_explicit_missing_config_file_fails_loudly_but_devnull_remains_sentinel()
+    test_config_from_env_defaults_invalid_int_values_without_crashing()
+    test_config_model_presets_are_deeply_immutable()
     test_connect_db_tolerates_locked_journal_mode_pragma()
     test_operation_idempotency_reserve_complete_and_replay()
+    test_event_and_notification_json_reject_plaintext_secrets()
+    test_expire_stale_ssot_pending_writes_skips_write_when_nothing_due()
+    test_legacy_onboarding_token_migration_ignores_uncontained_stored_path()
     test_parse_utc_iso_normalizes_z_and_offset_timestamps()
     test_operation_idempotency_rejects_same_key_different_intent()
     test_operation_idempotency_failed_attempt_replays_without_completion()

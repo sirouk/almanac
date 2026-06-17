@@ -1,7 +1,7 @@
 "use client";
 
 import { type FormEvent, useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { api, safeNavigationHref } from "@/lib/api";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { StatusBadge, ErrorAlert, LoadingSpinner } from "@/components/ui";
@@ -499,20 +499,17 @@ function urlJoin(base: string, path = "") {
 
 function hermesBaseUrl(dep: Deployment) {
   const urls = dep.access?.urls || {};
-  if (urls.hermes) return urls.hermes;
-  if (urls.dashboard) return urls.dashboard;
-  return "";
+  return safeNavigationHref(urls.hermes) || safeNavigationHref(urls.dashboard);
 }
 
 function hermesPluginLinks(dep: Deployment) {
   const urls = dep.access?.urls || {};
   const base = hermesBaseUrl(dep);
-  const dashboard = base || urls.dashboard || "";
   return [
-    { name: "Hermes Dashboard", href: dashboard },
-    { name: "Drive", href: urls.files || (base ? urlJoin(base, "drive") : "") },
-    { name: "Code", href: urls.code || (base ? urlJoin(base, "code") : "") },
-    { name: "Terminal", href: urls.terminal || (base ? urlJoin(base, "terminal") : "") },
+    { name: "Hermes Dashboard", href: base },
+    { name: "Drive", href: safeNavigationHref(urls.files) || (base ? urlJoin(base, "drive") : "") },
+    { name: "Code", href: safeNavigationHref(urls.code) || (base ? urlJoin(base, "code") : "") },
+    { name: "Terminal", href: safeNavigationHref(urls.terminal) || (base ? urlJoin(base, "terminal") : "") },
   ];
 }
 
@@ -2280,6 +2277,7 @@ function BackupStatusPanel({
   const canRecordWriteCheck = Boolean(publicKey);
   const stagingKey = loadingAction === `${deploymentId}:deploy-key`;
   const checkingWrite = loadingAction === `${deploymentId}:write-check`;
+  const settingsUrl = safeNavigationHref(setup?.settings_url);
   return (
     <div className="rounded bg-carbon px-3 py-3 text-sm">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -2339,9 +2337,9 @@ function BackupStatusPanel({
           {verification.github_write_check_reason}
         </p>
       )}
-      {setup?.settings_url && (
-        <a href={setup.settings_url} target="_blank" rel="noopener noreferrer" className="mt-3 inline-block break-all font-mono text-xs text-signal-orange hover:underline">
-          Open GitHub deploy key settings: {setup.settings_url} →
+      {settingsUrl && (
+        <a href={settingsUrl} target="_blank" rel="noopener noreferrer" className="mt-3 inline-block break-all font-mono text-xs text-signal-orange hover:underline">
+          Open GitHub deploy key settings: {settingsUrl} →
         </a>
       )}
       <div className="mt-3 flex flex-col gap-2 sm:flex-row">
@@ -2821,17 +2819,19 @@ function PortalLinkButton() {
     try {
       const res = await api.userPortal({ return_url: window.location.href });
       if (res.status === 200) {
-        const url = (res.data as Record<string, string>).portal_url;
+        const url = safeNavigationHref((res.data as Record<string, string>).portal_url);
         if (url) setPortalUrl(url);
       }
     } catch { /* ignore */ }
     setLoading(false);
   }
 
-  if (portalUrl) {
+  const safePortalUrl = safeNavigationHref(portalUrl);
+
+  if (safePortalUrl) {
     return (
       <a
-        href={portalUrl}
+        href={safePortalUrl}
         className="inline-block rounded bg-signal-orange px-4 py-2 text-sm font-semibold text-jet transition hover:opacity-90"
       >
         Open Billing Portal →

@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint src next.config.ts playwright.config.ts --max-warnings=0",
-    "test": "node --test tests/test_page_smoke.mjs tests/test_api_client.mjs",
+    "test": "node --test tests/test_page_smoke.mjs tests/test_api_client.mjs tests/test_safe_url.mjs",
     "test:browser": "npx playwright test"
   },
   "dependencies": {

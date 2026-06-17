@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 from urllib import request as urlrequest
 
+from arclink_boundary import reject_secret_material
 from arclink_product import chutes_base_url, chutes_default_model
 
 
@@ -457,7 +458,9 @@ def _json_loads_object(value: Any) -> dict[str, Any]:
 
 
 def _json_dumps_object(value: Mapping[str, Any]) -> str:
-    return json.dumps(dict(value), sort_keys=True, separators=(",", ":"), default=str)
+    payload = dict(value)
+    reject_secret_material(payload, label="ArcLink Chutes JSON")
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
 
 
 def _clean_money_cents(event: Mapping[str, Any]) -> int:

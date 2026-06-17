@@ -777,7 +777,7 @@ def _wait_for_user_bus(uid: str, timeout_seconds: int = 15) -> None:
 
 
 def _docker_mode() -> bool:
-    return str(os.environ.get("ARCLINK_DOCKER_MODE") or "").strip().lower() in {"1", "true", "yes"}
+    return str(os.environ.get("ARCLINK_DOCKER_MODE") or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _requires_root_entrypoint() -> bool:

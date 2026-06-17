@@ -211,6 +211,255 @@ def test_telegram_operator_approval_code_blocks_single_step_approve() -> None:
             os.environ.update(old_env)
 
 
+def test_discord_operator_direct_actions_require_configured_code() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    discord_curator = load_module(
+        CURATOR_DISCORD_ONBOARDING_PY,
+        "arclink_curator_discord_code_gate_test",
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        values = base_config_values(root)
+        values["ARCLINK_OPERATOR_APPROVAL_CODE"] = "discord-4242"
+        write_config(config_path, values)
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            expect(not discord_curator._discord_operator_code_ok(""), "blank Discord operator code must fail")
+            expect(
+                discord_curator._discord_operator_code_ok("discord-4242"),
+                "configured Discord operator code must pass",
+            )
+            ok, reason = discord_curator._discord_operator_action_tail(
+                command="/approve",
+                text="/approve onb_test",
+            )
+            expect(not ok and reason == "", f"expected missing direct approve code to fail, got {ok=} {reason=!r}")
+            ok, reason = discord_curator._discord_operator_action_tail(
+                command="/deny",
+                text="/deny onb_test discord-4242 not enough context",
+            )
+            expect(ok and reason == "not enough context", f"expected deny reason after code, got {ok=} {reason=!r}")
+            ok, target = discord_curator._discord_retry_contact_target("/retry-contact Alex Rivera discord-4242")
+            expect(ok and target == "Alex Rivera", f"expected retry-contact target before code, got {ok=} {target=!r}")
+            expect(
+                discord_curator._discord_component_requires_operator_code(scope="ssot", action="approve"),
+                "SSOT component approve must require a code when configured",
+            )
+            expect(
+                discord_curator._discord_component_requires_operator_code(scope="upgrade", action="dismiss"),
+                "upgrade dismiss mutates notification state and must require a code when configured",
+            )
+            expect(
+                not discord_curator._discord_component_requires_operator_code(scope="upgrade", action="preview"),
+                "upgrade preview is non-mutating and should not require a code",
+            )
+            print("PASS test_discord_operator_direct_actions_require_configured_code")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_discord_seen_message_prune_bounds_settings_rows() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_discord_seen_prune_test")
+    discord_curator = load_module(
+        CURATOR_DISCORD_ONBOARDING_PY,
+        "arclink_curator_discord_seen_prune_test",
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(config_path, base_config_values(root))
+        old_env = os.environ.copy()
+        old_max = discord_curator.DISCORD_SEEN_MESSAGE_MAX_ROWS
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        discord_curator.DISCORD_SEEN_MESSAGE_MAX_ROWS = 2
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            prefix = discord_curator.DISCORD_SEEN_MESSAGE_PREFIX
+            for idx, updated_at in enumerate(
+                [
+                    "2000-01-01T00:00:00+00:00",
+                    "2099-01-01T00:00:01+00:00",
+                    "2099-01-01T00:00:02+00:00",
+                    "2099-01-01T00:00:03+00:00",
+                ]
+            ):
+                conn.execute(
+                    "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)",
+                    (f"{prefix}{idx}", "processed", updated_at),
+                )
+            conn.commit()
+            discord_curator._prune_discord_seen_messages(conn)
+            conn.commit()
+            rows = conn.execute(
+                """
+                SELECT key FROM settings
+                WHERE substr(key, 1, ?) = ?
+                ORDER BY key
+                """,
+                (len(prefix), prefix),
+            ).fetchall()
+            keys = [str(row["key"]) for row in rows]
+            expect(keys == [f"{prefix}2", f"{prefix}3"], str(keys))
+            print("PASS test_discord_seen_message_prune_bounds_settings_rows")
+        finally:
+            discord_curator.DISCORD_SEEN_MESSAGE_MAX_ROWS = old_max
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_discord_message_handler_releases_claim_on_processing_error() -> None:
+    source = CURATOR_DISCORD_ONBOARDING_PY.read_text(encoding="utf-8")
+    start = source.index("    @client.event\n    async def on_message")
+    end = source.index("    @client.event\n    async def on_interaction", start)
+    snippet = source[start:end]
+    expect("_release_discord_message_claim(message_id)" in snippet, snippet)
+    expect("_mark_discord_message_processed(message_id)" in snippet, snippet)
+    print("PASS test_discord_message_handler_releases_claim_on_processing_error")
+
+
+def test_discord_reply_delivery_failures_propagate() -> None:
+    source = CURATOR_DISCORD_ONBOARDING_PY.read_text(encoding="utf-8")
+    start = source.index("    async def _send_replies")
+    end = source.index("    async def _handle_dm_command", start)
+    snippet = source[start:end]
+    expect("except Exception" not in snippet, snippet)
+    expect("raise RuntimeError" in snippet, snippet)
+    print("PASS test_discord_reply_delivery_failures_propagate")
+
+
+def test_telegram_upgrade_dismiss_updates_live_notification_dedupe_key() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_curator_upgrade_dismiss_test")
+    curator = load_module(CURATOR_ONBOARDING_PY, "arclink_curator_upgrade_dismiss_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(config_path, base_config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            target_sha = "b" * 40
+            replacements: list[str] = []
+            answers: list[str] = []
+            curator._replace_operator_callback_message = (
+                lambda bot_token, callback_query, text: replacements.append(text)
+            )
+            curator._clear_operator_callback_buttons = lambda bot_token, callback_query: None
+            curator.telegram_answer_callback_query = (
+                lambda **kwargs: answers.append(str(kwargs.get("text") or ""))
+            )
+
+            curator._handle_operator_callback(
+                cfg=cfg,
+                bot_token="test-token",
+                callback_query={
+                    "id": "cb_dismiss",
+                    "data": f"arclink:upgrade:dismiss:{target_sha}",
+                    "message": {
+                        "chat": {"id": "42", "type": "private"},
+                        "message_id": 9,
+                        "text": "ArcLink update available.",
+                    },
+                    "from": {"id": "42", "username": "operator"},
+                },
+            )
+
+            expect(control.get_setting(conn, "arclink_upgrade_last_notified_sha", "") == target_sha, "dismiss must update live dedupe key")
+            expect(control.get_setting(conn, "arclink_upgrade_last_dismissed_sha", "") == "", "dead dismissed key must not be written")
+            expect(replacements and "Dismissed by @operator" in replacements[0], str(replacements))
+            expect(answers and "Dismissed ArcLink update notice" in answers[0], str(answers))
+            print("PASS test_telegram_upgrade_dismiss_updates_live_notification_dedupe_key")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_telegram_malformed_upgrade_callback_reports_unknown_action() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_curator_malformed_upgrade_test")
+    curator = load_module(CURATOR_ONBOARDING_PY, "arclink_curator_malformed_upgrade_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(config_path, base_config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            answers: list[str] = []
+            curator.telegram_answer_callback_query = (
+                lambda **kwargs: answers.append(str(kwargs.get("text") or ""))
+            )
+            curator._handle_operator_callback(
+                cfg=cfg,
+                bot_token="test-token",
+                callback_query={
+                    "id": "cb_bad_upgrade",
+                    "data": f"arclink:upgrade:explode:{'c' * 40}",
+                    "message": {"chat": {"id": "42", "type": "private"}, "message_id": 9},
+                    "from": {"id": "42", "username": "operator"},
+                },
+            )
+            expect(answers == ["unknown upgrade action: explode"], str(answers))
+            print("PASS test_telegram_malformed_upgrade_callback_reports_unknown_action")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_telegram_failure_ledger_error_stops_worker() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_curator_failure_ledger_test")
+    curator = load_module(CURATOR_ONBOARDING_PY, "arclink_curator_failure_ledger_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(config_path, base_config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        old_get_updates = curator.telegram_get_updates
+        old_process_update = curator.process_update
+        old_record_failure = curator.record_onboarding_update_failure
+        try:
+            cfg = control.Config.from_env()
+            control.connect_db(cfg).close()
+            curator.telegram_get_updates = lambda **kwargs: [{"update_id": 123, "message": {"text": "/start"}}]
+
+            def _raise_process_update(**kwargs):
+                raise RuntimeError("handler failed")
+
+            def _raise_record_failure(*args, **kwargs):
+                raise RuntimeError("database is unwritable")
+
+            curator.process_update = _raise_process_update
+            curator.record_onboarding_update_failure = _raise_record_failure
+            try:
+                curator.run_once(cfg, "test-token", "curator-bot-id", poll_timeout=0)
+            except SystemExit as exc:
+                expect(exc.code == 1, f"expected SystemExit(1), got {exc.code!r}")
+            else:
+                raise AssertionError("expected failure-ledger write failure to stop the worker")
+            print("PASS test_telegram_failure_ledger_error_stops_worker")
+        finally:
+            curator.telegram_get_updates = old_get_updates
+            curator.process_update = old_process_update
+            curator.record_onboarding_update_failure = old_record_failure
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_stale_telegram_request_callback_clears_buttons_with_status() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -817,6 +1066,13 @@ def test_discord_operator_slash_registration_matches_raven_operator_surface() ->
 def main() -> int:
     test_telegram_operator_approve_callback_replaces_message_and_clears_buttons()
     test_telegram_operator_approval_code_blocks_single_step_approve()
+    test_discord_operator_direct_actions_require_configured_code()
+    test_discord_seen_message_prune_bounds_settings_rows()
+    test_discord_message_handler_releases_claim_on_processing_error()
+    test_discord_reply_delivery_failures_propagate()
+    test_telegram_upgrade_dismiss_updates_live_notification_dedupe_key()
+    test_telegram_malformed_upgrade_callback_reports_unknown_action()
+    test_telegram_failure_ledger_error_stops_worker()
     test_stale_telegram_request_callback_clears_buttons_with_status()
     test_telegram_backup_callback_reopens_completed_lane_backup_setup()
     test_telegram_operator_retry_contact_queues_discord_handoff()
@@ -826,7 +1082,7 @@ def main() -> int:
     test_discord_onboarding_user_retry_contact_queues_own_handoff()
     test_telegram_command_registration_includes_user_and_operator_commands()
     test_discord_operator_slash_registration_matches_raven_operator_surface()
-    print("PASS all 11 curator onboarding regression tests")
+    print("PASS all 18 curator onboarding regression tests")
     return 0
 
 

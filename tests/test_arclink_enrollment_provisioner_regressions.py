@@ -1487,6 +1487,18 @@ def test_run_host_upgrade_fails_closed_without_operator_upgrade_broker_token_in_
             os.environ.update(old_env)
 
 
+def test_docker_mode_accepts_on_truthy_value() -> None:
+    provisioner = load_module(PROVISIONER_PY, "arclink_enrollment_provisioner_docker_mode_on_test")
+    old_env = os.environ.copy()
+    os.environ["ARCLINK_DOCKER_MODE"] = "on"
+    try:
+        expect(provisioner._docker_mode() is True, "ARCLINK_DOCKER_MODE=on should match the shared truthy set")
+        print("PASS test_docker_mode_accepts_on_truthy_value")
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+
+
 def test_run_pin_upgrade_action_uses_operator_upgrade_broker_in_docker_mode() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -1757,6 +1769,7 @@ def main() -> int:
     test_run_host_upgrade_routes_to_operator_upgrade_broker_in_docker_mode()
     test_entrypoint_root_requirement_allows_docker_supervisor()
     test_run_host_upgrade_fails_closed_without_operator_upgrade_broker_token_in_docker_mode()
+    test_docker_mode_accepts_on_truthy_value()
     test_run_pin_upgrade_action_uses_operator_upgrade_broker_in_docker_mode()
     test_operator_upgrade_broker_requests_are_signed_and_nonce_bound()
     test_operator_upgrade_broker_request_normalizes_decode_and_error_bodies()
@@ -1764,7 +1777,7 @@ def main() -> int:
     test_install_system_services_seeds_home_in_root_units()
     test_install_system_services_does_not_self_deadlock_on_active_oneshots()
     test_auto_provision_dashboard_probe_allows_cold_start_window()
-    print("PASS all 31 enrollment provisioner regression tests")
+    print("PASS all 32 enrollment provisioner regression tests")
     return 0
 
 

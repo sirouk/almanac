@@ -124,3 +124,19 @@ All defects are contained by the trusted-host boundary (not remotely exploitable
 carry uncommitted working-tree edits vs HEAD `63a42c8` — the audited behavior is what runs now.
 
 **Federation sign-off: BOTH-MODEL-AGREED.**
+
+---
+
+<!-- CANON-REPAIR-STATUS:START -->
+## Repair status
+
+> Refreshed from [`research/canon/fixes/CANON-15-operator-upgrade-pipeline.fix.md`](../fixes/CANON-15-operator-upgrade-pipeline.fix.md) (tracked). The audit findings above remain the adjudicated spec; this block records the repair campaign state for this piece.
+
+- Status: `bf7e201` committed.
+- Summary: 14 fixed / 3 skipped / 0 needs-decision.
+- Tests: 5 test files run, all pass; py_compile/json/diff checks pass
+- Representative fixes:
+  - HIGH — poison/dangling symlink/invalid pending file no longer wedges the host runner; bad files are result-recorded when possible and quarantined. `python/arclink_operator_upgrade_host_runner.py:403`
+  - MEDIUM — queue root override is confined under private state. `python/arclink_operator_upgrade_host_runner.py:90`
+  - MEDIUM — nonce replay TOCTOU and cross-restart replay closed with locked check-record plus persistent nonce store. `python/arclink_operator_upgrade_broker.py:678`, `python/arclink_operator_upgrade_broker.py:779`
+<!-- CANON-REPAIR-STATUS:END -->

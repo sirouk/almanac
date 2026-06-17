@@ -1177,6 +1177,12 @@ def test_request_id_propagation_and_cors() -> None:
     })
     expect(forced_secure.cookie_secure is True, "explicit cookie secure override should win")
     expect(forced_secure.cookie_samesite == "Lax", "explicit SameSite compatibility override should win")
+    forced_insecure = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "ARCLINK_CORS_ORIGIN": "https://app.example.test",
+        "ARCLINK_COOKIE_SECURE": "false",
+    })
+    expect(forced_insecure.cookie_secure is False, "ARCLINK_COOKIE_SECURE=false should disable Secure cookies")
 
     wildcard_config = hosted.HostedApiConfig(env={
         "ARCLINK_BASE_DOMAIN": "example.test",
@@ -2336,6 +2342,30 @@ def test_user_share_grant_broker_requires_deployment_scoped_token() -> None:
 
     def grant_count() -> int:
         return int(conn.execute("SELECT COUNT(*) AS count FROM arclink_share_grants").fetchone()["count"])
+
+    row = conn.execute(
+        "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?",
+        (owner["deployment_id"],),
+    ).fetchone()
+    metadata = json.loads(str(row["metadata_json"] or "{}"))
+    metadata["share_request_broker"]["token_hash"] = api._hash_token(broker_token)
+    conn.execute(
+        "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
+        (json.dumps(metadata, sort_keys=True), owner["deployment_id"]),
+    )
+    conn.commit()
+    before_legacy = grant_count()
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/share-grants/broker",
+        headers=broker_headers,
+        body=json.dumps(body),
+        config=config,
+    )
+    expect(status == 401, f"legacy plain-SHA broker token hash should fail closed, got {status}: {payload}")
+    expect(grant_count() == before_legacy, "legacy plain-SHA broker token hash created a share grant")
+    update_deployment_metadata(owner, broker_token)
 
     for label, headers, candidate in (
         ("missing token", {}, dict(body)),
@@ -5427,6 +5457,54 @@ def test_wsgi_body_limit_rejects_before_read() -> None:
     print("PASS test_wsgi_body_limit_rejects_before_read")
 
 
+def test_wsgi_rejects_negative_and_non_utf8_bodies() -> None:
+    from io import BytesIO
+
+    class FailingInput(BytesIO):
+        def read(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            raise AssertionError("WSGI body was read for invalid negative CONTENT_LENGTH")
+
+    control = load_module("arclink_control.py", "arclink_control_hosted_wsgi_bad_body_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_wsgi_bad_body_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    app = hosted.make_arclink_hosted_api_wsgi(conn, config=config)
+
+    captured: list[tuple[str, list]] = []
+
+    def start_response(status: str, headers: list) -> None:
+        captured.append((status, headers))
+
+    result = app({
+        "REQUEST_METHOD": "POST",
+        "PATH_INFO": "/api/v1/onboarding/start",
+        "QUERY_STRING": "",
+        "CONTENT_LENGTH": "-1",
+        "CONTENT_TYPE": "application/json",
+        "REMOTE_ADDR": "127.0.0.1",
+        "wsgi.input": FailingInput(b""),
+    }, start_response)
+    expect(captured and captured[-1][0] == "400 Bad Request", f"expected 400 got {captured}")
+    payload = json.loads(result[0])
+    expect(payload.get("error") == "invalid_content_length", str(payload))
+
+    captured.clear()
+    result = app({
+        "REQUEST_METHOD": "POST",
+        "PATH_INFO": "/api/v1/onboarding/start",
+        "QUERY_STRING": "",
+        "CONTENT_LENGTH": "1",
+        "CONTENT_TYPE": "application/json",
+        "REMOTE_ADDR": "127.0.0.1",
+        "wsgi.input": BytesIO(b"\xff"),
+    }, start_response)
+    expect(captured and captured[-1][0] == "400 Bad Request", f"expected 400 got {captured}")
+    payload = json.loads(result[0])
+    expect(payload.get("error") == "invalid_body_encoding", str(payload))
+
+    print("PASS test_wsgi_rejects_negative_and_non_utf8_bodies")
+
+
 def test_admin_cidr_boundary_uses_remote_ip_and_preserves_public_routes() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_cidr_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_cidr_test")
@@ -5451,6 +5529,16 @@ def test_admin_cidr_boundary_uses_remote_ip_and_preserves_public_routes() -> Non
     expect(status == 403, f"expected disallowed remote 403 got {status}: {payload}")
     header_dict = {k.lower(): v for k, v in headers}
     expect(header_dict.get("access-control-allow-origin") == "https://app.arclink.online", str(header_dict))
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/admin/dashboard",
+        headers={**auth_headers(session), "X-Real-IP": "203.0.113.7"},
+        config=config,
+        remote_addr="",
+    )
+    expect(status == 403, f"empty REMOTE_ADDR must not trust X-Real-IP, got {status}: {payload}")
 
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn,
@@ -6542,6 +6630,7 @@ def main() -> int:
     test_wsgi_adapter_can_use_per_request_connections()
     test_request_body_limits_and_json_errors()
     test_wsgi_body_limit_rejects_before_read()
+    test_wsgi_rejects_negative_and_non_utf8_bodies()
     test_admin_cidr_boundary_uses_remote_ip_and_preserves_public_routes()
     test_hosted_api_has_executable_control_node_entrypoint()
     test_read_only_admin_blocked_from_mutations()

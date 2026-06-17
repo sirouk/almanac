@@ -54,6 +54,17 @@ def test_chutes_catalog_parses_and_validates_default_model() -> None:
     print("PASS test_chutes_catalog_parses_and_validates_default_model")
 
 
+def test_chutes_json_dumps_object_rejects_plaintext_secret_material() -> None:
+    mod = load_module("arclink_chutes.py", "arclink_chutes_secret_json_test")
+    try:
+        mod._json_dumps_object({"token": "cpk_live_SECRETSECRETSECRETSECRET"})
+    except ValueError as exc:
+        expect("secret material" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected Chutes JSON persistence helper to reject plaintext secret material")
+    print("PASS test_chutes_json_dumps_object_rejects_plaintext_secret_material")
+
+
 def test_chutes_catalog_fails_for_missing_or_unsupported_default() -> None:
     mod = load_module("arclink_chutes.py", "arclink_chutes_failure_test")
     models = mod.parse_chutes_models(CATALOG)
@@ -762,6 +773,7 @@ def test_chutes_usage_ingestion_blocks_after_hard_limit() -> None:
 
 def main() -> int:
     test_chutes_catalog_parses_and_validates_default_model()
+    test_chutes_json_dumps_object_rejects_plaintext_secret_material()
     test_chutes_catalog_fails_for_missing_or_unsupported_default()
     test_fake_chutes_key_manager_uses_secret_references()
     test_chutes_account_registration_requires_official_token_not_browser_bypass()

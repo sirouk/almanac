@@ -108,3 +108,21 @@ subsystem is source-complete and its crypto core is proven; the atomicity and
 payment-verification gaps are genuine, fixable code defects — the single highest-value
 fix is to thread `commit=False` through `_active_session_or_error` →
 `expire_stale_arclink_onboarding_sessions` so the webhook txn stays atomic.
+
+---
+
+<!-- CANON-REPAIR-STATUS:START -->
+## Repair status
+
+> Refreshed from [`research/canon/fixes/CANON-07-billing-entitlements.fix.md`](../fixes/CANON-07-billing-entitlements.fix.md) (tracked). The audit findings above remain the adjudicated spec; this block records the repair campaign state for this piece.
+
+- Status: `c5cec97` committed.
+- Summary: 8 fixed / 3 skipped / 1 needs-decision.
+- Tests: 6 files run, all pass; py_compile pass
+- Representative fixes:
+  - HIGH — durable `received` webhook rows now reprocess instead of returning replayed 200/no-op. `python/arclink_entitlements.py:617`
+  - MEDIUM — checkout/refuel payment verification now requires `payment_status=paid`; refuel also requires positive retail cents and sufficient Stripe amount. `python/arclink_entitlements.py:416`, `python/arclink_entitlements.py:647`, `python/arclink_entitlements.py:746`
+  - MEDIUM — subscription mirror no longer crashes on `status='none'`; unknown statuses map to valid non-active `incomplete`. `python/arclink_entitlements.py:52`
+- Needs decision:
+  - Full forged-metadata policy when neither Stripe customer nor subscription is locally bound. This patch blocks known local ownership conflicts without changing the wider first-binding contract for signed Stripe checkout/subscription events.
+<!-- CANON-REPAIR-STATUS:END -->

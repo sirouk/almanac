@@ -18,8 +18,10 @@ import string
 import subprocess
 import sys
 import tempfile
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 from urllib import error as urlerror
 from urllib import parse as urlparse
@@ -54,6 +56,7 @@ from arclink_notion_ssot import (  # noqa: E402
 )
 from arclink_rpc_client import mcp_call  # noqa: E402
 from arclink_resource_map import managed_resource_ref, shared_resource_lines, shared_tailnet_host  # noqa: E402
+from arclink_boundary import json_dumps_safe, reject_secret_material  # noqa: E402
 
 
 AUTO_PROVISION_UNIX_USER_PATTERN = re.compile(r"^[a-z_][a-z0-9_-]{0,30}$")
@@ -155,6 +158,17 @@ def bool_env(name: str, default: bool = False, env: dict[str, str] | None = None
     return normalized in {"1", "true", "yes", "on"}
 
 
+def _config_int(env: Mapping[str, str], name: str, default: int) -> int:
+    raw = env.get(name)
+    if raw is None or str(raw).strip() == "":
+        return int(default)
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        warnings.warn(f"{name} must be an integer; using default {int(default)}", RuntimeWarning)
+        return int(default)
+
+
 def json_dumps(value: Any) -> str:
     return json.dumps(value, sort_keys=True)
 
@@ -197,6 +211,38 @@ def _safe_path_is_file(path: Path) -> bool:
         return path.is_file()
     except OSError:
         return False
+
+
+_CONFIG_ENV_CACHE_KEY: tuple[Any, ...] | None = None
+_CONFIG_ENV_CACHE_VALUE: dict[str, str] | None = None
+
+
+def _is_null_config_path(path: Path) -> bool:
+    try:
+        return path.expanduser().resolve(strict=False) == Path(os.devnull).resolve(strict=False)
+    except (OSError, RuntimeError):
+        return str(path) == os.devnull
+
+
+def _config_file_signature(path: Path | None) -> tuple[str, int | None, int | None] | None:
+    if path is None:
+        return None
+    try:
+        stat_result = path.stat()
+    except OSError:
+        return (str(path), None, None)
+    return (str(path), int(stat_result.st_mtime_ns), int(stat_result.st_size))
+
+
+def _config_env_cache_key(config_path: Path | None) -> tuple[Any, ...]:
+    return (tuple(sorted(os.environ.items())), _config_file_signature(config_path))
+
+
+def _cached_config_env(cache_key: tuple[Any, ...], merged: Mapping[str, str]) -> dict[str, str]:
+    global _CONFIG_ENV_CACHE_KEY, _CONFIG_ENV_CACHE_VALUE
+    _CONFIG_ENV_CACHE_KEY = cache_key
+    _CONFIG_ENV_CACHE_VALUE = dict(merged)
+    return dict(merged)
 
 
 def _artifact_value(raw_value: str) -> str:
@@ -245,8 +291,7 @@ def _resolve_user_home(user: str) -> Path | None:
 def _discover_config_file() -> Path | None:
     explicit = os.environ.get("ARCLINK_CONFIG_FILE")
     if explicit:
-        path = Path(explicit).expanduser()
-        return path if _safe_path_is_file(path) else path
+        return Path(explicit).expanduser()
 
     repo_root = Path(os.environ.get("ARCLINK_REPO_DIR", _python_repo_root())).expanduser().resolve()
     operator_artifact = Path(
@@ -300,27 +345,40 @@ def _discover_config_file() -> Path | None:
 
 
 def _load_config_env() -> dict[str, str]:
+    global _CONFIG_ENV_CACHE_KEY, _CONFIG_ENV_CACHE_VALUE
+    config_path = _discover_config_file()
+    cache_key = _config_env_cache_key(config_path)
+    if _CONFIG_ENV_CACHE_KEY == cache_key and _CONFIG_ENV_CACHE_VALUE is not None:
+        return dict(_CONFIG_ENV_CACHE_VALUE)
+
     # Safe: this merged environment is consumed only in-process for config discovery
     # and default resolution. It must never be handed to child processes as-is.
     merged = dict(os.environ)
-    config_path = _discover_config_file()
     if config_path is None:
-        return merged
+        return _cached_config_env(cache_key, merged)
 
     if not _safe_path_is_file(config_path):
+        if os.environ.get("ARCLINK_CONFIG_FILE") and not _is_null_config_path(config_path):
+            raise FileNotFoundError(f"ARCLINK_CONFIG_FILE does not point to a readable file: {config_path}")
         merged.setdefault("ARCLINK_CONFIG_FILE", str(config_path))
-        return merged
+        return _cached_config_env(cache_key, merged)
 
     try:
         config_text = config_path.read_text(encoding="utf-8")
-    except OSError:
+    except OSError as exc:
+        if os.environ.get("ARCLINK_CONFIG_FILE"):
+            raise OSError(f"failed to read ARCLINK_CONFIG_FILE: {config_path}") from exc
         merged.setdefault("ARCLINK_CONFIG_FILE", str(config_path))
-        return merged
+        return _cached_config_env(cache_key, merged)
 
     for raw_line in config_text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+            if not line or "=" not in line:
+                continue
         key, raw_value = line.split("=", 1)
         key = key.strip()
         raw_value = raw_value.strip()
@@ -328,13 +386,13 @@ def _load_config_env() -> dict[str, str]:
             continue
         try:
             parsed = shlex.split(raw_value, posix=True)
-            value = "" if not parsed else parsed[0]
+            value = " ".join(parsed)
         except ValueError:
             value = raw_value
         merged.setdefault(key, value)
 
     merged.setdefault("ARCLINK_CONFIG_FILE", str(config_path))
-    return merged
+    return _cached_config_env(cache_key, merged)
 
 
 def config_env_value(name: str, default: str = "") -> str:
@@ -395,7 +453,7 @@ class Config:
     org_provider_preset: str
     org_provider_model_id: str
     org_provider_reasoning_effort: str
-    model_presets: dict[str, str]
+    model_presets: Mapping[str, str]
     agent_dashboard_backend_port_base: int
     agent_dashboard_proxy_port_base: int
     agent_port_slot_span: int
@@ -410,9 +468,9 @@ class Config:
         state_dir = Path(env.get("STATE_DIR", private_dir / "state")).resolve()
         runtime_dir = Path(env.get("RUNTIME_DIR", state_dir / "runtime")).resolve()
         vault_dir = Path(env.get("VAULT_DIR", private_dir / "vault")).resolve()
-        public_mcp_port = int(env.get("ARCLINK_MCP_PORT", "8282"))
+        public_mcp_port = _config_int(env, "ARCLINK_MCP_PORT", 8282)
         public_mcp_host = env.get("ARCLINK_MCP_HOST", "127.0.0.1")
-        notion_webhook_port = int(env.get("ARCLINK_NOTION_WEBHOOK_PORT", "8283"))
+        notion_webhook_port = _config_int(env, "ARCLINK_NOTION_WEBHOOK_PORT", 8283)
         notion_webhook_host = env.get("ARCLINK_NOTION_WEBHOOK_HOST", "127.0.0.1")
         qmd_url = env.get("ARCLINK_QMD_URL", f"http://127.0.0.1:{env.get('QMD_MCP_PORT', '8181')}/mcp")
         extra_mcp_name = env.get("ARCLINK_EXTRA_MCP_NAME", "external-kb").strip() or "external-kb"
@@ -489,13 +547,13 @@ class Config:
             public_mcp_port=public_mcp_port,
             notion_webhook_host=notion_webhook_host,
             notion_webhook_port=notion_webhook_port,
-            bootstrap_window_seconds=int(env.get("ARCLINK_BOOTSTRAP_WINDOW_SECONDS", "3600")),
-            bootstrap_per_ip_limit=int(env.get("ARCLINK_BOOTSTRAP_PER_IP_LIMIT", "5")),
-            bootstrap_global_pending_limit=int(env.get("ARCLINK_BOOTSTRAP_GLOBAL_PENDING_LIMIT", "20")),
-            bootstrap_pending_ttl_seconds=int(env.get("ARCLINK_BOOTSTRAP_PENDING_TTL_SECONDS", "900")),
-            auto_provision_max_attempts=int(env.get("ARCLINK_AUTO_PROVISION_MAX_ATTEMPTS", "5")),
-            auto_provision_retry_base_seconds=int(env.get("ARCLINK_AUTO_PROVISION_RETRY_BASE_SECONDS", "60")),
-            auto_provision_retry_max_seconds=int(env.get("ARCLINK_AUTO_PROVISION_RETRY_MAX_SECONDS", "900")),
+            bootstrap_window_seconds=_config_int(env, "ARCLINK_BOOTSTRAP_WINDOW_SECONDS", 3600),
+            bootstrap_per_ip_limit=_config_int(env, "ARCLINK_BOOTSTRAP_PER_IP_LIMIT", 5),
+            bootstrap_global_pending_limit=_config_int(env, "ARCLINK_BOOTSTRAP_GLOBAL_PENDING_LIMIT", 20),
+            bootstrap_pending_ttl_seconds=_config_int(env, "ARCLINK_BOOTSTRAP_PENDING_TTL_SECONDS", 900),
+            auto_provision_max_attempts=_config_int(env, "ARCLINK_AUTO_PROVISION_MAX_ATTEMPTS", 5),
+            auto_provision_retry_base_seconds=_config_int(env, "ARCLINK_AUTO_PROVISION_RETRY_BASE_SECONDS", 60),
+            auto_provision_retry_max_seconds=_config_int(env, "ARCLINK_AUTO_PROVISION_RETRY_MAX_SECONDS", 900),
             curator_telegram_onboarding_enabled=bool_env(
                 "ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED",
                 default=("telegram" in curator_channels or operator_notify_platform == "telegram"),
@@ -506,18 +564,17 @@ class Config:
                 default=("discord" in curator_channels or operator_notify_platform == "discord"),
                 env=env,
             ),
-            onboarding_window_seconds=int(env.get("ARCLINK_ONBOARDING_WINDOW_SECONDS", "3600")),
-            onboarding_per_telegram_user_limit=int(
-                env.get(
-                    "ARCLINK_ONBOARDING_PER_USER_LIMIT",
-                    env.get("ARCLINK_ONBOARDING_PER_TELEGRAM_USER_LIMIT", "3"),
-                )
+            onboarding_window_seconds=_config_int(env, "ARCLINK_ONBOARDING_WINDOW_SECONDS", 3600),
+            onboarding_per_telegram_user_limit=_config_int(
+                env,
+                "ARCLINK_ONBOARDING_PER_USER_LIMIT",
+                _config_int(env, "ARCLINK_ONBOARDING_PER_TELEGRAM_USER_LIMIT", 3),
             ),
-            onboarding_global_pending_limit=int(env.get("ARCLINK_ONBOARDING_GLOBAL_PENDING_LIMIT", "20")),
-            onboarding_update_failure_limit=int(env.get("ARCLINK_ONBOARDING_UPDATE_FAILURE_LIMIT", "3")),
-            ssot_pending_write_ttl_seconds=int(env.get("ARCLINK_SSOT_PENDING_WRITE_TTL_SECONDS", "86400")),
-            curator_fanout_retry_base_seconds=int(env.get("ARCLINK_CURATOR_FANOUT_RETRY_BASE_SECONDS", "15")),
-            curator_fanout_retry_max_seconds=int(env.get("ARCLINK_CURATOR_FANOUT_RETRY_MAX_SECONDS", "300")),
+            onboarding_global_pending_limit=_config_int(env, "ARCLINK_ONBOARDING_GLOBAL_PENDING_LIMIT", 20),
+            onboarding_update_failure_limit=_config_int(env, "ARCLINK_ONBOARDING_UPDATE_FAILURE_LIMIT", 3),
+            ssot_pending_write_ttl_seconds=_config_int(env, "ARCLINK_SSOT_PENDING_WRITE_TTL_SECONDS", 86400),
+            curator_fanout_retry_base_seconds=_config_int(env, "ARCLINK_CURATOR_FANOUT_RETRY_BASE_SECONDS", 15),
+            curator_fanout_retry_max_seconds=_config_int(env, "ARCLINK_CURATOR_FANOUT_RETRY_MAX_SECONDS", 300),
             operator_notify_platform=operator_notify_platform,
             operator_notify_channel_id=operator_notify_channel_id,
             operator_telegram_user_ids=operator_telegram_user_ids,
@@ -540,10 +597,10 @@ class Config:
             org_provider_preset=org_provider_preset,
             org_provider_model_id=org_provider_model_id,
             org_provider_reasoning_effort=org_provider_reasoning_effort,
-            model_presets=model_presets,
-            agent_dashboard_backend_port_base=int(env.get("ARCLINK_AGENT_DASHBOARD_BACKEND_PORT_BASE", "19000")),
-            agent_dashboard_proxy_port_base=int(env.get("ARCLINK_AGENT_DASHBOARD_PROXY_PORT_BASE", "29000")),
-            agent_port_slot_span=int(env.get("ARCLINK_AGENT_PORT_SLOT_SPAN", "5000")),
+            model_presets=MappingProxyType(dict(model_presets)),
+            agent_dashboard_backend_port_base=_config_int(env, "ARCLINK_AGENT_DASHBOARD_BACKEND_PORT_BASE", 19000),
+            agent_dashboard_proxy_port_base=_config_int(env, "ARCLINK_AGENT_DASHBOARD_PROXY_PORT_BASE", 29000),
+            agent_port_slot_span=_config_int(env, "ARCLINK_AGENT_PORT_SLOT_SPAN", 5000),
             agent_enable_tailscale_serve=agent_enable_tailscale_serve,
         )
 
@@ -570,19 +627,38 @@ def connect_db(cfg: Config) -> sqlite3.Connection:
     if journal_mode not in {"DELETE", "TRUNCATE", "PERSIST", "MEMORY", "WAL", "OFF"}:
         journal_mode = default_journal_mode
     try:
-        conn.execute(f"PRAGMA journal_mode = {journal_mode}")
+        row = conn.execute(f"PRAGMA journal_mode = {journal_mode}").fetchone()
+        effective_journal_mode = str(row[0] if row else "").strip().upper()
+        if effective_journal_mode and effective_journal_mode != journal_mode:
+            warnings.warn(
+                f"SQLite journal_mode request {journal_mode} resolved to {effective_journal_mode}",
+                RuntimeWarning,
+            )
     except sqlite3.OperationalError as exc:
         locked = "database is locked" in str(exc).lower()
         if locked:
-            pass
+            warnings.warn(
+                f"SQLite journal_mode request {journal_mode} was skipped because the database is locked",
+                RuntimeWarning,
+            )
         elif journal_mode != "WAL":
             raise
         else:
             try:
-                conn.execute("PRAGMA journal_mode = DELETE")
+                row = conn.execute("PRAGMA journal_mode = DELETE").fetchone()
+                effective_journal_mode = str(row[0] if row else "").strip().upper()
+                if effective_journal_mode and effective_journal_mode != "DELETE":
+                    warnings.warn(
+                        f"SQLite journal_mode fallback DELETE resolved to {effective_journal_mode}",
+                        RuntimeWarning,
+                    )
             except sqlite3.OperationalError as fallback_exc:
                 if "database is locked" not in str(fallback_exc).lower():
                     raise
+                warnings.warn(
+                    "SQLite journal_mode fallback DELETE was skipped because the database is locked",
+                    RuntimeWarning,
+                )
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 15000")
     conn.execute("PRAGMA synchronous = NORMAL")
@@ -3236,10 +3312,12 @@ def _arclink_json(value: Mapping[str, Any] | Sequence[Any] | str | None, *, defa
         return default
     if isinstance(value, str):
         try:
-            json.loads(value)
+            parsed = json.loads(value)
         except json.JSONDecodeError as exc:
             raise ValueError("ArcLink JSON fields must contain valid JSON") from exc
+        reject_secret_material(parsed, label="ArcLink control JSON field")
         return value
+    reject_secret_material(value, label="ArcLink control JSON field")
     return json.dumps(value, sort_keys=True)
 
 
@@ -6037,6 +6115,19 @@ def expire_stale_notion_identity_claims(conn: sqlite3.Connection) -> int:
 
 def expire_stale_ssot_pending_writes(conn: sqlite3.Connection) -> int:
     now_iso = utc_now_iso()
+    due = conn.execute(
+        """
+        SELECT 1
+        FROM ssot_pending_writes
+        WHERE status = 'pending'
+          AND expires_at != ''
+          AND expires_at < ?
+        LIMIT 1
+        """,
+        (now_iso,),
+    ).fetchone()
+    if due is None:
+        return 0
     cursor = conn.execute(
         """
         UPDATE ssot_pending_writes
@@ -6994,7 +7085,10 @@ def _write_private_text(path: Path, value: str) -> None:
         path.parent.chmod(0o700)
     except OSError:
         pass
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(path, flags, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write(value.strip() + "\n")
     try:
@@ -7025,6 +7119,18 @@ def onboarding_named_secret_path(cfg: Config, session_id: str, secret_name: str)
 def onboarding_platform_token_secret_path(cfg: Config, session_id: str, platform: str) -> Path:
     normalized = re.sub(r"[^a-z0-9_-]+", "-", str(platform or "bot").strip().lower()) or "bot"
     return onboarding_secret_dir(cfg) / session_id / f"{normalized}-bot-token"
+
+
+def _onboarding_secret_path_is_contained(cfg: Config, raw_path: str) -> bool:
+    if not raw_path:
+        return False
+    try:
+        root = onboarding_secret_dir(cfg).resolve(strict=False)
+        candidate = Path(raw_path).expanduser().resolve(strict=False)
+        candidate.relative_to(root)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return True
 
 
 def write_onboarding_secret(cfg: Config, session_id: str, secret_name: str, raw_value: str) -> str:
@@ -7101,7 +7207,7 @@ def _migrate_onboarding_bot_tokens(conn: sqlite3.Connection, cfg: Config) -> Non
         existing_path = str(row["pending_bot_token_path"] or "").strip()
         if not session_id or not token:
             continue
-        if existing_path:
+        if existing_path and _onboarding_secret_path_is_contained(cfg, existing_path):
             _write_private_text(Path(existing_path), token)
             secret_path = existing_path
         else:
@@ -8085,7 +8191,14 @@ def queue_notification(
         INSERT INTO notification_outbox (target_kind, target_id, channel_kind, message, extra_json, created_at)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (target_kind, target_id, channel_kind, message, json_dumps(extra or {}), utc_now_iso()),
+        (
+            target_kind,
+            target_id,
+            channel_kind,
+            message,
+            json_dumps_safe(extra or {}, label="ArcLink notification extra"),
+            utc_now_iso(),
+        ),
     )
     if commit:
         conn.commit()

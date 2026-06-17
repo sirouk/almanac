@@ -96,3 +96,22 @@ is escaped by both a non-UTF-8 body and a negative `CONTENT_LENGTH` (net-new LOW
 allowlist is effective only if the Next proxy forwards XFF (MEDIUM, conditional); and the admin page
 mishandles 403 (LOW, narrower trigger than first claimed, since `/auth/login` admin auth is itself
 IP-gated). **FEDERATION: BOTH-MODEL-AGREED.**
+
+---
+
+<!-- CANON-REPAIR-STATUS:START -->
+## Repair status
+
+> Refreshed from [`research/canon/fixes/CANON-03-web-product-surface.fix.md`](../fixes/CANON-03-web-product-surface.fix.md) (active untracked). The audit findings above remain the adjudicated spec; this block records the repair campaign state for this piece.
+
+- Status: completed, active uncommitted repair workspace.
+- Summary: 5 fixed / 1 skipped / 2 needs-decision.
+- Tests: 6 pass; `npm run build` blocked by restricted network fetching Google Font `Space Grotesk`
+- Representative fixes:
+  - MEDIUM — server-supplied web hrefs now pass through an `http`/`https` navigation allowlist before render/use: `web/src/lib/api.ts:9`, `web/src/app/onboarding/page.tsx:208`, `web/src/app/onboarding/page.tsx:497`, `web/src/app/checkout/success/page.tsx:51`, `web/src/app/checkout/success/page.tsx:267`, `web/src/app/dashboard/page.tsx:500`, `web/src/app/dashboard/page.tsx:2341`, `web/src/app/dashboard/page.tsx:2834`.
+  - LOW — product_surface negative `CONTENT_LENGTH` no longer reaches `read(-1)`, and invalid UTF-8 no longer escapes WSGI as an unhandled exception: `python/arclink_product_surface.py:793`, `python/arclink_product_surface.py:807`.
+  - INFO — product_surface server-rendered href attributes now reject non-http schemes before `html.escape`: `python/arclink_product_surface.py:148`, `python/arclink_product_surface.py:407`, `python/arclink_product_surface.py:482`.
+- Needs decision:
+  - Admin CIDR allowlist XFF dependency remains: fixing it likely requires replacing the Next rewrite with a controlled proxy or proving Next standalone forwarding in live deployment. That is a transport-contract change wider than CANON-03 page code.
+  - Host-level allowlisting for dynamic ArcPod/fleet dashboard URLs remains policy-sensitive. This patch blocks non-http schemes; constraining arbitrary `https://` hosts needs deployment/domain policy for custom domains, worker URLs, and Tailscale/WireGuard lanes.
+<!-- CANON-REPAIR-STATUS:END -->

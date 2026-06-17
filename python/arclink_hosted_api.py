@@ -191,7 +191,7 @@ class HostedApiConfig:
         self.cookie_samesite: str = _normalize_cookie_samesite(str(e.get("ARCLINK_COOKIE_SAMESITE", SESSION_COOKIE_SAMESITE)))
         cookie_secure_raw = str(e.get("ARCLINK_COOKIE_SECURE", "")).strip()
         self.cookie_secure: bool = (
-            cookie_secure_raw != "0"
+            _cookie_secure_override(cookie_secure_raw)
             if cookie_secure_raw
             else not _is_local_http_origin(self.cors_origin)
         )
@@ -394,6 +394,15 @@ def _normalize_cookie_samesite(value: str) -> str:
     if clean == "lax":
         return "Lax"
     return "Strict"
+
+
+def _cookie_secure_override(value: str) -> bool:
+    clean = str(value or "").strip().lower()
+    if clean in {"0", "false", "no", "off"}:
+        return False
+    if clean in {"1", "true", "yes", "on"}:
+        return True
+    return bool(clean)
 
 
 def _request_id(headers: Mapping[str, Any]) -> str:
@@ -632,10 +641,13 @@ def _remote_ip_from_headers(
     local/trusted backend peer. This preserves reverse-proxy behavior without
     letting an arbitrary public client spoof an allowed source.
     """
-    direct = str(remote_addr or "").strip() or _api_header(headers, "x-real-ip") or "127.0.0.1"
+    direct = str(remote_addr or "").strip()
+    if not direct:
+        return ""
     forwarded = _api_header(headers, "x-forwarded-for")
-    if forwarded and _backend_client_allowed(config, direct):
-        candidate = forwarded.split(",", 1)[0].strip()
+    real_ip = _api_header(headers, "x-real-ip")
+    if _backend_client_allowed(config, direct):
+        candidate = (forwarded.split(",", 1)[0].strip() if forwarded else "") or real_ip
         if candidate:
             return candidate
     return direct
@@ -4027,7 +4039,7 @@ def route_arclink_hosted_api(
     query: Mapping[str, str] | None = None,
     config: HostedApiConfig | None = None,
     stripe_client: Any | None = None,
-    remote_addr: str = "",
+    remote_addr: str = "127.0.0.1",
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
     """Route a single API request and return (status, payload, headers).
 
@@ -4395,6 +4407,15 @@ def make_arclink_hosted_api_wsgi(
             response_body = json.dumps(payload, sort_keys=True).encode("utf-8")
             start_response(_status_text(status_code), response_headers)
             return [response_body]
+        if length < 0:
+            result = _response_with_cors(
+                _json_response(400, {"error": "invalid_content_length", "request_id": request_id}, request_id=request_id),
+                cfg,
+            )
+            status_code, payload, response_headers = result
+            response_body = json.dumps(payload, sort_keys=True).encode("utf-8")
+            start_response(_status_text(status_code), response_headers)
+            return [response_body]
         if length > body_limit:
             result = _response_with_cors(
                 _json_response(413, {"error": "body_too_large", "request_id": request_id}, request_id=request_id),
@@ -4404,7 +4425,17 @@ def make_arclink_hosted_api_wsgi(
             response_body = json.dumps(payload, sort_keys=True).encode("utf-8")
             start_response(_status_text(status_code), response_headers)
             return [response_body]
-        body = environ["wsgi.input"].read(length).decode("utf-8") if length else ""
+        try:
+            body = environ["wsgi.input"].read(length).decode("utf-8") if length else ""
+        except UnicodeDecodeError:
+            result = _response_with_cors(
+                _json_response(400, {"error": "invalid_body_encoding", "request_id": request_id}, request_id=request_id),
+                cfg,
+            )
+            status_code, payload, response_headers = result
+            response_body = json.dumps(payload, sort_keys=True).encode("utf-8")
+            start_response(_status_text(status_code), response_headers)
+            return [response_body]
 
         # Build headers dict from CGI environ
         headers: dict[str, str] = {}

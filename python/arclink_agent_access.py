@@ -70,9 +70,13 @@ def _write_access_state(path: Path, payload: dict[str, Any], *, uid: int, gid: i
     _atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
     try:
         os.chown(path, uid, gid)
-        path.chmod(0o600)
-    except OSError:
-        pass
+    except OSError as exc:
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+        raise RuntimeError(f"failed to set ArcLink access-state owner for {path}: {exc}") from exc
+    path.chmod(0o600)
 
 
 def _owner_ids(unix_user: str) -> tuple[int, int]:

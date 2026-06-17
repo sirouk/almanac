@@ -101,3 +101,19 @@ rollouts/sessions, real readers are dashboard:1545 / hosted_api:961). Both highe
 helpers plus their raw-SQL siblings bypass the boundary secret rejector, so secret hygiene depends on
 each caller. Config-file values are silently shlex-truncated (a real access-control footgun for
 space-separated CIDR allowlists). Net: **BOTH-MODEL-AGREED.**
+
+---
+
+<!-- CANON-REPAIR-STATUS:START -->
+## Repair status
+
+> Refreshed from [`research/canon/fixes/CANON-01-control-plane-schema.fix.md`](../fixes/CANON-01-control-plane-schema.fix.md) (active untracked). The audit findings above remain the adjudicated spec; this block records the repair campaign state for this piece.
+
+- Status: completed, active uncommitted repair workspace.
+- Summary: 9 fixed / 3 skipped / 0 needs-decision.
+- Tests: 16 files run, all pass; py_compile pass; git diff --check pass
+- Representative fixes:
+  - MEDIUM — unguarded `Config.from_env` integer casts now default with warnings instead of crashing — `python/arclink_control.py:161`, `python/arclink_control.py:471`
+  - MEDIUM — config-file parser now preserves multi-token values, handles `export KEY=value`, caches env-file reads, and fails loudly for missing explicit configs while preserving `/dev/null` sentinel — `python/arclink_control.py:347`
+  - MEDIUM — event and notification helper JSON now rejects plaintext secret material before persistence — `python/arclink_control.py:3310`, `python/arclink_control.py:8179`
+<!-- CANON-REPAIR-STATUS:END -->

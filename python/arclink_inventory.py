@@ -159,6 +159,7 @@ def register_inventory_machine(
     tags: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
     provider_billing_ref: str = "",
+    commit: bool = True,
 ) -> dict[str, Any]:
     clean_provider = _clean_provider(provider)
     clean_hostname = _clean_host_value(hostname, label="inventory hostname", required=True)
@@ -273,7 +274,8 @@ def register_inventory_machine(
             metadata={"provider": clean_provider, "hostname": clean_hostname, "machine_host_link": host_link},
             commit=False,
         )
-        conn.commit()
+        if commit:
+            conn.commit()
     except Exception:
         if wrote:
             conn.rollback()

@@ -143,3 +143,22 @@ that masks failure and blocks recovery (**MEDIUM**), and a non-atomic fleet-host
 successful-SSH-bad-data and failed-replay paths. One point (Hetzner live units) stands
 genuinely un-ratifiable from repo code. Federation sign-off:
 **AGREED-WITH-STANDING-DISAGREEMENTS.**
+
+---
+
+<!-- CANON-REPAIR-STATUS:START -->
+## Repair status
+
+> Refreshed from [`research/canon/fixes/CANON-10-inventory-capacity.fix.md`](../fixes/CANON-10-inventory-capacity.fix.md) (tracked). The audit findings above remain the adjudicated spec; this block records the repair campaign state for this piece.
+
+- Status: `bf7e201` committed.
+- Summary: 6 fixed / 3 skipped / 2 needs-decision.
+- Tests: 9 discovered files run: 8 pass / 1 NEEDS-REVIEW. `tests/test_arclink_fleet_join.py` plain invocation failed from host `/etc/arclink/fleet-worker.env` overriding test env; rerun with `ARCLINK_FLEET_WORKER_CONFIG=/tmp/arclink-no-such-fleet-worker.env` passes. `py_compile` and `git diff --check` pass.
+- Representative fixes:
+  - HIGH — fixed `parse_probe_output` disk parsing for normal `/dev/*` and `overlay` `df -BG` rows, plus wrapped device-name rows; bad/missing MemTotal or disk now fails closed instead of returning zero capacity — `python/arclink_inventory.py:430`.
+  - MEDIUM — successful SSH probes with bad parse/ASU data now mark the machine `degraded` and raise instead of leaving stale `ready` capacity — `python/arclink_inventory.py:511`.
+  - MEDIUM — post-provision cloud create failures before inventory registration now attempt compensating `remove_server(..., destroy=True)` and persist failure details/provider refs — `python/arclink_inventory.py:818`, `python/arclink_inventory.py:885`.
+- Needs decision:
+  - Hostname-collision capacity clobber across reused fleet hostnames — fixing safely needs a public contract decision on whether re-registering an existing hostname is allowed to update fleet-host capacity.
+  - `compute_asu` zero RAM/disk global behavior and stale unlinked `asu_consumed` — left unchanged because current contracts explicitly allow zero-capacity summaries and placement-critical rows use linked hosts.
+<!-- CANON-REPAIR-STATUS:END -->

@@ -87,3 +87,25 @@ Reconciled corrections to the record (both models agree):
 8. chown -R TOCTOU is a validate-then-act concern only; the symlink-traversal framing is overstated (plain `chown -R` defaults to `-P`).
 
 Net: the boundary **provably does its job**; the open exposure is operational/contractual (a disk-resident secret on the detached path, a likely-broken cap posture for one helper, an unwired pod-message delivery/status path) rather than a defeat of the privilege boundary itself. Two points (live setpriv EPERM; state-root symlink reality) remain standing disagreements resolvable only outside a read-only audit.
+
+---
+
+<!-- CANON-REPAIR-STATUS:START -->
+## Repair status
+
+> Refreshed from [`research/canon/fixes/CANON-12-gateway-brokers.fix.md`](../fixes/CANON-12-gateway-brokers.fix.md) (tracked). The audit findings above remain the adjudicated spec; this block records the repair campaign state for this piece.
+
+- Status: `c5cec97` committed.
+- Summary: 4 fixed / 5 skipped / 5 needs-decision.
+- Tests: 7 test files run, all pass; py_compile and git diff --check pass
+- Representative fixes:
+  - HIGH — detached public Agent bridge jobs no longer persist `payload.bot_token`; job files strip runtime secrets and worker rehydrates from platform env before broker/bridge execution — python/arclink_notification_delivery.py:960
+  - MEDIUM/LOW — Pod Comms message write and notification enqueue are now one transaction via `queue_notification(commit=False)`; enqueue failure rolls back message/audit/event/rate rows — python/arclink_pod_comms.py:307, python/arclink_control.py:8073
+  - MEDIUM — agent notification consumption now reads `extra_json`, returns parsed `extra`, and marks linked `pod-message` rows delivered with audit/event rows — python/arclink_control.py:9891
+- Needs decision:
+  - agent-process-helper arbitrary uppercase non-secret env pass-through: real surface, but narrowing it is a public process-env contract change.
+  - Pod Comms same-Captain grant bypass and user-pair-scoped cross-Captain grants: changing this would alter sharing semantics/backward compatibility.
+  - agent-user-helper `chown -R` validate-then-act gap: narrow safe fix is not obvious without deciding whether to replace recursive chown with a pinned/fd-based ownership walk.
+  - `record_rejection_incident` silent no-op on unsafe/OSError paths: raising could break rejection handling; needs observability-vs-availability decision.
+  - public_agent_bridge `delivered:true` on absence-of-exception: needs a platform delivery contract, not just local code inference.
+<!-- CANON-REPAIR-STATUS:END -->

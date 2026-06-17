@@ -98,3 +98,22 @@ the restore-smoke symlink-screening gap (LOW). The deeper boundary stands: this 
 operator-gated. Within that boundary, with the HIGH storm defect flagged, the code is sound.
 
 **FEDERATION SIGN-OFF: BOTH-MODEL-AGREED.**
+
+---
+
+<!-- CANON-REPAIR-STATUS:START -->
+## Repair status
+
+> Refreshed from [`research/canon/fixes/CANON-22-backup-restore-wrapped.fix.md`](../fixes/CANON-22-backup-restore-wrapped.fix.md) (tracked). The audit findings above remain the adjudicated spec; this block records the repair campaign state for this piece.
+
+- Status: `bf7e201` committed.
+- Summary: 7 fixed / 3 skipped / 2 needs-decision.
+- Tests: 3 test files + shell syntax + py_compile run, all pass
+- Representative fixes:
+  - HIGH — Wrapped no longer mints duplicate generated reports after enqueue failure; it retries the committed report, backs off failed retries, and emits the persistent operator notice only once — python/arclink_wrapped.py:47, python/arclink_wrapped.py:1102, python/arclink_wrapped.py:1057, python/arclink_wrapped.py:1174
+  - MEDIUM — Wrapped eligibility now counts injected Hermes session/turn activity instead of skipping session-only Captains — python/arclink_wrapped.py:435, python/arclink_wrapped.py:1204
+  - MEDIUM — 404/non-public-or-missing GitHub visibility now requires git read-access proof before backup proceeds on both shared and agent-home lanes — bin/common.sh:1416, bin/backup-agent-home.sh:203, bin/backup-to-github.sh:131
+- Needs decision:
+  - Quiet-hours local/DST semantics: current code is UTC-only; a real local-time fix needs a timezone/config contract.
+  - Backup reconcile single-writer locking: adding in-script flock/state locks would change the current timer/cron ownership model and needs an operator state-path decision.
+<!-- CANON-REPAIR-STATUS:END -->

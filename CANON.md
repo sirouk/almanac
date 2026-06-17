@@ -99,21 +99,25 @@ verified at both ends), not asserted.
 | CANON-29 | Test Corpus | `tests/**` (128 tracked `test_*.py` files), `tests/fixtures`, e2e fake/live gates, `web` playwright tests |
 | CANON-30 | Hermes Plugins & Bridges | `plugins/hermes-agent/**`, `hooks/hermes-agent/**`, `bin/install-arclink-plugins.sh`, `bin/install-hermes-workspace-plugins.sh` |
 | CANON-31 | Operational & Knowledge-Pipeline Scripts, Skills & Templates | `skills/**`, `templates/**`, remaining `bin/*.sh` + `bin/*.py` ops scripts (qmd/pdf/notion/vault/tailscale/memory-synth/quarto/sync) |
-| CANON-32 | Documentation Corpus & Federation Provenance | `AGENTS.md`, `README.md`, `docs/**`, `research/**`, `USER_JOURNEY.md`, `GAPS.md`, `mission_status.md`, `IMPLEMENTATION_PLAN.md`, `DISSECT.md`, root meta files |
+| CANON-32 | Documentation Corpus & Federation Provenance | `AGENTS.md`, `CANON.md`, `DISSECT.md`, `README.md`, `docs/**`, `research/**` including `research/canon/**` sections/verify/codex/reconciled/fixes, `USER_JOURNEY.md`, `GAPS.md`, `mission_status.md`, `IMPLEMENTATION_PLAN.md`, root meta files |
 
 ---
 
 ## 1. Coverage proof (file → piece)
 
-**Headline: 614 / 614 tracked files assigned (100%).** Every file in `git ls-files` is
-mapped to exactly one of the 32 pieces. Full mapping:
-[`research/canon/COVERAGE_MATRIX.md`](research/canon/COVERAGE_MATRIX.md) (614 unique rows,
-zero duplicate rows, zero unassigned rows; per-piece counts sum to 614).
+**Headline: 766 / 766 current workspace corpus files assigned (100%).** The refreshed corpus
+is the union of tracked files (`git ls-files`) and active untracked, non-ignored files
+(`git ls-files --others --exclude-standard`). Every row is mapped to exactly one of the 32
+pieces. Full mapping:
+[`research/canon/COVERAGE_MATRIX.md`](research/canon/COVERAGE_MATRIX.md) (762 tracked rows +
+4 active untracked rows, zero duplicate rows, zero unassigned rows; per-piece counts sum to
+766).
 
-> **Reading the matrix header.** The matrix file's banner reads "Files assigned: 617" — that
-> 617 counts the *piece-declaration* collisions (4 files were declared by two pieces each),
-> **not** double-assigned rows. In the actual matrix each file appears on exactly one row.
-> Real coverage is **614/614**.
+> **Refresh note.** The original CANON baseline matrix covered 614 tracked product/repo files.
+> After CANON itself landed, the repository gained tracked canon, DISSECT, overlay,
+> verification, reconciliation, and repair artifacts. Those artifacts are now explicitly
+> assigned to **CANON-32** instead of sitting outside the map. Active untracked repair outputs
+> are included so this matrix reflects the current repair workspace, not only the last commit.
 
 **Orphans (1).** `bin/arclink-dashboard-placeholder.sh` matches no explicit rule list; it was
 swept into CANON-31 by the `bin/` "everything-else → CANON-31" default. Flagged for Codex —
@@ -128,11 +132,10 @@ it is covered but not *deliberately* placed.
 | `bin/arclink-wrapped.sh` | CANON-22, CANON-31 | **CANON-31** | explicit `bin/` everything-else list |
 | `bin/curator-refresh.sh` | CANON-06, CANON-31 | **CANON-31** | explicit `bin/` rule |
 
-**Three declared-but-untracked files excluded from the matrix** (not in `git ls-files`):
-`.env.live.example` (declared CANON-27), `DISSECT.md` and `analyze_vuln.md` (declared
-CANON-32) show as untracked. This is why CANON-27 shows 11 (not 12) files and CANON-32 shows
-128 (not 130). **These untracked docs are invisible to public-repo hygiene tests and
-DOC_STATUS** — their secret-safety/provenance is unaudited (see Risk Register, CANON-32).
+**Ignored local/operator scratch is still outside the matrix.** `.env.live.example` and
+`analyze_vuln.md` are present locally but ignored by `.gitignore`, so
+`--exclude-standard` omits them. They remain operator/scratch artifacts, not public corpus
+rows. `DISSECT.md` is now tracked and assigned to CANON-32.
 
 **Deviation noted.** `hooks/hermes-agent/**` (the `arclink-telegram-start` bridge) is assigned
 to **CANON-30** (Hermes Plugins & Bridges), not CANON-32, because it is clearly Hermes plugin
@@ -972,7 +975,7 @@ ground truth wherever a piece is ✓ both; the ⚠ pieces carry their exact unre
 ## Status
 
 - **2026-06-16** — **TWO-MODEL-SIGNED milestone LANDED.** Following the Claude Federation half
-  (614/614 cartography, 32 audits, 32 adversarial verifications, this synthesis), the **Codex
+  (baseline 614/614 cartography, 32 audits, 32 adversarial verifications, this synthesis), the **Codex
   (GPT-5.5) independent overlay** (32/32) and the code-decided **Federation reconciliation**
   (32/32 adjudicator passes) are complete. **26 / 32 pieces are BOTH-MODEL-AGREED**; the other
   **6 carry explicit STANDING DISAGREEMENTS** (enumerated above). ~36 Codex-found findings were
@@ -998,9 +1001,12 @@ ground truth wherever a piece is ✓ both; the ⚠ pieces carry their exact unre
 | Commit | Pieces | Repaired HIGHs (sample) | Fixes/Skips/ND | Tests |
 |---|---|---|---|---|
 | `31e7d39` | CANON-09 | DNS bulk-status clobber | 7 / 1 / 4 | 56 re-run green |
-| `c5cec97` | CANON-04/05/07/12/13/30 | `/credentials` private-gate (re-leveled→MED); webhook atomicity; token-injection break; migration non-verify; bot-token-to-disk | 45 / 19 / 15 | 14/14 suites green |
-| `bf7e201` | CANON-10/11/15/17/22/26/29 | df-parse→ASU=0 (fail-closed); **upgrade-pipeline H1 drain wedge + nonce replay** (full DISSECT set); academy SSRF; backup auto-push-to-prod; systemd fail-open; 10 orphaned CI tests | 62 / 22 / 10 | 23/23 suites green |
-| _in progress_ | CANON-01/02/03/06/08 → 14/16/18/19/20 → 21/23/24/25/27/28/31/32 | — | — | — |
+| `c5cec97` | CANON-04/05/07/12/13/30 | `/credentials` private-gate (re-leveled→MED); webhook atomicity; token-injection break; migration non-verify; bot-token-to-disk | 45 / 21 / 14 | 14/14 suites green |
+| `bf7e201` | CANON-10/11/15/17/22/26/29 | df-parse→ASU=0 (fail-closed); **upgrade-pipeline H1 drain wedge + nonce replay** (full DISSECT set); academy SSRF; backup auto-push-to-prod; systemd fail-open; 10 orphaned CI tests | 62 / 22 / 8 | 23/23 suites green |
+| active workspace | CANON-01/02/03 | config/env hardening; hosted API transport footguns; web URL/body hardening | 22 / 4 / 4 | reports green; CANON-03 web build blocked only by restricted Google Font fetch |
+| _in progress_ | CANON-06/08 → 14/16/18/19/20 → 21/23/24/25/27/28/31/32 | — | — | — |
 
-**Progress: 14 / 32 pieces committed.** No risk-accepted design altered; every committed
-piece passed an independent reviewer test re-run.
+**Progress: 14 / 32 pieces committed; 17 / 32 pieces have completed repair reports.**
+No risk-accepted design altered; every committed piece passed an independent reviewer test
+re-run. Active-workspace reports are folded into the per-piece reconciled records, but remain
+uncommitted until reviewer commit.

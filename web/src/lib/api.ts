@@ -1,8 +1,21 @@
 const API_BASE = process.env.NEXT_PUBLIC_ARCLINK_API_URL || "/api/v1";
+const SAFE_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 
 export interface ApiResult<T = Record<string, unknown>> {
   status: number;
   data: T;
+}
+
+export function safeNavigationHref(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const href = value.trim();
+  if (!href) return "";
+  try {
+    const parsed = new URL(href);
+    return SAFE_NAVIGATION_PROTOCOLS.has(parsed.protocol) ? href : "";
+  } catch {
+    return "";
+  }
 }
 
 /**

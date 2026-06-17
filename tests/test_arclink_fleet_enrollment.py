@@ -324,6 +324,50 @@ def test_fingerprint_mismatch_requires_explicit_reattest() -> None:
     print("PASS test_fingerprint_mismatch_requires_explicit_reattest")
 
 
+def test_failed_consume_guard_rolls_back_inventory_side_effects() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_enrollment_consume_rollback_test")
+    enrollment = load_module("arclink_fleet_enrollment.py", "arclink_fleet_enrollment_consume_rollback_test")
+    conn = memory_db(control)
+    minted = enrollment.mint_fleet_enrollment(
+        conn,
+        created_by_user_id="operator-1",
+        secret=SECRET,
+        enrollment_id="flenr_guard_rollback",
+    )
+    original_register = enrollment.register_inventory_machine
+
+    def racing_register(conn_arg, **kwargs):
+        machine = original_register(conn_arg, **kwargs)
+        conn_arg.execute(
+            "UPDATE arclink_fleet_enrollments SET status = 'consumed' WHERE enrollment_id = 'flenr_guard_rollback'"
+        )
+        return machine
+
+    enrollment.register_inventory_machine = racing_register
+    try:
+        try:
+            enrollment.consume_fleet_enrollment(
+                conn,
+                token=minted["token"],
+                payload=_attestation_payload("worker-rollback.example.test"),
+                secret=SECRET,
+            )
+        except enrollment.ArcLinkFleetEnrollmentError as exc:
+            expect("could not be consumed" in str(exc), str(exc))
+        else:
+            raise AssertionError("consume guard failure should be surfaced")
+    finally:
+        enrollment.register_inventory_machine = original_register
+
+    machines = conn.execute("SELECT COUNT(*) AS count FROM arclink_inventory_machines").fetchone()
+    hosts = conn.execute("SELECT COUNT(*) AS count FROM arclink_fleet_hosts").fetchone()
+    token_row = conn.execute("SELECT status FROM arclink_fleet_enrollments WHERE enrollment_id = 'flenr_guard_rollback'").fetchone()
+    expect(machines["count"] == 0, str(dict(machines)))
+    expect(hosts["count"] == 0, str(dict(hosts)))
+    expect(token_row["status"] == "pending", str(dict(token_row)))
+    print("PASS test_failed_consume_guard_rolls_back_inventory_side_effects")
+
+
 def test_audit_chain_tampering_notifies_operator() -> None:
     control = load_module("arclink_control.py", "arclink_control_fleet_enrollment_chain_test")
     enrollment = load_module("arclink_fleet_enrollment.py", "arclink_fleet_enrollment_chain_test")
@@ -351,6 +395,54 @@ def test_audit_chain_tampering_notifies_operator() -> None:
     expect(messages and "P0" in messages[-1]["message"], str(messages))
     expect("arcfleet_v1" not in json.dumps(messages, sort_keys=True), str(messages))
     print("PASS test_audit_chain_tampering_notifies_operator")
+
+
+def test_audit_chain_rejects_unkeyed_legacy_entries_when_secret_is_configured() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_enrollment_legacy_chain_test")
+    enrollment = load_module("arclink_fleet_enrollment.py", "arclink_fleet_enrollment_legacy_chain_test")
+    conn = memory_db(control)
+    minted = enrollment.mint_fleet_enrollment(
+        conn,
+        created_by_user_id="operator-1",
+        secret=SECRET,
+        enrollment_id="flenr_legacy_chain",
+    )
+    worker = enrollment.consume_fleet_enrollment(
+        conn,
+        token=minted["token"],
+        payload=_attestation_payload("worker-legacy-chain.example.test"),
+        secret=SECRET,
+    )
+    prev_hash = ""
+    rows = conn.execute(
+        "SELECT * FROM arclink_fleet_audit_chain WHERE inventory_id = ? ORDER BY rowid ASC",
+        (worker["machine_id"],),
+    ).fetchall()
+    for row in rows:
+        legacy_hash = enrollment._chain_hash(
+            inventory_id=str(row["inventory_id"] or ""),
+            event=str(row["event"] or ""),
+            actor=str(row["actor"] or ""),
+            event_at=str(row["event_at"] or ""),
+            prev_hash=prev_hash,
+            metadata_json=str(row["metadata_json"] or "{}"),
+            secret="",
+        )
+        conn.execute(
+            "UPDATE arclink_fleet_audit_chain SET prev_hash = ?, entry_hash = ? WHERE entry_id = ?",
+            (prev_hash, legacy_hash, str(row["entry_id"])),
+        )
+        prev_hash = legacy_hash
+    conn.commit()
+
+    verified = enrollment.verify_fleet_audit_chain(conn, notify=True, secret=SECRET)
+    expect(verified["ok"] is False, str(verified))
+    expect(any(error.get("error") == "legacy_unkeyed_entry" for error in verified["errors"]), str(verified))
+    notification = conn.execute(
+        "SELECT message FROM notification_outbox WHERE target_id = 'fleet-audit-chain' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    expect(notification is not None and "P0" in notification["message"], str(notification))
+    print("PASS test_audit_chain_rejects_unkeyed_legacy_entries_when_secret_is_configured")
 
 
 def test_cli_list_and_revoke_never_render_token_hash() -> None:
@@ -486,14 +578,20 @@ def test_explicit_reattest_updates_fingerprint_without_rendering_it() -> None:
         payload=_attestation_payload("worker-reattest.example.test"),
         secret=SECRET,
     )
-    new_fingerprint = "sha256:reattested-fingerprint-abcdef1234567890"
-    result = enrollment.reattest_inventory_machine(
-        conn,
-        key=worker["machine_id"],
-        machine_fingerprint=new_fingerprint,
-        actor="operator-1",
-        reason="operator approved replacement disk attestation",
-    )
+    old_env = os.environ.copy()
+    os.environ["ARCLINK_FLEET_ENROLLMENT_SECRET"] = SECRET
+    try:
+        new_fingerprint = "sha256:reattested-fingerprint-abcdef1234567890"
+        result = enrollment.reattest_inventory_machine(
+            conn,
+            key=worker["machine_id"],
+            machine_fingerprint=new_fingerprint,
+            actor="operator-1",
+            reason="operator approved replacement disk attestation",
+        )
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
     expect(result["machine_id"] == worker["machine_id"], str(result))
     expect(new_fingerprint not in json.dumps(result, sort_keys=True), str(result))
     stored = conn.execute(
@@ -519,12 +617,14 @@ def main() -> int:
     test_attestation_rejects_unsafe_network_identity_values()
     test_attestation_accepts_valid_ipv6_wireguard_defaults()
     test_fingerprint_mismatch_requires_explicit_reattest()
+    test_failed_consume_guard_rolls_back_inventory_side_effects()
     test_audit_chain_tampering_notifies_operator()
+    test_audit_chain_rejects_unkeyed_legacy_entries_when_secret_is_configured()
     test_cli_list_and_revoke_never_render_token_hash()
     test_hmac_root_rotation_revokes_pending_tokens_without_rendering_secret()
     test_inventory_health_verifies_chain_and_notifies_expired_enrollments()
     test_explicit_reattest_updates_fingerprint_without_rendering_it()
-    print("PASS all 12 ArcLink fleet enrollment tests")
+    print("PASS all 14 ArcLink fleet enrollment tests")
     return 0
 
 

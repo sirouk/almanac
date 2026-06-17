@@ -56,11 +56,11 @@ def _is_loopback_host(host: str) -> bool:
 def enforce_secure_transport(url: str, *, allow_loopback_http: bool = True) -> None:
     parsed = urllib.parse.urlparse(url)
     scheme = parsed.scheme.lower()
-    if scheme != "http":
+    if scheme == "https":
         return
-    if allow_loopback_http and _is_loopback_host(parsed.hostname or ""):
+    if scheme == "http" and allow_loopback_http and _is_loopback_host(parsed.hostname or ""):
         return
-    raise RuntimeError(f"insecure transport refused for non-loopback URL: {_redact_url_for_error(url)}")
+    raise RuntimeError(f"insecure transport refused for URL: {_redact_url_for_error(url)}")
 
 
 def http_request(
@@ -137,11 +137,11 @@ def parse_json_response(response: HttpResponse, *, label: str) -> Any:
     try:
         return json.loads(response.text)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"{label} returned invalid json: {response.text[:200]}") from exc
+        raise RuntimeError(f"{_redact_url_for_error(label)} returned invalid json: {response.text[:200]}") from exc
 
 
 def parse_json_object(response: HttpResponse, *, label: str) -> dict[str, Any]:
     payload = parse_json_response(response, label=label)
     if isinstance(payload, dict):
         return payload
-    raise RuntimeError(f"{label} returned unexpected payload: {response.text[:200]}")
+    raise RuntimeError(f"{_redact_url_for_error(label)} returned unexpected payload: {response.text[:200]}")

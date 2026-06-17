@@ -85,3 +85,23 @@ provider)/AWS keys through into free-text hints. Plus net-new MEDIUM (late-cance
 LOW (`current_step` reflection) from Codex, and MEDIUM N2/N3 fail-modes. The record's
 `:1093` "bypass" is refuted (it is scanned). Dead statuses, Chutes-API-key drift, and the OLD
 provider-auth trace all re-confirm. **BOTH-MODEL-AGREED.**
+
+---
+
+<!-- CANON-REPAIR-STATUS:START -->
+## Repair status
+
+> Refreshed from [`research/canon/fixes/CANON-04-onboarding-provider-auth.fix.md`](../fixes/CANON-04-onboarding-provider-auth.fix.md) (tracked). The audit findings above remain the adjudicated spec; this block records the repair campaign state for this piece.
+
+- Status: `c5cec97` committed.
+- Summary: 7 fixed / 3 skipped / 3 needs-decision.
+- Tests: 9 test files run + py_compile, all pass
+- Representative fixes:
+  - HIGH — broadened public onboarding secret rejection for Anthropic/OpenAI/Chutes/AWS key shapes and centralized scan for mutable public text/metadata writes — `python/arclink_onboarding.py:120`, `python/arclink_onboarding.py:392`
+  - HIGH — removed entitlement-sync dependency on active-session lookup and stopped stale-expiry from committing inside caller-owned webhook transactions — `python/arclink_onboarding.py:355`, `python/arclink_onboarding.py:844`
+  - HIGH — kept onboarding entitlement sync atomic by making the deployment gate update part of the same final sync commit — `python/arclink_onboarding.py:851`
+- Needs decision:
+  - NEW onboarding never transitions to `completed`: changing `first_contacted` to terminal `completed` is a public state-contract/index behavior change.
+  - OLD completion plaintext shared password in chat: current scrub-on-ack handoff is a deliberate UX/security tradeoff; replacing it needs product flow decision.
+  - `prepare_arclink_onboarding_deployment` committing deployment rows before Stripe checkout: safe fix requires checkout/reservation ordering redesign, not a surgical patch.
+<!-- CANON-REPAIR-STATUS:END -->

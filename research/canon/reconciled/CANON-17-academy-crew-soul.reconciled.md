@@ -81,3 +81,19 @@ None. Every material point reconciled to one code-grounded truth. Two items rema
 CANON-17 provably does its job and is materially MORE built than the prior "scaffold-only / UNBUILT" verdict — confirmed by both models in code. Load-bearing strengths hold: race-safe sticky-mode lifecycle, canonical-URL-deduped central corpus that gates `organization_private` out of sharing, a real stable-id fail-closed `stage_academy_apply` contract, marker-bounded additive SOUL apply that never overwrites the human body, and a bounded SSRF/robots-guarded crawler. Reconciled weaknesses, all code-verified: (1) live crawler + live Trainer ship default-ON in compose, contradicting the documented fake-default stance — the single biggest canon correction; (2) apply materializes vault/qmd/skill/state, not just SOUL+receipt; (3) DNS-rebinding TOCTOU window in the crawler; (4) **`academy_apply` advertises `PG-PROVIDER` but enforces only `PG-HERMES` at the write boundary — deterministic review suffices (NF-1)**; (5) proposal SELECT-then-INSERT TOCTOU with no IntegrityError recovery; (6) latent unimported-`Sequence`; (7) source-lane fail-open and crawl-observation-ID collision are real-but-narrow. The Claude record's blanket `mutation_performed=False` claim and its "consumer reads producer's marker field" framing of Contract #2 are corrected per Codex; the subsystem is real, governed, and proof-gated — but the env-flag DEFAULTS say live, and the provider proof gate is cosmetic at apply-write time.
 
 FEDERATION SIGN-OFF: **BOTH-MODEL-AGREED.**
+
+---
+
+<!-- CANON-REPAIR-STATUS:START -->
+## Repair status
+
+> Refreshed from [`research/canon/fixes/CANON-17-academy-crew-soul.fix.md`](../fixes/CANON-17-academy-crew-soul.fix.md) (tracked). The audit findings above remain the adjudicated spec; this block records the repair campaign state for this piece.
+
+- Status: `bf7e201` committed.
+- Summary: 12 fixed / 3 skipped / 0 needs-decision.
+- Tests: 5 test files run, all pass; py_compile pass; git diff --check pass
+- Representative fixes:
+  - HIGH — Academy live defaults are now opt-in: CE crawl defaults false in code, compose exports `ARCLINK_ACADEMY_CE_LIVE_CRAWL:-0`, and live Trainer compose default is `:-0` — python/arclink_academy_scheduler.py:722, compose.yaml:97
+  - HIGH — DNS rebinding TOCTOU closed by carrying the validated public DNS address into pinned HTTP/HTTPS connections instead of reconnecting by hostname — python/arclink_academy_scheduler.py:76, python/arclink_academy_scheduler.py:199, python/arclink_academy_scheduler.py:275
+  - MEDIUM — Proposal SELECT/INSERT race now catches `sqlite3.IntegrityError` and returns/updates the race-winner as deduped — python/arclink_academy_programs.py:770, python/arclink_academy_programs.py:842
+<!-- CANON-REPAIR-STATUS:END -->

@@ -307,6 +307,33 @@ def test_docker_port_allocation_skips_host_listeners() -> None:
         os.environ.update(old_env)
 
 
+def test_access_state_owner_failure_is_not_silent() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    access_mod = load_module(ACCESS_PY, "arclink_agent_access_owner_failure")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "state" / "arclink-web-access.json"
+        original_chown = access_mod.os.chown
+
+        def fail_chown(path_arg, uid, gid):
+            raise PermissionError("simulated chown failure")
+
+        access_mod.os.chown = fail_chown
+        try:
+            try:
+                access_mod._write_access_state(path, {"agent_id": "agent-owner"}, uid=12345, gid=12345)
+            except RuntimeError as exc:
+                expect("failed to set ArcLink access-state owner" in str(exc), str(exc))
+            else:
+                raise AssertionError("access-state owner failures must not be swallowed")
+        finally:
+            access_mod.os.chown = original_chown
+
+        expect(path.is_file(), "access-state write should have reached disk before chown failed")
+        expect((path.stat().st_mode & 0o777) == 0o600, oct(path.stat().st_mode & 0o777))
+    print("PASS test_access_state_owner_failure_is_not_silent")
+
+
 def test_wait_for_http_reports_last_observation() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -387,9 +414,10 @@ def main() -> int:
     test_publish_tailscale_https_uses_dashboard_port_for_plugins()
     test_clear_tailscale_https_removes_dedicated_ports()
     test_docker_port_allocation_skips_host_listeners()
+    test_access_state_owner_failure_is_not_silent()
     test_wait_for_http_reports_last_observation()
     test_wait_for_http_uses_root_login_path_for_subpaths()
-    print("PASS all 8 agent-access regression tests")
+    print("PASS all 9 agent-access regression tests")
     return 0
 
 

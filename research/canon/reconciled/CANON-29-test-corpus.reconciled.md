@@ -74,3 +74,21 @@ Reconciled real weaknesses, code-grounded and signed by both models:
 6. **LOW — Non-live tests bind loopback sockets** (3 files) and **printed success-summary counts are stale hardcoded literals** (docker "61", executor "41") divorced from actual defined/called counts.
 
 Net: the suite is strong and honest about secrets and live-gating, but its CI wiring has a larger-than-stated load-bearing gap (10 orphans, incl. boundary proofs), is non-hermetic in two files, and the record over-claimed both the orphan count and the Playwright/no-subprocess seams. Federation sign-off: **AGREED-WITH-STANDING-DISAGREEMENTS** (single host-conditional residual).
+
+---
+
+<!-- CANON-REPAIR-STATUS:START -->
+## Repair status
+
+> Refreshed from [`research/canon/fixes/CANON-29-test-corpus.fix.md`](../fixes/CANON-29-test-corpus.fix.md) (tracked). The audit findings above remain the adjudicated spec; this block records the repair campaign state for this piece.
+
+- Status: `bf7e201` committed.
+- Summary: 7 fixed / 4 skipped / 1 needs-decision.
+- Tests: 9 files run, all pass; AST direct-runner scan reports 0 missing; git diff --check pass
+- Representative fixes:
+  - HIGH — wired the remaining current-tree orphan tests into direct runners — tests/test_arclink_chutes_and_adapters.py:783; tests/test_arclink_docker.py:8240,8254; tests/test_arclink_fleet.py:606,607; tests/test_arclink_hosted_api.py:6496; tests/test_deploy_regressions.py:4544,4545.
+  - HIGH — made the J-19 share-grant broker proof run under the real `python3 tests/test_*.py` CI contract — tests/test_arclink_hosted_api.py:6496.
+  - MEDIUM — added a corpus guard that fails when module-level `test_*` functions are not wired into direct runners — tests/test_documentation_truths.py:342.
+- Needs decision:
+  - Literal dedicated new `tests/test_arclink_upgrade_policy.py` / `tests/test_arclink_rejection_incidents.py` files could not be created because the `tests/` directory is not writable in this workspace. I added direct behavioral coverage inside existing runnable files instead.
+<!-- CANON-REPAIR-STATUS:END -->

@@ -80,3 +80,19 @@ None. Every material point reconciled to one code-grounded truth. Two items rema
 
 ## FINAL BOTH-MODEL VERDICT
 CANON-05 provably implements a complete channel-neutral public-bot turn engine with a single authoritative routing law, two transports with genuine fail-closed authn (Telegram shared-secret header + Discord Ed25519, the "sentinel rejection" being cryptographic not a blocklist), idempotent Discord dedupe, fail-closed 20/900 rate limiting, a fail-closed operator confirm/approval gate, and a both-ends-verified async selected-agent bridge (correcting `display_name` to consumer-only-with-fallback). The federation adds **five net-new risks the original record missed**: HIGH `/credentials` leaks the dashboard password into non-DM/non-ephemeral channels (the first reveal is the leak); MEDIUM reusable direct-checkout URL token re-arms the browser/session-claim path; MEDIUM Discord post-reservation failures are permanently non-retryable (stuck deferred ack); LOW swallowed Telegram send leaves committed state with no reply/retry; LOW pre-truncation entity offsets can reject long replies. Codex signed OBJECT(3); after re-opening every cite the adjudicator confirms all three Codex findings plus Claude-verify's GAP-A/B/C/D and upgrades CONTRACT #5 to verified. **FEDERATION SIGN-OFF: BOTH-MODEL-AGREED.**
+
+---
+
+<!-- CANON-REPAIR-STATUS:START -->
+## Repair status
+
+> Refreshed from [`research/canon/fixes/CANON-05-public-bots.fix.md`](../fixes/CANON-05-public-bots.fix.md) (tracked). The audit findings above remain the adjudicated spec; this block records the repair campaign state for this piece.
+
+- Status: `c5cec97` committed.
+- Summary: 9 fixed / 3 skipped / 0 needs-decision.
+- Tests: 6 files run, all pass; py_compile on 6 touched Python modules passes
+- Representative fixes:
+  - HIGH — `/credentials` no longer reveals raw dashboard secrets into unsafe public contexts; Telegram requires private chat metadata, Discord guild interactions are allowed only through ephemeral-capable responses with `flags:64`. `python/arclink_public_bots.py:3670`, `python/arclink_public_bots.py:3768`, `python/arclink_public_bots.py:7647`, `python/arclink_telegram.py:1523`, `python/arclink_discord.py:481`
+  - MEDIUM — public-bot direct-checkout URL tokens are now consumed once with a conditional metadata update before issuing claim cookies/opening checkout. `python/arclink_hosted_api.py:810`, `python/arclink_hosted_api.py:880`
+  - MEDIUM — Discord interactions marked `failed`, plus stale `received` rows, can be retried instead of being permanently treated as duplicates. `python/arclink_discord.py:281`
+<!-- CANON-REPAIR-STATUS:END -->

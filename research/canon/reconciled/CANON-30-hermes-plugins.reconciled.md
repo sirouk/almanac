@@ -71,3 +71,22 @@ The one material correction both models force: **Contract #2 (managed-context to
 Secondary confirmed facts: code git timeout is **15s** (not 30s); code `/git/*` leaks raw git stderr (incl. absolute paths) unredacted (**MEDIUM**); `stage/unstage/commit/gitignore` mutate without a confirm gate (Linked-403 still applies); terminal `ssh` mode is a cosmetic local shell with fully dead target-validation code; the crew producer is `arclink_provisioning.py:842-855` + the `ARCLINK_CREW_DASHBOARDS_JSON` env hop, not the worker.
 
 **FEDERATION SIGN-OFF: BOTH-MODEL-AGREED.**
+
+---
+
+<!-- CANON-REPAIR-STATUS:START -->
+## Repair status
+
+> Refreshed from [`research/canon/fixes/CANON-30-hermes-plugins.fix.md`](../fixes/CANON-30-hermes-plugins.fix.md) (tracked). The audit findings above remain the adjudicated spec; this block records the repair campaign state for this piece.
+
+- Status: `c5cec97` committed.
+- Summary: 8 fixed / 5 skipped / 2 needs-decision.
+- Tests: 2 focused test files run, both pass; `bash -n deploy.sh bin/*.sh test.sh` pass; `py_compile` pass; `git diff --check` pass. Note: bare `python3 tests/test_arclink_plugins.py` hit sandbox tmux `Operation not permitted`; rerun with `TERMINAL_DISABLE_TMUX=1` passed.
+- Representative fixes:
+  - HIGH — managed-context now injects bootstrap tokens for `pod_comms.list/send/share-file` and `ssot.approve/deny`; `agents.register` remains excluded as registration-token flow — plugins/hermes-agent/arclink-managed-context/__init__.py:288
+  - MEDIUM — Code git 400 details now redact repo/workspace/home paths and `token/password/secret/key=` fragments before returning stderr/stdout — plugins/hermes-agent/code/dashboard/plugin_api.py:286, plugins/hermes-agent/code/dashboard/plugin_api.py:1141
+  - MEDIUM — bundled Hermes skills sync now fails closed when runtime skills source is missing, with explicit opt-out only for development no-op runs — bin/sync-hermes-bundled-skills.sh:34
+- Needs decision:
+  - Full replacement of installer regex/indentation YAML edits with a comment-preserving YAML parser. I added backups, but parser replacement needs dependency/formatting policy because current tests intentionally preserve comments and future nested config.
+  - Full Drive denylist/TOCTOU redesign. I fixed the empty-root guard, but complete mitigation likely needs fd-anchored file operations or an allowlist policy that changes file-manager behavior.
+<!-- CANON-REPAIR-STATUS:END -->

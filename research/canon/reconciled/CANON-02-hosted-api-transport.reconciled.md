@@ -146,3 +146,22 @@ token) and the Stripe rotation bug are the money/trust-path items for the RISKS
 register.
 
 FEDERATION SIGN-OFF: **BOTH-MODEL-AGREED.**
+
+---
+
+<!-- CANON-REPAIR-STATUS:START -->
+## Repair status
+
+> Refreshed from [`research/canon/fixes/CANON-02-hosted-api-transport.fix.md`](../fixes/CANON-02-hosted-api-transport.fix.md) (active untracked). The audit findings above remain the adjudicated spec; this block records the repair campaign state for this piece.
+
+- Status: completed, active uncommitted repair workspace.
+- Summary: 8 fixed / 0 skipped / 2 needs-decision.
+- Tests: 7 files run, all pass; py_compile and git diff --check pass
+- Representative fixes:
+  - MEDIUM — broker share-request auth now rejects legacy plain SHA-256 proof-token hashes while preserving legacy proof-token compatibility for non-broker flows — `python/arclink_api_auth.py:249`, `python/arclink_api_auth.py:2502`.
+  - MEDIUM — empty `REMOTE_ADDR` no longer falls back to attacker-controlled `X-Real-IP` or loopback for CIDR/admin-login decisions — `python/arclink_hosted_api.py:644`, `python/arclink_hosted_api.py:4460`.
+  - LOW — login rate-limit buckets now wrap SELECT→INSERT in `BEGIN IMMEDIATE`, closing the remaining throttle TOCTOU path — `python/arclink_api_auth.py:493`.
+- Needs decision:
+  - MEDIUM — `ARCLINK_BASE_DOMAIN` unset still permits the documented dev pepper fallback unless `ARCLINK_SESSION_HASH_PEPPER_REQUIRED=1`; making unset domain fail closed changes local/dev direct-use behavior, while canonical deploy lanes already set/generate the pepper and required flag.
+  - MEDIUM — trusted proxy without `X-Forwarded-For` still collapses to the proxy IP; fixing this cleanly needs a separate proxy-vs-admin-CIDR contract because current `ARCLINK_BACKEND_ALLOWED_CIDRS` represents both direct allowed clients and trusted peers.
+<!-- CANON-REPAIR-STATUS:END -->

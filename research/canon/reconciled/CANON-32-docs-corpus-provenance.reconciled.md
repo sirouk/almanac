@@ -114,3 +114,22 @@ cannot silently drift in content; only the literal word "byte-identical" is over
 across `GTB:295-296`, `docs/API_REFERENCE.md:376`, and `docs/arclink/architecture.md:301`.
 The "totals unguarded" and "parity test fictional" MEDIUM framings are downgraded to
 reflect the guards that exist. **FEDERATION SIGN-OFF: BOTH-MODEL-AGREED.**
+
+---
+
+<!-- CANON-COVERAGE-REFRESH:START -->
+## Coverage refresh status
+
+> Refreshed during the repair-ledger pass. CANON-32 now explicitly owns the canon and
+> provenance artifacts themselves: `CANON.md`, `DISSECT.md`, `research/canon/COVERAGE_MATRIX.md`,
+> `research/canon/CODEX_OVERLAY_BRIEF.md`, `research/canon/run_codex_overlay.sh`,
+> `research/canon/run_codex_fix.sh`, and the `research/canon/{sections,verify,codex,reconciled,fixes}/`
+> report trees.
+
+- Current workspace matrix: 766 / 766 corpus rows assigned, including 762 tracked rows and
+  4 active untracked, non-ignored repair-workspace rows.
+- Ownership decision: canon/provenance/repair artifacts are documentation-corpus artifacts,
+  assigned to CANON-32, not product/runtime surfaces.
+- Ignored local/operator scratch files such as `.env.live.example` and `analyze_vuln.md`
+  remain outside the public corpus matrix because `--exclude-standard` omits them.
+<!-- CANON-COVERAGE-REFRESH:END -->

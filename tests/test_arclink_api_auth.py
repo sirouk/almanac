@@ -376,6 +376,28 @@ def test_rate_limit_exceeded_rolls_back_internal_lock_transaction() -> None:
     print("PASS test_rate_limit_exceeded_rolls_back_internal_lock_transaction")
 
 
+def test_login_rate_limit_uses_immediate_transaction() -> None:
+    control = load_module("arclink_control.py", "arclink_control_api_auth_login_rate_tx_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_login_rate_tx_test")
+    conn = memory_db(control)
+    traces: list[str] = []
+    conn.set_trace_callback(traces.append)
+    try:
+        api._check_login_rate_limits(
+            conn,
+            scope="user_login",
+            clean_email="locked@example.test",
+            client_ip="198.51.100.10",
+            account_limit=10,
+            ip_limit=50,
+        )
+    finally:
+        conn.set_trace_callback(None)
+    expect(any(trace.strip().upper() == "BEGIN IMMEDIATE" for trace in traces), str(traces))
+    expect(not conn.in_transaction, "login rate-limit transaction was not closed")
+    print("PASS test_login_rate_limit_uses_immediate_transaction")
+
+
 def test_admin_api_requires_csrf_reason_idempotency_and_mfa_ready_schema() -> None:
     control = load_module("arclink_control.py", "arclink_control_api_auth_admin_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_admin_test")
@@ -1017,6 +1039,7 @@ def test_proof_token_hashes_use_hmac_and_accept_legacy() -> None:
     legacy = api._hash_token(token)
     expect(not legacy.startswith("hmac_sha256_v1$"), f"legacy hash should be plain SHA-256: {legacy}")
     expect(api._verify_proof_token_hash(token, legacy), "legacy SHA-256 proof hash should still verify")
+    expect(not api._verify_proof_token_hash(token, legacy, allow_legacy=False), "strict proof verification should reject legacy SHA-256")
     expect(not api._verify_proof_token_hash("wrong_token", peppered), "wrong token should not verify (peppered)")
     expect(not api._verify_proof_token_hash("wrong_token", legacy), "wrong token should not verify (legacy)")
     expect(not api._verify_proof_token_hash(token, ""), "empty stored hash should not verify")
@@ -1031,6 +1054,7 @@ def main() -> int:
     test_public_onboarding_api_rejects_invalid_channel_before_rate_limit()
     test_public_onboarding_cancel_does_not_regress_paid_session()
     test_rate_limit_exceeded_rolls_back_internal_lock_transaction()
+    test_login_rate_limit_uses_immediate_transaction()
     test_admin_api_requires_csrf_reason_idempotency_and_mfa_ready_schema()
     test_admin_action_api_rate_limits_by_admin_and_target()
     test_admin_passwords_are_hashed_and_required_for_login()
@@ -1046,7 +1070,7 @@ def main() -> int:
     test_staged_revoke_requires_explicit_transaction()
     test_single_operator_policy_rejects_second_active_owner()
     test_proof_token_hashes_use_hmac_and_accept_legacy()
-    print("PASS all 21 ArcLink API/auth tests")
+    print("PASS all 22 ArcLink API/auth tests")
     return 0
 
 

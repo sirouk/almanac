@@ -173,6 +173,17 @@ def temp_router_db() -> tuple[tempfile.TemporaryDirectory[str], str]:
     return tmp, path
 
 
+def test_router_metadata_json_rejects_plaintext_secret_material() -> None:
+    router = load_module("arclink_llm_router.py", "arclink_llm_router_metadata_secret_test")
+    try:
+        router._safe_metadata_json({"token": "sk-ant-router-secret-123456"})
+    except ValueError as exc:
+        expect("secret material" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected router metadata JSON to reject plaintext secret material")
+    print("PASS test_router_metadata_json_rejects_plaintext_secret_material")
+
+
 class _BufferedStream:
     def __init__(self, response: Any) -> None:
         self.response = response
@@ -1594,6 +1605,7 @@ def test_chat_partial_stream_failure_settles_without_prompt_or_secret_storage() 
 
 
 def main() -> int:
+    test_router_metadata_json_rejects_plaintext_secret_material()
     test_health_reports_unhealthy_without_central_chutes_key()
     test_health_and_models_report_configured_state_without_exposing_key()
     test_upstream_pool_config_is_public_and_secret_safe()
@@ -1616,7 +1628,7 @@ def main() -> int:
     test_provider_side_fallback_csv_default_model_is_allowed_as_single_model_string()
     test_chat_streaming_retries_pre_stream_fallback_and_records_metadata()
     test_chat_partial_stream_failure_settles_without_prompt_or_secret_storage()
-    print("PASS all 22 ArcLink LLM router tests")
+    print("PASS all 23 ArcLink LLM router tests")
     return 0
 
 

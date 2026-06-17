@@ -85,3 +85,19 @@ The CANON-26 unit map, cadence/Type/Restart semantics, install-time gating, and 
 2. the access-state parse is a **silent FAIL-OPEN into broken/half-enabled dashboard+proxy units (HIGH)**, not a fail-closed KeyError; and
 3. the agent-user renderer injection guard is **NOT a strength (MEDIUM defect)** — it guards only `Environment=` lines and its abort is inert inside `$(...)`; only the SYSTEM renderer is genuinely guarded.
 Plus the federation net-new **HIGH SSH-key newline injection** (unrestricted `authorized_keys` line) and a **LOW** unvalidated `from=` interpolation. The agent-id injection is mitigated end-to-end by the PRODUCER's `safe_slug`, not by this piece — so the in-piece guard defect stands as a trust-boundary weakness. Net: architecture YES, safety record CORRECTED. Federation sign-off: AGREED-WITH-STANDING-DISAGREEMENTS (two cross-repo CANON-30 CLI seams only).
+
+---
+
+<!-- CANON-REPAIR-STATUS:START -->
+## Repair status
+
+> Refreshed from [`research/canon/fixes/CANON-26-systemd-units.fix.md`](../fixes/CANON-26-systemd-units.fix.md) (tracked). The audit findings above remain the adjudicated spec; this block records the repair campaign state for this piece.
+
+- Status: `bf7e201` committed.
+- Summary: 7 fixed / 3 skipped / 0 needs-decision.
+- Tests: 5 Python test files run, all pass; bash -n on 4 touched shell scripts passed; py_compile for python/arclink_onboarding_flow.py passed
+- Representative fixes:
+  - HIGH — access-state parsing now fails closed before dashboard/proxy render: validates JSON object plus 1-65535 backend/proxy ports, sets `enable_access_surfaces=1` only after successful parse. `bin/install-agent-user-services.sh:305`
+  - MEDIUM — agent unit directive injection now rejects raw unit fields in the parent shell before heredocs render, including `AGENT_ID`, paths, activation triggers, ports, and dashboard env values. `bin/install-agent-user-services.sh:39`, `bin/install-agent-user-services.sh:66`, `bin/install-agent-user-services.sh:369`
+  - HIGH — SSH public key newline injection is blocked in the root installer with explicit multiline rejection and `[[:blank:]]` separators instead of `[[:space:]]`. `bin/install-agent-ssh-key.sh:56`, `bin/install-agent-ssh-key.sh:61`
+<!-- CANON-REPAIR-STATUS:END -->

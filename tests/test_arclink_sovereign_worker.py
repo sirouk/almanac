@@ -1083,6 +1083,24 @@ def test_sovereign_worker_skips_operator_control_stack_identity() -> None:
     print("PASS test_sovereign_worker_skips_operator_control_stack_identity")
 
 
+def test_sovereign_worker_does_not_skip_operator_agent_literal_in_metadata_value() -> None:
+    control = load_module("arclink_control.py", "arclink_control_sovereign_operator_literal")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_operator_literal")
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    conn.execute(
+        "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = 'dep_1'",
+        (json.dumps({"note": 'documentation mentions "operator_agent" as a string literal'}, sort_keys=True),),
+    )
+    conn.commit()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        results = worker_mod.process_sovereign_batch(conn, worker=worker_config(worker_mod, tmpdir))
+    expect(len(results) == 1 and results[0]["status"] == "applied", str(results))
+    row = conn.execute("SELECT status FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()
+    expect(row["status"] == "active", str(dict(row)))
+    print("PASS test_sovereign_worker_does_not_skip_operator_agent_literal_in_metadata_value")
+
+
 def test_sovereign_worker_fails_closed_without_fleet_capacity() -> None:
     control = load_module("arclink_control.py", "arclink_control_sovereign_nohost")
     worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_nohost")
@@ -1624,6 +1642,7 @@ if __name__ == "__main__":
     test_tailnet_port_allocation_reassigns_existing_conflicting_port()
     test_sovereign_worker_is_disabled_until_explicitly_enabled()
     test_sovereign_worker_skips_operator_control_stack_identity()
+    test_sovereign_worker_does_not_skip_operator_agent_literal_in_metadata_value()
     test_sovereign_worker_fails_closed_without_fleet_capacity()
     test_sovereign_worker_rechecks_lost_entitlement_before_placement()
     test_sovereign_worker_rechecks_missing_user_before_placement()

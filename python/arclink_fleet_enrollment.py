@@ -648,115 +648,120 @@ def consume_fleet_enrollment(
         if existing_fp and not hmac.compare_digest(existing_fp, fingerprint):
             raise ArcLinkFleetEnrollmentError("machine fingerprint mismatch; explicit re-attest required")
 
-    machine = register_inventory_machine(
-        conn,
-        provider=provider,
-        hostname=hostname,
-        ssh_host=ssh_host,
-        ssh_user=ssh_user,
-        region=region,
-        status="pending",
-        hardware_summary=hardware,
-        connectivity_summary={
-            **connectivity,
-            "ok": False,
-            "status": "awaiting_control_probe",
-        },
-        capacity_slots=capacity_slots,
-        tags=tags,
-        metadata=metadata,
-    )
-    now = utc_now_iso()
-    conn.execute(
-        """
-        UPDATE arclink_inventory_machines
-        SET enrollment_id = ?, machine_fingerprint = ?, attested_at = ?, last_probed_at = ?
-        WHERE machine_id = ?
-        """,
-        (str(enrollment["enrollment_id"]), fingerprint, now, now, str(machine["machine_id"])),
-    )
-    host_id = str(machine.get("machine_host_link") or "").strip()
-    if host_id:
+    try:
+        machine = register_inventory_machine(
+            conn,
+            provider=provider,
+            hostname=hostname,
+            ssh_host=ssh_host,
+            ssh_user=ssh_user,
+            region=region,
+            status="pending",
+            hardware_summary=hardware,
+            connectivity_summary={
+                **connectivity,
+                "ok": False,
+                "status": "awaiting_control_probe",
+            },
+            capacity_slots=capacity_slots,
+            tags=tags,
+            metadata=metadata,
+            commit=False,
+        )
+        now = utc_now_iso()
         conn.execute(
             """
-            UPDATE arclink_fleet_hosts
-            SET status = 'degraded', drain = 1, last_health_state = 'awaiting_control_probe',
-                capacity_slots = ?, updated_at = ?
-            WHERE host_id = ?
+            UPDATE arclink_inventory_machines
+            SET enrollment_id = ?, machine_fingerprint = ?, attested_at = ?, last_probed_at = ?
+            WHERE machine_id = ?
             """,
-            (capacity_slots, now, host_id),
+            (str(enrollment["enrollment_id"]), fingerprint, now, now, str(machine["machine_id"])),
         )
-    consumed = conn.execute(
-        """
-        UPDATE arclink_fleet_enrollments
-        SET status = 'consumed', consumed_at = ?, redeemed_by_inventory_id = ?
-        WHERE enrollment_id = ? AND status = 'pending'
-        """,
-        (now, str(machine["machine_id"]), str(enrollment["enrollment_id"])),
-    )
-    if int(consumed.rowcount or 0) != 1:
-        raise ArcLinkFleetEnrollmentError("enrollment token could not be consumed")
-    root = append_fleet_audit_chain_entry(
-        conn,
-        inventory_id=str(machine["machine_id"]),
-        event="enrolled",
-        actor=str(actor or "worker-bootstrap"),
-        metadata={
-            "enrollment_id": str(enrollment["enrollment_id"]),
-            "hostname": hostname,
-            "provider": provider,
-            "private_dns_name": private_dns_name,
-            "tailscale_dns_name": tailscale_dns_name,
-            "wireguard_private_ip": wireguard_private_ip,
-            "fleet_share_transport": "worker-local-ssh-key" if fleet_share_public_key else "",
-        },
-        audit_secret=secret,
-    )
-    verified = append_fleet_audit_chain_entry(
-        conn,
-        inventory_id=str(machine["machine_id"]),
-        event="verified",
-        actor=str(actor or "worker-bootstrap"),
-        metadata={
-            "enrollment_id": str(enrollment["enrollment_id"]),
-            "hostname": hostname,
-            "region": region,
-            "capacity_slots": capacity_slots,
-            "placement_state": "awaiting_control_probe",
-            "private_dns_name": private_dns_name,
-            "tailscale_dns_name": tailscale_dns_name,
-            "wireguard_private_ip": wireguard_private_ip,
-            "fleet_share_transport": "worker-local-ssh-key" if fleet_share_public_key else "",
-        },
-        audit_secret=secret,
-    )
-    conn.execute(
-        "UPDATE arclink_inventory_machines SET audit_trail_chain = ? WHERE machine_id = ?",
-        (str(verified["entry_hash"]), str(machine["machine_id"])),
-    )
-    conn.execute(
-        "UPDATE arclink_fleet_enrollments SET audit_ref = ? WHERE enrollment_id = ?",
-        (str(root["entry_id"]), str(enrollment["enrollment_id"])),
-    )
-    append_arclink_audit(
-        conn,
-        action="fleet_enrollment_consumed",
-        actor_id=str(actor or "worker-bootstrap"),
-        target_kind="inventory_machine",
-        target_id=str(machine["machine_id"]),
-        reason="worker attested with fleet enrollment token",
-        metadata={
-            "enrollment_id": str(enrollment["enrollment_id"]),
-            "hostname": hostname,
-            "host_id": str(machine.get("machine_host_link") or ""),
-            "private_dns_name": private_dns_name,
-            "tailscale_dns_name": tailscale_dns_name,
-            "wireguard_private_ip": wireguard_private_ip,
-            "fleet_share_transport": "worker-local-ssh-key" if fleet_share_public_key else "",
-        },
-        commit=False,
-    )
-    conn.commit()
+        host_id = str(machine.get("machine_host_link") or "").strip()
+        if host_id:
+            conn.execute(
+                """
+                UPDATE arclink_fleet_hosts
+                SET status = 'degraded', drain = 1, last_health_state = 'awaiting_control_probe',
+                    capacity_slots = ?, updated_at = ?
+                WHERE host_id = ?
+                """,
+                (capacity_slots, now, host_id),
+            )
+        consumed = conn.execute(
+            """
+            UPDATE arclink_fleet_enrollments
+            SET status = 'consumed', consumed_at = ?, redeemed_by_inventory_id = ?
+            WHERE enrollment_id = ? AND status = 'pending'
+            """,
+            (now, str(machine["machine_id"]), str(enrollment["enrollment_id"])),
+        )
+        if int(consumed.rowcount or 0) != 1:
+            raise ArcLinkFleetEnrollmentError("enrollment token could not be consumed")
+        root = append_fleet_audit_chain_entry(
+            conn,
+            inventory_id=str(machine["machine_id"]),
+            event="enrolled",
+            actor=str(actor or "worker-bootstrap"),
+            metadata={
+                "enrollment_id": str(enrollment["enrollment_id"]),
+                "hostname": hostname,
+                "provider": provider,
+                "private_dns_name": private_dns_name,
+                "tailscale_dns_name": tailscale_dns_name,
+                "wireguard_private_ip": wireguard_private_ip,
+                "fleet_share_transport": "worker-local-ssh-key" if fleet_share_public_key else "",
+            },
+            audit_secret=secret,
+        )
+        verified = append_fleet_audit_chain_entry(
+            conn,
+            inventory_id=str(machine["machine_id"]),
+            event="verified",
+            actor=str(actor or "worker-bootstrap"),
+            metadata={
+                "enrollment_id": str(enrollment["enrollment_id"]),
+                "hostname": hostname,
+                "region": region,
+                "capacity_slots": capacity_slots,
+                "placement_state": "awaiting_control_probe",
+                "private_dns_name": private_dns_name,
+                "tailscale_dns_name": tailscale_dns_name,
+                "wireguard_private_ip": wireguard_private_ip,
+                "fleet_share_transport": "worker-local-ssh-key" if fleet_share_public_key else "",
+            },
+            audit_secret=secret,
+        )
+        conn.execute(
+            "UPDATE arclink_inventory_machines SET audit_trail_chain = ? WHERE machine_id = ?",
+            (str(verified["entry_hash"]), str(machine["machine_id"])),
+        )
+        conn.execute(
+            "UPDATE arclink_fleet_enrollments SET audit_ref = ? WHERE enrollment_id = ?",
+            (str(root["entry_id"]), str(enrollment["enrollment_id"])),
+        )
+        append_arclink_audit(
+            conn,
+            action="fleet_enrollment_consumed",
+            actor_id=str(actor or "worker-bootstrap"),
+            target_kind="inventory_machine",
+            target_id=str(machine["machine_id"]),
+            reason="worker attested with fleet enrollment token",
+            metadata={
+                "enrollment_id": str(enrollment["enrollment_id"]),
+                "hostname": hostname,
+                "host_id": str(machine.get("machine_host_link") or ""),
+                "private_dns_name": private_dns_name,
+                "tailscale_dns_name": tailscale_dns_name,
+                "wireguard_private_ip": wireguard_private_ip,
+                "fleet_share_transport": "worker-local-ssh-key" if fleet_share_public_key else "",
+            },
+            commit=False,
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     machine = dict(conn.execute("SELECT * FROM arclink_inventory_machines WHERE machine_id = ?", (str(machine["machine_id"]),)).fetchone())
     return {
         "enrollment_id": str(enrollment["enrollment_id"]),
@@ -889,6 +894,10 @@ def verify_fleet_audit_chain(
             elif not hmac.compare_digest(actual_hash, expected_hash):
                 errors.append({"entry_id": str(row["entry_id"]), "inventory_id": inv, "error": "entry_hash_mismatch"})
         else:
+            if chain_secret:
+                errors.append({"entry_id": str(row["entry_id"]), "inventory_id": inv, "error": "legacy_unkeyed_entry"})
+                prev_by_inventory[inv] = actual_hash
+                continue
             legacy_hash = _chain_hash(
                 inventory_id=inv,
                 event=str(row["event"] or ""),

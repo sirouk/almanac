@@ -66,3 +66,23 @@ None. Every material point reconciled to a single code-grounded truth. The bind-
 
 ## FINAL BOTH-MODEL VERDICT
 The Executor is a genuinely fail-closed (`_require_live_enabled` on every mutator except dry-run), dependency-injected step engine with strong code-enforced path containment for deployment config files (root/`arclink.env`/`compose.yaml`/`arclink-{id}` project), atomic 0600 **secret** materialization with flock, exception-time secret cleanup, topological service ordering with cycle detection, secret-redacted errors, and a broker wire contract verified byte-for-byte against CANON-12. The reconciliation sustains Codex's OBJECT: the **live provider-mutation surface is thinner than the record's prose implies** — live Chutes/Stripe raise before any provider call (clients never injected), `cloudflare_access_apply` and `rollback_apply` are success-reporting no-ops with no production callers, the durable idempotency ledger is dead on the executor's `operation_conn` (though the table itself is used elsewhere), rendered env/compose/remote-prepare files are non-atomic, and local/broker volume bind sources are unconstrained. The Claude HIGH stands but is re-scoped from a current double-execution hazard to a latent one. Net: a well-built, correctly-gated engine that **ships a richer live API than production wires or exercises**, with the strongest idempotency guarantee being the one production silently disables and the live provider-admin paths being either unreachable or no-ops today.
+
+---
+
+<!-- CANON-REPAIR-STATUS:START -->
+## Repair status
+
+> Refreshed from [`research/canon/fixes/CANON-11-executor.fix.md`](../fixes/CANON-11-executor.fix.md) (tracked). The audit findings above remain the adjudicated spec; this block records the repair campaign state for this piece.
+
+- Status: `bf7e201` committed.
+- Summary: 9 fixed / 3 skipped / 3 needs-decision.
+- Tests: 1 test file run, all pass (60/60); py_compile pass; git diff --check pass
+- Representative fixes:
+  - HIGH — wired production factory to inject `operation_conn` from `ARCLINK_DB_PATH`, with schema ensured. `python/arclink_executor.py:80`, `python/arclink_executor.py:158`
+  - HIGH — live Chutes/Stripe provider actions now fail closed if an injected client lacks durable operation idempotency DB. `python/arclink_executor.py:1217`, `python/arclink_executor.py:1342`
+  - MEDIUM — Cloudflare DNS upsert now serializes per zone/type/hostname with an advisory file lock around find-then-create/update. `python/arclink_executor.py:2563`, `python/arclink_executor.py:2603`
+- Needs decision:
+  - Live Chutes/Stripe admin clients are still not production-implemented/wired. Executor now requires durable DB before any injected client can run, but real Chutes key management and Stripe refund/cancel semantics need provider/product decisions.
+  - Generic ArcLink replay ledger for compose/lifecycle/DNS beyond the DNS lock needs a contract decision; current compose apply keys can be reused across legitimate deployment updates, so naive replay would break re-apply flows.
+  - SSH TOFU default (`StrictHostKeyChecking=accept-new`) left unchanged; tightening it would affect first-contact fleet bootstrap policy.
+<!-- CANON-REPAIR-STATUS:END -->

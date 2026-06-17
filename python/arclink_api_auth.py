@@ -246,14 +246,16 @@ def _hash_proof_token(token: str) -> str:
     return f"{ARCLINK_SESSION_HASH_ALGORITHM}${digest}"
 
 
-def _verify_proof_token_hash(token: str, stored_hash: str) -> bool:
-    """Verify a proof token hash, accepting both HMAC-peppered and legacy SHA-256."""
+def _verify_proof_token_hash(token: str, stored_hash: str, *, allow_legacy: bool = True) -> bool:
+    """Verify a proof token hash, optionally accepting legacy plain SHA-256."""
     stored = str(stored_hash or "").strip()
     if not stored:
         return False
     current = _hash_proof_token(token)
     if stored.startswith(f"{ARCLINK_SESSION_HASH_ALGORITHM}$"):
         return hmac.compare_digest(stored, current)
+    if not allow_legacy:
+        return False
     legacy = _hash_token(token)
     return hmac.compare_digest(stored, legacy)
 
@@ -488,29 +490,40 @@ def _check_login_rate_limits(
         )
     window = max(1, int(window_seconds or 1))
     cutoff = (utc_now() - dt.timedelta(seconds=window)).replace(microsecond=0).isoformat()
-    for bucket_scope, bucket_subject, bucket_limit in bucket_specs:
-        effective_limit = max(1, int(bucket_limit or 1))
-        count = conn.execute(
-            """
-            SELECT COUNT(*) AS n
-            FROM rate_limits
-            WHERE scope = ? AND subject = ? AND observed_at >= ?
-            """,
-            (bucket_scope, bucket_subject, cutoff),
-        ).fetchone()["n"]
-        if int(count) >= effective_limit:
-            raise ArcLinkRateLimitError(
-                "ArcLink rate limit exceeded",
-                limit=effective_limit,
-                remaining=0,
-                reset_seconds=window,
-            )
-    now = utc_now_iso()
-    conn.executemany(
-        "INSERT INTO rate_limits (scope, subject, observed_at) VALUES (?, ?, ?)",
-        [(bucket_scope, bucket_subject, now) for bucket_scope, bucket_subject, _limit in bucket_specs],
-    )
-    conn.commit()
+    started_transaction = False
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+        started_transaction = True
+    try:
+        for bucket_scope, bucket_subject, bucket_limit in bucket_specs:
+            effective_limit = max(1, int(bucket_limit or 1))
+            count = conn.execute(
+                """
+                SELECT COUNT(*) AS n
+                FROM rate_limits
+                WHERE scope = ? AND subject = ? AND observed_at >= ?
+                """,
+                (bucket_scope, bucket_subject, cutoff),
+            ).fetchone()["n"]
+            if int(count) >= effective_limit:
+                if started_transaction:
+                    conn.rollback()
+                raise ArcLinkRateLimitError(
+                    "ArcLink rate limit exceeded",
+                    limit=effective_limit,
+                    remaining=0,
+                    reset_seconds=window,
+                )
+        now = utc_now_iso()
+        conn.executemany(
+            "INSERT INTO rate_limits (scope, subject, observed_at) VALUES (?, ?, ?)",
+            [(bucket_scope, bucket_subject, now) for bucket_scope, bucket_subject, _limit in bucket_specs],
+        )
+        conn.commit()
+    except Exception:
+        if started_transaction and conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 def upsert_arclink_admin(
@@ -2486,7 +2499,7 @@ def _authenticate_share_request_broker(
     if broker.get("enabled") is False:
         raise ArcLinkApiAuthError("ArcLink share-request broker is disabled")
     token_hash = str(broker.get("token_hash") or "").strip()
-    if not token_hash or not _verify_proof_token_hash(clean_token, token_hash):
+    if not token_hash or not _verify_proof_token_hash(clean_token, token_hash, allow_legacy=False):
         raise ArcLinkApiAuthError("ArcLink share-request broker token is invalid")
     return {
         "deployment_id": str(deployment.get("deployment_id") or ""),

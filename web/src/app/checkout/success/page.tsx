@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { api } from "@/lib/api";
+import { api, safeNavigationHref } from "@/lib/api";
 import { StatusBadge, LoadingSpinner } from "@/components/ui";
 
 const RESUME_KEY = "arclink_onboarding_resume";
@@ -47,6 +47,11 @@ type CheckoutStatusData = {
   agent_count?: number;
   ready_count?: number;
 };
+
+function deploymentHref(deployment: DeploymentStatus) {
+  const urls = deployment.access?.urls || {};
+  return safeNavigationHref(urls.hermes) || safeNavigationHref(urls.dashboard);
+}
 
 export default function CheckoutSuccessPage() {
   return (
@@ -147,10 +152,10 @@ function CheckoutSuccessContent() {
             nextDeployments.find((deployment) => deployment.bundle_agent_count)?.bundle_agent_count ||
             nextDeployments.length ||
             1;
-          const nextReadyCount = data.ready_count ?? nextDeployments.filter((deployment) => {
-            const urls = deployment.access?.urls || {};
-            return deployment.ready && (urls.hermes || urls.dashboard);
-          }).length;
+          const dashboardReadyCount = nextDeployments.filter(
+            (deployment) => deployment.ready && deploymentHref(deployment),
+          ).length;
+          const nextReadyCount = nextDeployments.length ? dashboardReadyCount : data.ready_count ?? 0;
           setDeployments(nextDeployments);
           setAgentCount(expectedCount);
           setReadyCount(nextReadyCount);
@@ -161,10 +166,7 @@ function CheckoutSuccessContent() {
           const allExpectedDashboardsReady =
             nextDeployments.length >= expectedCount &&
             nextDeployments.length > 0 &&
-            nextDeployments.every((deployment) => {
-              const urls = deployment.access?.urls || {};
-              return deployment.ready && (urls.hermes || urls.dashboard);
-            });
+            nextDeployments.every((deployment) => deployment.ready && deploymentHref(deployment));
           if (allExpectedDashboardsReady) {
             setDeploymentReady(true);
           } else {
@@ -265,8 +267,7 @@ function CheckoutSuccessContent() {
 
         <div className="mt-6 grid gap-3">
           {deployments.length > 0 ? deployments.map((deployment, index) => {
-            const urls = deployment.access?.urls || {};
-            const href = urls.hermes || urls.dashboard || "";
+            const href = deploymentHref(deployment);
             const label = deployment.agent_label || `Hermes Agent ${deployment.bundle_agent_index || index + 1}`;
             const ready = Boolean(deployment.ready && href);
             return ready ? (

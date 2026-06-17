@@ -34,9 +34,10 @@ import sqlite3
 import sys
 from typing import Any, Callable, Mapping, Sequence
 
+from arclink_boundary import json_dumps_safe
 from arclink_control import utc_now_iso
 from arclink_evidence import redact_value
-from arclink_secrets_regex import contains_secret_material, redact_secret_material
+from arclink_secrets_regex import REDACTION_TEXT, contains_secret_material, redact_secret_material
 
 
 WRAPPED_FREQUENCIES = {"daily", "weekly", "monthly"}
@@ -134,6 +135,10 @@ def _json_dumps(value: Mapping[str, Any]) -> str:
     return json.dumps(dict(value), sort_keys=True)
 
 
+def _notification_extra_json(value: Mapping[str, Any]) -> str:
+    return json_dumps_safe(dict(value), label="ArcLink Wrapped notification extra")
+
+
 def _deployment_metadata(row: Mapping[str, Any]) -> Mapping[str, Any]:
     parsed = _json_loads(str(row.get("metadata_json") or "{}"), {})
     return parsed if isinstance(parsed, Mapping) else {}
@@ -175,9 +180,11 @@ def _redact_text(value: Any) -> str:
         return ""
     redacted = redact_secret_material(text)
     if redacted != text:
+        if contains_secret_material(redacted, allow_safe_refs=False):
+            return REDACTION_TEXT
         return redacted
     if contains_secret_material(text, allow_safe_refs=False):
-        return redact_value(text)
+        return REDACTION_TEXT
     return redacted
 
 
@@ -999,7 +1006,7 @@ def enqueue_wrapped_report_notification(
             channel["target_id"],
             channel["channel_kind"],
             message,
-            _json_dumps(extra),
+            _notification_extra_json(extra),
             created_at,
             next_attempt_at,
         ),

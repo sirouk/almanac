@@ -180,6 +180,17 @@ def seed_wrapped_fixture(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def test_wrapped_notification_extra_json_rejects_plaintext_secret_material() -> None:
+    wrapped = load_module(WRAPPED_PY, "arclink_wrapped_test_secret_json")
+    try:
+        wrapped._notification_extra_json({"token": "sk-proj-abcdefghijklmnopqrstuvwxyz"})
+    except ValueError as exc:
+        expect("secret material" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected Wrapped JSON persistence helper to reject plaintext secret material")
+    print("PASS test_wrapped_notification_extra_json_rejects_plaintext_secret_material")
+
+
 def test_generate_wrapped_report_is_scoped_redacted_and_persisted() -> None:
     wrapped = load_module(WRAPPED_PY, "arclink_wrapped_test_core")
     conn = memory_db()
@@ -581,6 +592,7 @@ def test_wrapped_scheduler_retries_failures_and_notifies_operator_after_persiste
 
 
 def main() -> int:
+    test_wrapped_notification_extra_json_rejects_plaintext_secret_material()
     test_generate_wrapped_report_is_scoped_redacted_and_persisted()
     test_wrapped_report_score_is_deterministic_for_same_inputs()
     test_wrapped_frequency_periods_due_and_admin_privacy()
@@ -589,7 +601,7 @@ def main() -> int:
     test_wrapped_delivery_normalizes_add_agent_contacts_and_skips_missing_channel()
     test_wrapped_scheduler_retries_committed_report_delivery_without_duplicate_generation()
     test_wrapped_scheduler_retries_failures_and_notifies_operator_after_persistent_failure()
-    print("PASS all 8 ArcLink Wrapped tests")
+    print("PASS all 9 ArcLink Wrapped tests")
     return 0
 
 

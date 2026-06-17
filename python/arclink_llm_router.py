@@ -16,6 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from arclink_chutes import ChutesCatalogClient, ChutesCatalogError, evaluate_chutes_deployment_boundary, record_chutes_usage_event
+from arclink_boundary import json_dumps_safe
 from arclink_control import (
     ensure_schema,
     get_model_catalog_entry,
@@ -26,7 +27,7 @@ from arclink_control import (
     upsert_model_catalog,
     verify_llm_router_key,
 )
-from arclink_secrets_regex import redact_then_truncate
+from arclink_secrets_regex import REDACTION_TEXT, contains_secret_material, redact_then_truncate
 
 
 DEFAULT_CHUTES_BASE_URL = "https://llm.chutes.ai/v1"
@@ -666,11 +667,18 @@ def _upstream_status_is_retryable(config: RouterConfig, status_code: int) -> boo
 
 
 def _safe_upstream_error(value: Any) -> str:
-    return redact_then_truncate(value, limit=300)
+    redacted = redact_then_truncate(value, limit=300)
+    if contains_secret_material(redacted, allow_safe_refs=False):
+        return REDACTION_TEXT
+    return redacted
 
 
 def _metadata_json(metadata: Mapping[str, Any]) -> str:
     return json.dumps(dict(metadata or {}), sort_keys=True, separators=(",", ":"))
+
+
+def _safe_metadata_json(metadata: Mapping[str, Any]) -> str:
+    return json_dumps_safe(dict(metadata or {}), label="ArcLink LLM router metadata")
 
 
 def _public_fallback_attempts(attempts: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -758,7 +766,7 @@ def _record_fallback_attempt_event(config: RouterConfig, metadata: Mapping[str, 
                 (
                     f"evt_{uuid.uuid4().hex}",
                     str(metadata.get("deployment_id") or ""),
-                    _metadata_json(metadata),
+                    _safe_metadata_json(metadata),
                     _utc_now_iso(),
                 ),
             )
@@ -1035,7 +1043,7 @@ def _queue_arc_pod_fuel_notice(
                     monthly_budget_cents=monthly_budget,
                     usage_percent=usage_percent,
                 ),
-                json.dumps(_fuel_notice_actions(), sort_keys=True),
+                _safe_metadata_json(_fuel_notice_actions()),
                 _utc_now_iso(),
             ),
         )
@@ -1048,7 +1056,7 @@ def _queue_arc_pod_fuel_notice(
             (
                 f"evt_{uuid.uuid4().hex}",
                 clean_deployment,
-                json.dumps(
+                _safe_metadata_json(
                     {
                         "user_id": clean_user,
                         "notice_key": notice_key,
@@ -1057,8 +1065,7 @@ def _queue_arc_pod_fuel_notice(
                         "monthly_budget_cents": monthly_budget,
                         "usage_percent": usage_percent,
                         "notification_id": notification_id,
-                    },
-                    sort_keys=True,
+                    }
                 ),
                 _utc_now_iso(),
             ),

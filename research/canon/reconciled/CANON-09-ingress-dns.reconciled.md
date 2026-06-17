@@ -56,3 +56,24 @@ None. Codex OBJECT(2) is fully absorbed: the prefix-collision REFINE is adopted 
 
 ## FINAL BOTH-MODEL VERDICT
 CANON-09 provably does its core job: compute desired domain-mode dashboard/hermes CNAME (proxied) records, persist them into `arclink_dns_records` with a desired->provisioned->torn_down state machine (status-preserving upsert), emit matching `arclink_events`, and render Traefik domain/tailscale router labels. Every live seam to CANON-08 (provisioning intent, persist, teardown-read), CANON-11 (executor request/result shapes), and CANON-01 (events/schema) is both-ends-verified and code-consistent; 6 tests pass. Reconciled risk register: (1) MEDIUM doc-trust dead/divergent `cloudflare`-object API surface (operational LOW); (2) MEDIUM bulk status clobber on partial-deployment teardown; (3) **NEW MEDIUM** `dns_repair` untracked-apply (Cloudflare write with no DB row -> teardown blind spot); (4) LOW provider_record_id out-of-piece coupling; (5) LOW prefix-collision DNS-index IntegrityError (downgraded from MEDIUM — bypass/corruption only, gated by CANON-08 prefix reservation); (6) LOW `except Exception` retry breadth (dead code); (7) INFO teardown over-report of never-deleted hostnames as removed; (8) INFO unused tailscale params, per-call/mid-deployment commits, empty-dict commit, dead 4-hostname teardown overshoot. None break the happy path. FEDERATION SIGN-OFF: BOTH-MODEL-AGREED.
+
+---
+
+<!-- CANON-REPAIR-STATUS:START -->
+## Repair status
+
+> Refreshed from [`research/canon/fixes/CANON-09-ingress-dns.fix.md`](../fixes/CANON-09-ingress-dns.fix.md) (tracked). The audit findings above remain the adjudicated spec; this block records the repair campaign state for this piece.
+
+- Status: `31e7d39` committed.
+- Summary: 7 fixed / 1 skipped / 4 needs-decision.
+- Tests: 4 pass / 2 environment-blocked. Passed: `tests/test_arclink_ingress.py`, `tests/test_arclink_action_worker.py`, `tests/test_arclink_provisioning.py`, `tests/test_arclink_admin_actions.py`, plus `py_compile` and targeted executor teardown regression. Blocked: full `tests/test_arclink_executor.py` and `tests/test_arclink_sovereign_worker.py` hit pre-existing `/arcdata/...` permission errors after/before the touched paths.
+- Representative fixes:
+  - MEDIUM — `dns_repair` now persists validated DNS rows before Cloudflare apply, then marks provisioned rows and backfills provider IDs after success. `python/arclink_action_worker.py:236`, `python/arclink_action_worker.py:889`, `python/arclink_action_worker.py:911`; `python/arclink_ingress.py:191`
+  - MEDIUM — DNS teardown/provision status marking is now hostname-scoped, so partial teardown no longer bulk-clobbers every deployment DNS row. `python/arclink_ingress.py:153`, `python/arclink_ingress.py:219`
+  - LOW — live Cloudflare teardown now returns only actually deleted/found records, not every attempted hostname. `python/arclink_executor.py:1036`, `python/arclink_executor.py:2572`
+- Needs decision:
+  - Torn-down-row/global DNS unique-index collision: left unchanged because the normal path is gated by CANON-08 prefix reservation, and changing the index/delete semantics is a schema/contract decision. `python/arclink_control.py:2077`
+  - Persisted `proxied` drift: left unchanged because fixing it needs a DB schema and live drift contract change, not a surgical CANON-09 patch. `python/arclink_ingress.py:74`
+  - Public unused `tailscale_dns_name` / `tailscale_host_strategy` args on `desired_arclink_ingress_records`: left unchanged because removing or repurposing them is a public signature decision. `python/arclink_ingress.py:46`
+  - Non-empty internal commits in DNS helpers remain; removing them would change caller transaction semantics outside the narrow empty-record no-op.
+<!-- CANON-REPAIR-STATUS:END -->

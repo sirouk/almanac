@@ -19,6 +19,7 @@ import re
 import stat
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -696,8 +697,44 @@ def _public_agent_bridge_root_wrapper_enabled() -> bool:
     return raw not in {"", "0", "false", "no", "off"}
 
 
-def _public_agent_bridge_root_exec_cmd(container: str) -> list[str]:
+_ROOT_WRAPPER_PRESENT_CACHE: dict[tuple[str, ...], tuple[float, bool]] = {}
+_ROOT_WRAPPER_PRESENT_TTL_SECONDS = 300
+
+
+def _gateway_has_public_agent_bridge_root_wrapper(exec_prefix: list[str]) -> bool:
+    """Cached read-only PREFLIGHT: does the target gateway image carry the L2 root
+    wrapper script? If it is absent — or we cannot verify it — callers fall back to the
+    legacy bridge command. This is what prevents a flag-on-but-image-not-rebuilt skew
+    from hard-failing every turn (the 2026-06-18 outage). exec_prefix is the docker /
+    compose exec prefix (no bridge tail); the probe runs `<prefix> test -e <wrapper>`.
+    """
+    key = tuple(str(part) for part in exec_prefix)
+    now = time.time()
+    cached = _ROOT_WRAPPER_PRESENT_CACHE.get(key)
+    if cached is not None and (now - cached[0]) < _ROOT_WRAPPER_PRESENT_TTL_SECONDS:
+        return cached[1]
+    docker_binary = str(os.environ.get("ARCLINK_DOCKER_BINARY") or "").strip() or "docker"
+    probe = [docker_binary, *list(exec_prefix)[1:], "test", "-e", PUBLIC_AGENT_BRIDGE_ROOT_WRAPPER_SCRIPT]
+    present = False
+    try:
+        proc = subprocess.run(probe, capture_output=True, timeout=15, check=False)
+        present = proc.returncode == 0
+    except Exception:
+        present = False
+    _ROOT_WRAPPER_PRESENT_CACHE[key] = (now, present)
+    return present
+
+
+def _should_use_public_agent_bridge_root_wrapper(exec_prefix: list[str]) -> bool:
+    # Use the L2 root wrapper ONLY when the flag is on AND the wrapper is provably
+    # present in the gateway image; otherwise fall back to legacy (never hard-fail).
     if not _public_agent_bridge_root_wrapper_enabled():
+        return False
+    return _gateway_has_public_agent_bridge_root_wrapper(exec_prefix)
+
+
+def _public_agent_bridge_root_exec_cmd(container: str) -> list[str]:
+    if not _should_use_public_agent_bridge_root_wrapper(["docker", "exec", container]):
         return ["docker", "exec", "-i", container, PUBLIC_AGENT_BRIDGE_PYTHON, PUBLIC_AGENT_BRIDGE_SCRIPT]
     return [
         "docker",
@@ -712,7 +749,12 @@ def _public_agent_bridge_root_exec_cmd(container: str) -> list[str]:
 
 
 def _public_agent_bridge_compose_root_exec_cmd(*, project_name: str, env_file: Path, compose_file: Path) -> list[str]:
-    if not _public_agent_bridge_root_wrapper_enabled():
+    compose_prefix = [
+        "docker", "compose", "-p", project_name,
+        "--env-file", str(env_file), "-f", str(compose_file),
+        "exec", "-T", "hermes-gateway",
+    ]
+    if not _should_use_public_agent_bridge_root_wrapper(compose_prefix):
         return [
             "docker", "compose", "-p", project_name,
             "--env-file", str(env_file), "-f", str(compose_file),

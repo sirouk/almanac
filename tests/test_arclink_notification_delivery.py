@@ -3549,22 +3549,95 @@ def test_public_agent_bridge_root_wrapper_gated_on_getme_cache_flag() -> None:
     )
     container = "arclink-control-operator-hermes-gateway-1"
     prev = os.environ.pop("ARCLINK_BRIDGE_GETME_CACHE", None)
+    orig_preflight = delivery._gateway_has_public_agent_bridge_root_wrapper
     try:
+        # Flag OFF (default) => legacy command, no preflight consulted at all.
+        delivery._gateway_has_public_agent_bridge_root_wrapper = lambda exec_prefix: True
         cmd_off = delivery._public_agent_bridge_root_exec_cmd(container)
         expect("-u" not in cmd_off, f"flag-off must not use -u root exec: {cmd_off}")
         expect(cmd_off[-1].endswith("arclink_public_agent_bridge.py"), f"flag-off must be legacy bridge: {cmd_off}")
         expect(delivery._validate_public_agent_bridge_cmd(cmd_off, project_name="arclink")[0], "legacy cmd must validate")
 
+        # Flag ON + wrapper PRESENT in gateway image => root wrapper command.
         os.environ["ARCLINK_BRIDGE_GETME_CACHE"] = "1"
+        delivery._gateway_has_public_agent_bridge_root_wrapper = lambda exec_prefix: True
         cmd_on = delivery._public_agent_bridge_root_exec_cmd(container)
-        expect(cmd_on[3:5] == ["-u", "0:0"], f"flag-on must use -u 0:0: {cmd_on}")
-        expect(cmd_on[-1].endswith("arclink_public_agent_bridge_root.py"), f"flag-on must be root wrapper: {cmd_on}")
+        expect(cmd_on[3:5] == ["-u", "0:0"], f"flag-on+present must use -u 0:0: {cmd_on}")
+        expect(cmd_on[-1].endswith("arclink_public_agent_bridge_root.py"), f"flag-on+present must be root wrapper: {cmd_on}")
         expect(delivery._validate_public_agent_bridge_cmd(cmd_on, project_name="arclink")[0], "wrapper cmd must validate")
+
+        # Flag ON but wrapper MISSING from gateway image (the outage) => MUST fall back
+        # to legacy, never hard-fail.
+        delivery._gateway_has_public_agent_bridge_root_wrapper = lambda exec_prefix: False
+        cmd_skew = delivery._public_agent_bridge_root_exec_cmd(container)
+        expect("-u" not in cmd_skew, f"flag-on+missing-wrapper MUST fall back to legacy: {cmd_skew}")
+        expect(cmd_skew[-1].endswith("arclink_public_agent_bridge.py"), f"flag-on+missing must be legacy: {cmd_skew}")
+        expect(delivery._validate_public_agent_bridge_cmd(cmd_skew, project_name="arclink")[0], "fallback legacy must validate")
     finally:
+        delivery._gateway_has_public_agent_bridge_root_wrapper = orig_preflight
         os.environ.pop("ARCLINK_BRIDGE_GETME_CACHE", None)
         if prev is not None:
             os.environ["ARCLINK_BRIDGE_GETME_CACHE"] = prev
     print("PASS test_public_agent_bridge_root_wrapper_gated_on_getme_cache_flag")
+
+
+def test_public_agent_bridge_telegram_replay_does_not_dispatch_generic_event() -> None:
+    # Regression: when native replay handles the Telegram update, the bridge must NOT
+    # fall through to adapter.handle_message(event) — `event` is unbound there, which
+    # UnboundLocalErrors, fails the turn, and retries a duplicate send of an
+    # already-delivered message.
+    old_env = os.environ.copy()
+    previous = None
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        runtime = root / "runtime-src"
+        runtime.mkdir()
+
+        def load_gateway_config():
+            return _fake_gateway_config()
+
+        try:
+            os.environ.clear()
+            os.environ.update(
+                {
+                    "HOME": str(root / "home"),
+                    "HERMES_AGENT_SRC": str(runtime),
+                    "ARCLINK_BRIDGE_SINGLE_PLATFORM_CONFIG": "0",
+                    "ARCLINK_BRIDGE_GETME_CACHE": "0",
+                }
+            )
+            previous, _init_calls, _user_cls = _install_public_bridge_runtime_stubs(load_gateway_config)
+            bridge = load_module(PYTHON_DIR / "arclink_public_agent_bridge.py", "arclink_public_agent_bridge_replay_test")
+
+            async def _always_replayed(adapter, bot, payload):
+                del adapter, bot, payload
+                return True
+
+            bridge._try_replay_native_telegram_update = _always_replayed
+
+            result = asyncio.run(
+                bridge._run_telegram(
+                    {
+                        "platform": "telegram",
+                        "bot_token": "telegram-turn-token",
+                        "chat_id": "tg-chat",
+                        "user_id": "tg-user",
+                        "text": "hello",
+                        "telegram_update_json": json.dumps({"update_id": 1}, sort_keys=True),
+                    }
+                )
+            )
+            expect(isinstance(result, dict), f"replayed turn must return a summary dict, not crash: {result!r}")
+            expect(
+                "tg-msg-1" not in (result.get("message_ids") or []),
+                f"replay must not dispatch a generic event (no second send): {result}",
+            )
+            print("PASS test_public_agent_bridge_telegram_replay_does_not_dispatch_generic_event")
+        finally:
+            if previous is not None:
+                _restore_public_bridge_runtime_stubs(previous)
+            os.environ.clear()
+            os.environ.update(old_env)
 
 
 def main() -> int:
@@ -3611,6 +3684,7 @@ def main() -> int:
     test_public_agent_bridge_persists_telegram_approval_button_state()
     test_public_agent_bridge_drains_telegram_batch_tasks_before_done()
     test_public_agent_bridge_root_wrapper_gated_on_getme_cache_flag()
+    test_public_agent_bridge_telegram_replay_does_not_dispatch_generic_event()
     test_public_bot_ready_hub_edits_payment_message_when_available()
     test_notification_due_now_normalizes_z_and_offset_timestamps()
     print("PASS all notification delivery regression tests")

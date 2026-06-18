@@ -919,13 +919,18 @@ async def _run_telegram(payload: Mapping[str, Any]) -> dict[str, Any]:
         else:
             replayed = await _try_replay_native_telegram_update(adapter, bot, payload)
         if not replayed:
+            # Only synthesize + dispatch a generic MessageEvent when native replay did
+            # NOT already handle the update. When replayed is True the native handler
+            # already delivered the turn and `event` is intentionally unbound — calling
+            # adapter.handle_message(event) here would UnboundLocalError, fail the turn,
+            # and retry a duplicate send of an already-delivered message.
             event = MessageEvent(
                 text=text,
                 message_type=MessageType.COMMAND if _is_slash_command(text) else MessageType.TEXT,
                 source=source,
                 message_id=message_id,
             )
-        await adapter.handle_message(event)
+            await adapter.handle_message(event)
         await _drain_bridge_adapter_tasks(adapter)
         _persist_telegram_bridge_state(runner, source)
         return evidence.summary()

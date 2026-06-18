@@ -646,6 +646,311 @@ def test_sovereign_worker_blocks_handoff_when_dashboard_is_created() -> None:
     print("PASS test_sovereign_worker_blocks_handoff_when_dashboard_is_created")
 
 
+def _compose_ps_runner_cls(executor_mod):
+    class ComposePsRunner(executor_mod.FakeDockerRunner):
+        def __init__(self, stdout: str):
+            super().__init__()
+            self.stdout = stdout
+
+        def run(self, args, *, deployment_id: str, project_name: str, env_file: str, compose_file: str):
+            self.runs.append({"args": args, "deployment_id": deployment_id})
+            if tuple(args) == ("ps", "--all", "--format", "json"):
+                return {"status": "ok", "stdout": self.stdout}
+            return {"status": "ok", "stdout": ""}
+
+    return ComposePsRunner
+
+
+def _operator_cfg_file(tmpdir) -> str:
+    path = Path(tmpdir) / "operator.env"
+    path.write_text(
+        "OPERATOR_NOTIFY_CHANNEL_PLATFORM=telegram\n"
+        "OPERATOR_NOTIFY_CHANNEL_ID=tg:operator-chat-9999\n",
+        encoding="utf-8",
+    )
+    return str(path)
+
+
+def _operator_notices(conn) -> list[dict]:
+    return [
+        dict(row)
+        for row in conn.execute(
+            "SELECT * FROM notification_outbox WHERE target_kind = 'operator' ORDER BY id"
+        ).fetchall()
+    ]
+
+
+def _placement_status(conn, deployment_id: str) -> str | None:
+    row = conn.execute(
+        "SELECT status FROM arclink_deployment_placements WHERE deployment_id = ? ORDER BY rowid DESC LIMIT 1",
+        (deployment_id,),
+    ).fetchone()
+    return None if row is None else str(row["status"])
+
+
+def _provisioning_gate_worker_cfg(worker_mod, executor_mod, tmpdir):
+    """Tailscale worker with max_attempts=1 so a single failed apply exhausts
+    retries and drives the real exhaustion/durable-runtime/placement predicates."""
+    cfg = worker_config(worker_mod, tmpdir)
+    return worker_mod.SovereignWorkerConfig(
+        **{
+            **cfg.__dict__,
+            "max_attempts": 1,
+            "ingress_mode": "tailscale",
+            "base_domain": "worker.example.test",
+            "edge_target": "worker.example.test",
+            "tailscale_dns_name": "worker.example.test",
+            "tailscale_host_strategy": "path",
+            "env": {
+                **dict(cfg.env),
+                "ARCLINK_INGRESS_MODE": "tailscale",
+                "ARCLINK_TAILSCALE_DNS_NAME": "worker.example.test",
+                "ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY": "path",
+            },
+        }
+    )
+
+
+def test_provisioning_post_health_error_on_serving_pod_does_not_page() -> None:
+    # BUG #2: compose records a SERVING runtime, then a post-health handoff error
+    # (hermes-dashboard still 'created' => 'starting') raises. The except-handler
+    # overwrites ALL service health to 'failed' before the durable-runtime check.
+    # The fix snapshots durable-runtime BEFORE that overwrite, so a pod that is
+    # actually up must NOT be reported as a provisioning failure and its placement
+    # must be RETAINED. Driven THROUGH the real exhaustion + durable-runtime +
+    # placement predicates (max_attempts=1 so one failure exhausts).
+    control = load_module("arclink_control.py", "arclink_control_prov_serving")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_prov_serving")
+    import arclink_executor as executor_mod
+
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    rows = [
+        {"Service": service, "State": "running", "Health": "", "Status": "Up 1 second", "Name": f"{service}-1", "Project": "arclink-dep_1"}
+        for service in worker_mod.ARCLINK_PROVISIONING_SERVICE_NAMES
+    ]
+    for row in rows:
+        if row["Service"] == "managed-context-install":
+            row["State"] = "exited"
+            row["ExitCode"] = 0
+            row["Status"] = "Exited (0)"
+        if row["Service"] == "hermes-dashboard":
+            # Recorded as a serving-but-not-yet-ready runtime: 'created' maps to
+            # 'starting', which is durable enough to be a real runtime but trips
+            # the handoff-requires-healthy raise -> a post-health error.
+            row["State"] = "created"
+            row["Status"] = "Created"
+    runner = _compose_ps_runner_cls(executor_mod)("\n".join(json.dumps(row) for row in rows))
+    with tempfile.TemporaryDirectory() as tmpdir:
+        os.environ["ARCLINK_CONFIG_FILE"] = _operator_cfg_file(tmpdir)
+        try:
+            cfg = _provisioning_gate_worker_cfg(worker_mod, executor_mod, tmpdir)
+            executor = executor_mod.ArcLinkExecutor(
+                config=executor_mod.ArcLinkExecutorConfig(
+                    live_enabled=True, adapter_name="local", state_root_base=cfg.state_root_base
+                ),
+                secret_resolver=AnySecretResolver(executor_mod),
+                docker_runner=runner,
+            )
+            results = worker_mod.process_sovereign_batch(conn, worker=cfg, executor=executor)
+            # Pass 1 verdict must hold BEFORE the re-entry pass: retained, no page.
+            expect(results[0]["status"] == "failed", str(results))
+            expect(
+                _placement_status(conn, "dep_1") == "active",
+                f"pass 1: a serving pod's placement must be retained, got {_placement_status(conn, 'dep_1')!r}",
+            )
+            expect(
+                len(_operator_notices(conn)) == 0,
+                f"pass 1: a serving pod with a post-health error must NOT page, got {_operator_notices(conn)}",
+            )
+            # BUG #2 cross-pass regression: a SECOND worker pass re-enters via the
+            # failed-job branch and reads LIVE recorded health with NO snapshot. The
+            # except path of pass 1 must have PRESERVED the serving health (not
+            # stamped it "failed"), so this snapshot-less re-entry still reads the
+            # pod as serving and RETAINS without paging. Before the fix, pass 1
+            # overwrote the serving health to "failed", so this pass read "no
+            # runtime" and released+paged a serving pod -- the false alarm.
+            worker_mod.process_sovereign_batch(conn, worker=cfg, executor=executor)
+        finally:
+            os.environ["ARCLINK_CONFIG_FILE"] = os.devnull
+
+    expect(results[0]["status"] == "failed", str(results))
+    # The pod was actually serving (running services recorded before overwrite),
+    # so the placement must be RETAINED and the Operator must NOT be paged -- on
+    # BOTH passes (the second pass is the snapshot-less re-entry path).
+    expect(
+        _placement_status(conn, "dep_1") == "active",
+        f"a serving pod's placement must be retained across passes, got {_placement_status(conn, 'dep_1')!r}",
+    )
+    notices = _operator_notices(conn)
+    expect(
+        len(notices) == 0,
+        f"a serving pod with a post-health error must NOT page the operator on any pass, got {notices}",
+    )
+    # The serving health recorded by the apply must NOT have been overwritten to
+    # 'failed' on the except path -- at least one serving status must survive so the
+    # re-entry pass reads a durable runtime.
+    statuses = {
+        str(row["status"] or "").strip().lower()
+        for row in conn.execute("SELECT status FROM arclink_service_health WHERE deployment_id = 'dep_1'").fetchall()
+    }
+    expect(
+        bool(statuses & worker_mod._RUNTIME_SERVING_STATES),
+        f"a serving pod must retain serving health across passes (never all-'failed'), got {statuses}",
+    )
+    events = [
+        str(row["event_type"])
+        for row in conn.execute(
+            "SELECT event_type FROM arclink_events WHERE subject_id = 'dep_1'"
+        ).fetchall()
+    ]
+    expect(
+        "placement_retained_after_provisioning_failure" in events,
+        f"expected placement_retained event, got {events}",
+    )
+    expect(
+        "placement_released_after_provisioning_failure" not in events,
+        f"a serving pod must NEVER release its placement, got {events}",
+    )
+    print("PASS test_provisioning_post_health_error_on_serving_pod_does_not_page")
+
+
+def test_provisioning_exhausted_without_runtime_pages_once() -> None:
+    # BUG #2 counterpart: when compose records NO serving runtime (every service
+    # 'failed') and retries are exhausted, that is a REAL terminal failure -- the
+    # placement is released and the Operator IS paged, exactly once. Driven THROUGH
+    # the exhaustion + durable-runtime + placement predicates.
+    control = load_module("arclink_control.py", "arclink_control_prov_dead")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_prov_dead")
+    import arclink_executor as executor_mod
+
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    # Every service exited non-zero -> recorded 'failed' (no durable runtime) AND
+    # the handoff-requires-healthy check raises (a genuine dead pod).
+    rows = [
+        {
+            "Service": service,
+            "State": "exited",
+            "Health": "",
+            "ExitCode": 1,
+            "Status": "Exited (1)",
+            "Name": f"{service}-1",
+            "Project": "arclink-dep_1",
+        }
+        for service in worker_mod.ARCLINK_PROVISIONING_SERVICE_NAMES
+    ]
+    runner = _compose_ps_runner_cls(executor_mod)("\n".join(json.dumps(row) for row in rows))
+    with tempfile.TemporaryDirectory() as tmpdir:
+        os.environ["ARCLINK_CONFIG_FILE"] = _operator_cfg_file(tmpdir)
+        try:
+            cfg = _provisioning_gate_worker_cfg(worker_mod, executor_mod, tmpdir)
+            executor = executor_mod.ArcLinkExecutor(
+                config=executor_mod.ArcLinkExecutorConfig(
+                    live_enabled=True, adapter_name="local", state_root_base=cfg.state_root_base
+                ),
+                secret_resolver=AnySecretResolver(executor_mod),
+                docker_runner=runner,
+            )
+            results = worker_mod.process_sovereign_batch(conn, worker=cfg, executor=executor)
+            # A second worker pass for the same dead deployment must dedup the page.
+            worker_mod.process_sovereign_batch(conn, worker=cfg, executor=executor)
+        finally:
+            os.environ["ARCLINK_CONFIG_FILE"] = os.devnull
+
+    expect(results[0]["status"] == "failed", str(results))
+    expect(
+        _placement_status(conn, "dep_1") == "removed",
+        f"a dead pod's placement must be released, got {_placement_status(conn, 'dep_1')!r}",
+    )
+    notices = _operator_notices(conn)
+    expect(
+        len(notices) == 1,
+        f"an exhausted dead deployment pages exactly once (deduped across passes), got {len(notices)}",
+    )
+    expect("dep_1" in notices[0]["message"], str(notices[0]))
+    print("PASS test_provisioning_exhausted_without_runtime_pages_once")
+
+
+def test_provisioning_exhausted_with_indeterminate_runtime_does_not_page() -> None:
+    # BUG #2: `docker compose up` SUCCEEDS but the post-apply `docker compose ps`
+    # inspection FAILS (transport error). The runtime is UNKNOWN, not "no runtime".
+    # Even with retries exhausted (max_attempts=1), an unreadable runtime must NOT
+    # be treated as a dead pod: the placement is RETAINED and the Operator is NEVER
+    # paged (false silence is correct -- the pod may be serving). Distinct from the
+    # genuinely-exited-no-runtime case (above), which pages once. Driven THROUGH the
+    # real worker batch + exhaustion + durable-runtime + placement predicates, and a
+    # SECOND pass confirms the indeterminate verdict is stable across passes (the
+    # re-entry path reads live health with no snapshot -- it must still retain, not
+    # page).
+    control = load_module("arclink_control.py", "arclink_control_prov_indeterminate")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_prov_indeterminate")
+    import arclink_executor as executor_mod
+
+    class FailingPsRunner(executor_mod.FakeDockerRunner):
+        def run(self, args, *, deployment_id: str, project_name: str, env_file: str, compose_file: str):
+            self.runs.append({"args": args, "deployment_id": deployment_id})
+            if tuple(args) == ("ps", "--all", "--format", "json"):
+                # compose up already ran (the apply built docker_result); only the
+                # reconciliation `ps` fails -> runtime indeterminate.
+                raise executor_mod.ArcLinkExecutorError("transport unavailable")
+            return {"status": "ok", "stdout": ""}
+
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    runner = FailingPsRunner()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        os.environ["ARCLINK_CONFIG_FILE"] = _operator_cfg_file(tmpdir)
+        try:
+            cfg = _provisioning_gate_worker_cfg(worker_mod, executor_mod, tmpdir)
+            executor = executor_mod.ArcLinkExecutor(
+                config=executor_mod.ArcLinkExecutorConfig(
+                    live_enabled=True, adapter_name="local", state_root_base=cfg.state_root_base
+                ),
+                secret_resolver=AnySecretResolver(executor_mod),
+                docker_runner=runner,
+            )
+            results = worker_mod.process_sovereign_batch(conn, worker=cfg, executor=executor)
+            # A second pass re-enters via the failed-job branch (reads LIVE health,
+            # no snapshot). It must reach the SAME retain-without-paging verdict.
+            worker_mod.process_sovereign_batch(conn, worker=cfg, executor=executor)
+        finally:
+            os.environ["ARCLINK_CONFIG_FILE"] = os.devnull
+
+    expect(results[0]["status"] == "failed", str(results))
+    # The runtime was unreadable, NOT dead -> the placement must be RETAINED.
+    expect(
+        _placement_status(conn, "dep_1") == "active",
+        f"an indeterminate-runtime pod's placement must be retained, got {_placement_status(conn, 'dep_1')!r}",
+    )
+    notices = _operator_notices(conn)
+    expect(
+        len(notices) == 0,
+        f"an unreadable (ps-failed) runtime must NEVER page the operator, got {notices}",
+    )
+    # The recorded health is the indeterminate status, never 'failed'.
+    statuses = {row["status"] for row in conn.execute("SELECT status FROM arclink_service_health").fetchall()}
+    expect(
+        statuses == {worker_mod.ARCLINK_SERVICE_RUNTIME_INDETERMINATE},
+        f"indeterminate runtime must record 'unknown', not 'failed'; got {statuses}",
+    )
+    events = [
+        str(row["event_type"])
+        for row in conn.execute(
+            "SELECT event_type FROM arclink_events WHERE subject_id = 'dep_1'"
+        ).fetchall()
+    ]
+    expect(
+        "placement_retained_runtime_indeterminate" in events,
+        f"expected placement_retained_runtime_indeterminate event, got {events}",
+    )
+    expect(
+        "placement_released_after_provisioning_failure" not in events,
+        f"an indeterminate runtime must NOT release the placement, got {events}",
+    )
+    print("PASS test_provisioning_exhausted_with_indeterminate_runtime_does_not_page")
+
+
 def test_tailscale_sovereign_worker_skips_cloudflare_dns() -> None:
     control = load_module("arclink_control.py", "arclink_control_sovereign_tailscale")
     worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_tailscale")
@@ -1461,7 +1766,13 @@ def test_sovereign_worker_tailscale_handoff_is_never_stranded() -> None:
     print("PASS test_sovereign_worker_tailscale_handoff_is_never_stranded")
 
 
-def test_compose_ps_transport_failure_records_failed_health() -> None:
+def test_compose_ps_transport_failure_records_indeterminate_health() -> None:
+    # BUG #2: when `docker compose up` SUCCEEDS but the post-apply `docker compose
+    # ps` inspection FAILS (transport/inspection error), the runtime state is
+    # UNKNOWN -- not "no runtime". The recorded service health must be the
+    # ``unknown`` indeterminate status, NOT ``failed``: recording ``failed`` here
+    # is what would later let the exhausted-release gate release/page a pod that may
+    # actually be serving (a false alarm). This pins the corrected recorded status.
     control = load_module("arclink_control.py", "arclink_control_sovereign_ps_failure")
     worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_ps_failure")
     import arclink_executor as executor_mod
@@ -1491,8 +1802,12 @@ def test_compose_ps_transport_failure_records_failed_health() -> None:
         results = worker_mod.process_sovereign_batch(conn, worker=cfg, executor=executor)
     expect(results[0]["status"] == "failed", str(results))
     statuses = {row["status"] for row in conn.execute("SELECT status FROM arclink_service_health").fetchall()}
-    expect(statuses == {"failed"}, str(statuses))
-    print("PASS test_compose_ps_transport_failure_records_failed_health")
+    expect(
+        statuses == {worker_mod.ARCLINK_SERVICE_RUNTIME_INDETERMINATE},
+        f"a ps-inspection failure after a successful compose up must record the "
+        f"indeterminate 'unknown' status, not 'failed'; got {statuses}",
+    )
+    print("PASS test_compose_ps_transport_failure_records_indeterminate_health")
 
 
 def test_notion_webhook_secret_is_generated_without_notion_token() -> None:
@@ -1636,6 +1951,9 @@ if __name__ == "__main__":
     test_fake_sovereign_worker_applies_ready_deployment()
     test_live_sovereign_worker_reconciles_compose_ps_health()
     test_sovereign_worker_blocks_handoff_when_dashboard_is_created()
+    test_provisioning_post_health_error_on_serving_pod_does_not_page()
+    test_provisioning_exhausted_without_runtime_pages_once()
+    test_provisioning_exhausted_with_indeterminate_runtime_does_not_page()
     test_tailscale_sovereign_worker_skips_cloudflare_dns()
     test_private_mesh_sovereign_worker_uses_selected_remote_host_private_dns()
     test_sovereign_worker_tears_down_active_deployment_idempotently()
@@ -1656,7 +1974,7 @@ if __name__ == "__main__":
     test_sovereign_worker_recovers_succeeded_job_without_handoff()
     test_sovereign_worker_defers_tailscale_handoff_until_bridge_published()
     test_sovereign_worker_tailscale_handoff_is_never_stranded()
-    test_compose_ps_transport_failure_records_failed_health()
+    test_compose_ps_transport_failure_records_indeterminate_health()
     test_notion_webhook_secret_is_generated_without_notion_token()
     test_dashboard_password_secret_is_generated_for_canonical_handoff_store()
     test_compose_secret_materialization_aligns_runtime_owner()

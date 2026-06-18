@@ -8224,6 +8224,215 @@ def queue_notification(
     return int(cursor.lastrowid)
 
 
+# ---------------------------------------------------------------------------
+# Operator hiccup reporting (Feature C)
+# ---------------------------------------------------------------------------
+#
+# Product rule: "any hiccup from the system should be told to the Operator, but
+# only if it's not false." A "hiccup" is a *genuine, terminal* failure -- one
+# that did NOT self-heal. A retry that later succeeds, a transient/unknown state
+# that later confirms, or a degraded path that recovered is NOT a hiccup and the
+# Operator must NEVER be paged for it. Each call site is responsible for only
+# invoking ``report_operator_hiccup`` once it has decided the failure is real and
+# terminal (see the per-source "real vs transient" predicates documented at each
+# wiring point); this helper then enforces anti-noise on top of that decision:
+#
+#   * dedup per ``key`` -- one real failure for a given key yields exactly ONE
+#     Operator notice. Repeated failures for the same key (a sustained outage)
+#     do NOT spam, because the dedup is anchored on the audit-log outcome state
+#     for that key, NOT on whether a prior notice was delivered (so an
+#     undelivered notice can never wedge the alert forever).
+#   * re-arm only on an explicit resolved/ok signal for that key. The alert
+#     re-arms (so the next real failure pages again) ONLY when the source calls
+#     ``resolve_operator_hiccup`` for the same key. Silence does not re-arm.
+#   * safe no-op when the Operator is tui-only / unconfigured -- the audit state
+#     is still recorded (so dedup/re-arm stay correct), but no external send is
+#     queued beyond the tui-only outbox row, exactly like every other operator
+#     notice.
+#
+# The operator target is ALWAYS resolved from ``cfg`` (loaded via
+# ARCLINK_CONFIG_FILE), never from raw ``os.environ`` -- long-running job
+# containers export ARCLINK_CONFIG_FILE but NOT the raw OPERATOR_NOTIFY_* vars,
+# so reading the environment would silently fall back to tui-only and the notice
+# would never reach the real Telegram/Discord operator (a prior bug). This
+# mirrors the canonical health-watch / model-sync ``_operator_target`` pattern.
+
+OPERATOR_HICCUP_AUDIT_PREFIX = "operator_hiccup:"
+OPERATOR_HICCUP_RESOLVED_AUDIT_PREFIX = "operator_hiccup_resolved:"
+
+
+def _operator_hiccup_target(cfg: "Config") -> tuple[str, str]:
+    """Resolve the real Operator notify target from Config (health-watch style)."""
+    channel_kind = str(getattr(cfg, "operator_notify_platform", "") or "tui-only").strip().lower() or "tui-only"
+    target_id = str(
+        getattr(cfg, "operator_notify_channel_id", "") or channel_kind or "operator"
+    ).strip() or "operator"
+    return target_id, channel_kind
+
+
+def _operator_hiccup_already_armed(conn: sqlite3.Connection, *, key: str) -> bool:
+    """True when the Operator was already paged for the current outage of ``key``.
+
+    Dedup is anchored on the most recent audit outcome for this key: if the last
+    recorded state is the ``operator_hiccup:<key>`` (failure) action and there is
+    no later ``operator_hiccup_resolved:<key>`` (recovery) action, the alert is
+    still armed and a fresh failure must NOT re-notify. A later resolved action
+    re-arms cleanly. Keyed on audit state -- not on undelivered notice rows -- so
+    an undelivered notice never blocks a future notice after a real recovery.
+
+    Concurrency note (accepted, documented): the arm check (this SELECT) and the
+    subsequent audit INSERT in report_operator_hiccup are not a single atomic
+    statement, so two TRULY concurrent same-key reports could in principle both
+    observe "not armed" and both notify. This is accepted because every production
+    caller is already single-writer per key UPSTREAM of this helper:
+      * the public-agent-bridge source pages per-outbox-row-id only after the row
+        is leased to exactly one worker via _claim_notification_for_delivery, so
+        no two workers ever report the same row-id key concurrently; and
+      * the sovereign-provisioning source pages per-deployment-id only after
+        remove_placement() returns a non-None row, and that DELETE returns the row
+        to exactly one caller (None on re-entry), so the page is single-success
+        per deployment.
+    There are no direct concurrent same-key callers, so a guarded single-write is
+    not worth the added transaction complexity; if a future caller is NOT
+    single-writer per key, gate it the same way (lease / single-success delete) or
+    wrap report_operator_hiccup in a BEGIN IMMEDIATE arm+insert.
+    """
+    fail_action = f"{OPERATOR_HICCUP_AUDIT_PREFIX}{key}"
+    ok_action = f"{OPERATOR_HICCUP_RESOLVED_AUDIT_PREFIX}{key}"
+    last = conn.execute(
+        """
+        SELECT action
+        FROM arclink_audit_log
+        WHERE action IN (?, ?)
+        ORDER BY created_at DESC, rowid DESC
+        LIMIT 1
+        """,
+        (fail_action, ok_action),
+    ).fetchone()
+    if last is None:
+        return False
+    return str(last["action"]) == fail_action
+
+
+def report_operator_hiccup(
+    conn: sqlite3.Connection,
+    cfg: "Config",
+    *,
+    source: str,
+    key: str,
+    message: str,
+    target_kind: str = "operator",
+    extra: Mapping[str, Any] | None = None,
+    reason: str = "",
+    commit: bool = True,
+) -> int:
+    """Notify the Operator about a real, terminal system hiccup -- exactly once.
+
+    This is the single centralized entry point for "tell the Operator something
+    genuinely failed." Callers must only invoke it AFTER deciding the failure is
+    real and terminal (not a transient/self-healed event). The helper enforces
+    anti-noise on top: it dedups per ``key`` against the audit-log outcome state
+    and is a safe no-op when the Operator is tui-only/unconfigured.
+
+    Returns the queued ``notification_outbox`` id, or ``0`` when the alert was
+    deduped (already armed for this key) -- in which case nothing is queued and
+    no new audit row is written.
+
+    Parameters
+    ----------
+    source:
+        Short stable identifier of the subsystem reporting the hiccup (e.g.
+        ``"public_agent_bridge"``, ``"sovereign_provisioning"``). Recorded in the
+        audit metadata for traceability.
+    key:
+        The dedup/re-arm key. One armed alert exists per key at a time. Pick a key
+        granular enough that distinct real outages are distinguishable but coarse
+        enough that a single sustained outage maps to one key (e.g. include a
+        deployment id for per-deployment failures).
+    message:
+        The human-facing Operator notice body.
+    """
+    clean_key = str(key or "").strip()
+    if not clean_key:
+        raise ValueError("report_operator_hiccup requires a non-empty key")
+    if _operator_hiccup_already_armed(conn, key=clean_key):
+        return 0
+    target_id, channel_kind = _operator_hiccup_target(cfg)
+    notice_extra: dict[str, Any] = {
+        "operator_hiccup_source": str(source or "").strip(),
+        "operator_hiccup_key": clean_key,
+    }
+    if extra:
+        for extra_key, extra_value in dict(extra).items():
+            notice_extra.setdefault(str(extra_key), extra_value)
+    notification_id = queue_notification(
+        conn,
+        target_kind=target_kind or "operator",
+        target_id=target_id,
+        channel_kind=channel_kind,
+        message=message,
+        extra=notice_extra,
+        commit=False,
+    )
+    append_arclink_audit(
+        conn,
+        action=f"{OPERATOR_HICCUP_AUDIT_PREFIX}{clean_key}",
+        actor_id=f"system:{str(source or 'operator_hiccup').strip()}",
+        target_kind="operator-hiccup",
+        target_id=clean_key,
+        reason=str(reason or message)[:300],
+        metadata={
+            "source": str(source or "").strip(),
+            "key": clean_key,
+            "notification_id": int(notification_id),
+            "channel_kind": channel_kind,
+        },
+        commit=False,
+    )
+    if commit:
+        conn.commit()
+    return int(notification_id)
+
+
+def resolve_operator_hiccup(
+    conn: sqlite3.Connection,
+    cfg: "Config",
+    *,
+    source: str,
+    key: str,
+    reason: str = "",
+    commit: bool = True,
+) -> bool:
+    """Re-arm the Operator hiccup alert for ``key`` after a genuine recovery.
+
+    Records the ``operator_hiccup_resolved:<key>`` audit action so the next real
+    failure for the same key pages the Operator again. This is the ONLY way the
+    alert re-arms -- silence never re-arms. It is a no-op (returns ``False``) when
+    the alert is not currently armed, so a steady stream of successes does not
+    churn the audit log. ``cfg`` is accepted for signature symmetry with
+    ``report_operator_hiccup`` (the recovery itself does not notify the Operator;
+    subsystems that want a recovery message send their own).
+    """
+    clean_key = str(key or "").strip()
+    if not clean_key:
+        raise ValueError("resolve_operator_hiccup requires a non-empty key")
+    if not _operator_hiccup_already_armed(conn, key=clean_key):
+        return False
+    append_arclink_audit(
+        conn,
+        action=f"{OPERATOR_HICCUP_RESOLVED_AUDIT_PREFIX}{clean_key}",
+        actor_id=f"system:{str(source or 'operator_hiccup').strip()}",
+        target_kind="operator-hiccup",
+        target_id=clean_key,
+        reason=str(reason or "resolved")[:300],
+        metadata={"source": str(source or "").strip(), "key": clean_key},
+        commit=False,
+    )
+    if commit:
+        conn.commit()
+    return True
+
+
 def _notification_due_now(next_attempt_at: str | None) -> bool:
     due_at = parse_utc_iso(next_attempt_at)
     return due_at is None or due_at <= utc_now()

@@ -36,6 +36,8 @@ from arclink_control import (
     mark_notification_delivered,
     mark_notification_error,
     parse_utc_iso,
+    report_operator_hiccup,
+    resolve_operator_hiccup,
     utc_now,
     utc_after_seconds_iso,
     utc_now_iso,
@@ -338,6 +340,300 @@ PUBLIC_AGENT_BRIDGE_ROOT_USER = "0:0"
 PUBLIC_AGENT_BRIDGE_CONTAINER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 PUBLIC_AGENT_BRIDGE_PROJECT_RE = re.compile(r"^arclink(?:-[a-z0-9][a-z0-9_-]{0,80})?$")
 GATEWAY_EXEC_BROKER_TOKEN_HEADER = "X-ArcLink-Gateway-Exec-Token"
+
+# --- Operator hiccup: public-Agent bridge TERMINAL delivery failure ---------
+#
+# What counts as a REAL hiccup here (vs. transient / self-healing):
+#   * NOT a "deferred" turn (PUBLIC_AGENT_BRIDGE_DEFERRED) -- the bridge is still
+#     running; the row is leased, not failed.
+#   * NOT an "unconfirmed" / hold-for-reconciliation turn (delivery_status
+#     "unknown", or "failed" WITH platform message ids) -- this is the D5 case
+#     where the turn may STILL have delivered; it is explicitly held and
+#     reconciled for up to 24h, so paging now would be a false alarm.
+#   * NOT a single terminal error -- public-agent-turn rows have NO max-attempt
+#     cap; mark_notification_error() schedules a RETRY with exponential backoff,
+#     so the very next attempt may self-heal. Paging on the first error would be
+#     a false alarm.
+# A real, terminal hiccup is a turn that has accumulated MANY CONSECUTIVE genuine
+# terminal-error attempts (returncode!=0, timeout, delivery_status=="failed" with
+# no message ids, rejected command, or no-ok) -- i.e. retries are clearly not
+# self-healing. We gate on a per-row CONSECUTIVE-terminal-failure counter (NOT on
+# the row's attempt_count column) >= the threshold below, so a turn that recovers
+# on an early retry -- or whose attempt_count was inflated by non-terminal "maybe
+# delivered" outcomes -- never pages the Operator. Dedup is per outbox row id (one
+# notice per stuck turn).
+#
+# THREE guards make this self-correcting (BUG #1 fix), so the Operator only ends up
+# with bridge alerts for turns that are GENUINELY, PERSISTENTLY failing:
+#   1. consecutive-terminal threshold (below) -- a turn that recovers on an early
+#      retry never reaches the gate. We count ONLY genuine terminal errors, in a
+#      run: any non-terminal/uncertain outcome (deferred, or D5 held/unconfirmed,
+#      which may actually have delivered) RESETS the counter to 0. This is the core
+#      BUG #1 fix: gating on attempt_count would let e.g. 7 maybe-delivered turns +
+#      1 terminal error cross an "8 attempts" threshold and page -- a false alarm.
+#      Gating on the consecutive-terminal counter means only 8 terminal errors in a
+#      row -- never interleaved with a maybe-delivered outcome -- can page.
+#   2. resolve-on-delivery (_resolve_public_agent_bridge_hiccup, called at every
+#      public-agent-turn delivery-success site) -- public-agent-turn rows have NO
+#      max-attempt cap, so a turn that pages at attempt N can still self-heal and
+#      be marked delivered at attempt N+1. When that happens we resolve the alert
+#      for that row's key, so a recovered turn clears its own page. Only turns that
+#      STAY failed leave a lingering alert.
+#   3. delivered-row short-circuit -- a delivered row never reaches the gate, and
+#      its counter is moot (the gate returns early for a delivered row).
+#
+# Threshold reasoning (raised 5 -> 8): a single user turn already survives several
+# layers of self-healing retry before it ever counts as one "terminal attempt"
+# here -- the agent's own in-process LLM retries (~3), plus a couple of bridge-
+# level retries with exponential backoff. An ordinary transient blip (e.g. an LLM
+# connection error that recovers within those layers) must NOT page. 5 was low
+# enough that a noisy-but-recovering turn could cross it before delivering; 8
+# consecutive genuine terminal-error attempts (each already past the agent's inner
+# retries, spread over ~hours of exponential backoff) is a clear "retries are not
+# self-healing" signal. Combined with resolve-on-delivery, a turn that crosses 8
+# and then finally delivers still clears its alert, so the net effect is: persistent
+# failure only. Override via ARCLINK_PUBLIC_AGENT_BRIDGE_HICCUP_MIN_ATTEMPTS.
+PUBLIC_AGENT_BRIDGE_HICCUP_MIN_ATTEMPTS_DEFAULT = 8
+
+
+def _public_agent_bridge_hiccup_min_attempts() -> int:
+    return _int_env(
+        "ARCLINK_PUBLIC_AGENT_BRIDGE_HICCUP_MIN_ATTEMPTS",
+        PUBLIC_AGENT_BRIDGE_HICCUP_MIN_ATTEMPTS_DEFAULT,
+        minimum=2,
+        maximum=100,
+    )
+
+
+# BUG #1 fix: the per-outbox-row extra_json key under which we track a turn's
+# CONSECUTIVE genuine-terminal-failure count. This is deliberately separate from
+# ``attempt_count`` (the row column): attempt_count is bumped for BOTH terminal
+# errors (mark_notification_error) AND non-terminal "maybe delivered" outcomes
+# (_mark_public_agent_bridge_unconfirmed -- D5 held/unknown), so gating the
+# Operator page on attempt_count would page a turn that had e.g. 7 unconfirmed
+# (possibly-delivered) outcomes + 1 terminal error -- a false alarm. Instead we
+# gate on this counter, which is incremented ONLY at genuine terminal-error sites
+# and RESET to 0 on any non-terminal/uncertain outcome (held/unconfirmed/deferred)
+# AND on delivery. Net: only a turn that strings together N CONSECUTIVE genuine
+# terminal errors -- never interleaved with a maybe-delivered outcome -- can page.
+PUBLIC_AGENT_BRIDGE_TERMINAL_FAILURE_KEY = "_public_agent_bridge_consecutive_terminal_failures"
+
+
+def _public_agent_bridge_terminal_failure_json_path() -> str:
+    """SQLite ``json`` path for the consecutive-terminal-failure key.
+
+    The key never contains JSON-path metacharacters, so the literal ``$.<key>``
+    form is safe; we centralise it so every merge-safe writer uses the same path.
+    """
+    return f"$.{PUBLIC_AGENT_BRIDGE_TERMINAL_FAILURE_KEY}"
+
+
+def _bump_public_agent_bridge_terminal_failures(conn: Any, notification_id: int) -> int:
+    """Increment and persist the row's consecutive-terminal-failure counter.
+
+    Called ONLY from genuine terminal-error sites (via the hiccup gate). Returns
+    the NEW count (0 when the row is missing/delivered and nothing was written).
+
+    BUG #1 fix -- MERGE-SAFE write: the increment is done with a single atomic
+    ``UPDATE ... SET extra_json = json_set(..., +1)`` statement that reads AND
+    writes the on-disk row value inside SQLite's per-row write lock, touching ONLY
+    the counter key. It never serialises a whole Python dict back, so a concurrent
+    writer of a DIFFERENT key on this same row (the parent's worker-metadata write
+    in _record_public_agent_bridge_worker, or the orphan reaper) can never clobber
+    this counter, and this bump can never clobber their keys. This closes the
+    parent/child stale-extra_json RACE that could resurrect a reset counter and
+    page on a maybe-delivered turn. We then re-read the freshly-persisted value so
+    the gate's threshold check sees exactly this row's current counter.
+    """
+    cursor = conn.execute(
+        """
+        UPDATE notification_outbox
+        SET extra_json = json_set(
+            COALESCE(extra_json, '{}'),
+            ?,
+            COALESCE(
+                CAST(json_extract(COALESCE(extra_json, '{}'), ?) AS INTEGER),
+                0
+            ) + 1
+        )
+        WHERE id = ? AND delivered_at IS NULL
+        """,
+        (
+            _public_agent_bridge_terminal_failure_json_path(),
+            _public_agent_bridge_terminal_failure_json_path(),
+            int(notification_id),
+        ),
+    )
+    conn.commit()
+    if int(getattr(cursor, "rowcount", 0) or 0) <= 0:
+        # Row missing or already delivered -- nothing was written.
+        return 0
+    row = conn.execute(
+        "SELECT json_extract(COALESCE(extra_json, '{}'), ?) AS count FROM notification_outbox WHERE id = ?",
+        (_public_agent_bridge_terminal_failure_json_path(), int(notification_id)),
+    ).fetchone()
+    if row is None:
+        return 0
+    try:
+        count = int(row["count"])
+    except (TypeError, ValueError):
+        count = 1
+    return count if count >= 1 else 1
+
+
+def _reset_public_agent_bridge_terminal_failures(conn: Any, notification_id: int) -> None:
+    """Reset the row's consecutive-terminal-failure counter to 0 (best-effort).
+
+    Called on EVERY non-terminal/uncertain outcome (held/unconfirmed/deferred) and
+    on delivery, so a "maybe delivered" turn never carries terminal credit forward.
+    Best-effort and fail-closed: any error is swallowed so counter bookkeeping can
+    never break delivery. A missing key is left absent (treated as 0 by the gate).
+
+    BUG #1 fix -- MERGE-SAFE write: the reset is a single atomic
+    ``UPDATE ... SET extra_json = json_remove(..., <counter-key>)`` statement that
+    removes ONLY the counter key inside SQLite's per-row write lock. It never reads
+    a whole Python dict and writes it back, so the parent's concurrent
+    worker-metadata write (or the orphan reaper) cannot be clobbered by this reset,
+    and the parent's STALE whole-dict write can no longer resurrect a counter this
+    reset cleared -- the exact parent/child race in BUG #1. ``json_remove`` of an
+    absent path is a no-op, so a row without the key is left untouched.
+    """
+    try:
+        conn.execute(
+            """
+            UPDATE notification_outbox
+            SET extra_json = json_remove(COALESCE(extra_json, '{}'), ?)
+            WHERE id = ? AND delivered_at IS NULL
+            """,
+            (_public_agent_bridge_terminal_failure_json_path(), int(notification_id)),
+        )
+        conn.commit()
+    except Exception:  # noqa: BLE001 - counter bookkeeping must never break delivery.
+        return
+
+
+def _public_agent_bridge_hiccup_key(notification_id: int) -> str:
+    """Per-row dedup/resolve key for a public-agent-turn hiccup.
+
+    Shared by report (page) and resolve (clear-on-delivery) so a turn that pages
+    and then recovers clears the SAME armed alert. The row id is unique, so each
+    stuck turn is its own key and never spams across turns.
+    """
+    return f"public_agent_bridge_turn:{int(notification_id)}"
+
+
+def _resolve_public_agent_bridge_hiccup(conn: Any, notification_id: int) -> None:
+    """Clear a public-agent-turn's Operator alert when the turn finally delivers.
+
+    BUG #1 fix (resolve-on-delivery): public-agent-turn rows have no max-attempt
+    cap, so a turn that paged at the threshold can still self-heal on a later
+    retry and be marked delivered. Calling this at every public-agent-turn
+    delivery-success site re-arms the per-row key, so a recovered turn does not
+    leave a lingering "could not deliver" alert -- only turns that STAY failed
+    keep an armed alert. resolve_operator_hiccup is a no-op when the key was never
+    armed (the common case: most turns deliver well before the threshold), so this
+    adds no audit churn for healthy turns.
+
+    Best-effort and fail-closed: any error is swallowed so resolve bookkeeping can
+    never break delivery (exactly like the report path).
+    """
+    try:
+        cfg = Config.from_env()
+        resolve_operator_hiccup(
+            conn,
+            cfg,
+            source="public_agent_bridge",
+            key=_public_agent_bridge_hiccup_key(notification_id),
+            reason="public-agent bridge turn delivered after prior terminal attempts",
+        )
+    except Exception:  # noqa: BLE001 - resolve bookkeeping must never break delivery.
+        return
+
+
+def _maybe_report_public_agent_bridge_hiccup(
+    conn: Any,
+    notification_id: int,
+    *,
+    error: str,
+) -> None:
+    """Page the Operator when a single public-Agent turn is terminally stuck.
+
+    Call this ONLY at genuine terminal-error sites (returncode!=0, timeout,
+    delivery_status=="failed" with no message ids, rejected command, no-ok) for a
+    ``public-agent-turn`` row -- never for generic ``public-bot-user`` sends, and
+    never for deferred, unconfirmed/hold-for-reconciliation, or delivered
+    outcomes. Because this is only ever called at a genuine terminal-error site, it
+    is also where we INCREMENT the per-row consecutive-terminal-failure counter
+    (BUG #1). The gate then pages on THAT counter -- not on ``attempt_count`` -- so
+    a turn whose attempt_count was inflated by non-terminal "maybe delivered" (D5
+    held/unconfirmed) outcomes can never cross the threshold: any such outcome
+    RESETS the counter via _reset_public_agent_bridge_terminal_failures, so only a
+    run of N CONSECUTIVE genuine terminal errors (never interleaved with a maybe-
+    delivered outcome) pages. Combined with resolve-on-delivery, the Operator only
+    ever sees a bridge alert for a turn that is GENUINELY, PERSISTENTLY failing.
+
+    Best-effort and fail-closed: any error resolving config / reading the row is
+    swallowed so hiccup reporting can never break delivery. Resolving the operator
+    target from Config (not os.environ) is handled inside report_operator_hiccup.
+    """
+    try:
+        row = conn.execute(
+            "SELECT target_kind, attempt_count, delivered_at FROM notification_outbox WHERE id = ?",
+            (int(notification_id),),
+        ).fetchone()
+        if row is None:
+            return
+        target_kind = str(row["target_kind"] or "").strip().lower()
+        # BUG #1b fix: scope the bridge alert to the public-agent-BRIDGE turn kind
+        # ONLY. Generic ``public-bot-user`` sends (provisioning hub edits, ordinary
+        # missing-token/missing-target errors in _deliver_public_bot_user) are NOT
+        # bridge turns -- paging them as "public-agent bridge could not deliver a
+        # turn" is both wrong-sourced and a false alarm (those rows are not the
+        # streaming bridge path and have their own retry/handling). Only a
+        # public-agent-turn row is a bridge turn.
+        if target_kind != "public-agent-turn":
+            return
+        # A delivered row is a success, never a hiccup.
+        if str(row["delivered_at"] or "").strip():
+            return
+        # BUG #1 fix: this site IS a genuine terminal error, so credit one
+        # CONSECUTIVE terminal failure to the same row the gate reads, then gate on
+        # that counter. We deliberately do NOT use attempt_count here: attempt_count
+        # also counts non-terminal "maybe delivered" outcomes (D5 held/unconfirmed),
+        # which would let e.g. 7 possibly-delivered turns + 1 terminal error cross
+        # the threshold and page as "8 terminal attempts" -- a false alarm.
+        consecutive_terminal = _bump_public_agent_bridge_terminal_failures(conn, notification_id)
+        if consecutive_terminal < _public_agent_bridge_hiccup_min_attempts():
+            return
+        cfg = Config.from_env()
+        # Per-row key: one Operator notice per terminally-stuck turn. The row id is
+        # unique, so this never spams across turns. The alert re-arms only via
+        # _resolve_public_agent_bridge_hiccup when this row is later delivered.
+        key = _public_agent_bridge_hiccup_key(notification_id)
+        message = (
+            "ArcLink public-agent bridge could not deliver a turn after "
+            f"{consecutive_terminal} consecutive terminal attempts "
+            f"(notification #{int(notification_id)}). "
+            "The user's last message may not have been answered on their public "
+            f"channel.\nLast error: {str(error or '').strip()[:300]}"
+        )
+        report_operator_hiccup(
+            conn,
+            cfg,
+            source="public_agent_bridge",
+            key=key,
+            message=message,
+            reason=(
+                "public-agent bridge turn stuck after "
+                f"{consecutive_terminal} consecutive terminal attempts"
+            ),
+            extra={
+                "notification_id": int(notification_id),
+                "consecutive_terminal_failures": consecutive_terminal,
+            },
+        )
+    except Exception:  # noqa: BLE001 - hiccup reporting must never break delivery.
+        return
 
 
 def _int_env(name: str, default: int, *, minimum: int = 1, maximum: int = 1800) -> int:
@@ -1367,6 +1663,11 @@ def _mark_public_agent_bridge_unconfirmed(conn: Any, notification_id: int, reaso
         ),
     )
     conn.commit()
+    # BUG #1 fix: an unconfirmed/held outcome is NON-terminal and may actually have
+    # delivered, so it must NOT carry any prior terminal credit forward -- reset the
+    # consecutive-terminal-failure counter so a later genuine terminal error starts
+    # a FRESH consecutive run rather than tipping a mixed history over the threshold.
+    _reset_public_agent_bridge_terminal_failures(conn, notification_id)
 
 
 def _public_agent_bridge_worker_stale_seconds() -> int:
@@ -1379,26 +1680,33 @@ def _record_public_agent_bridge_worker(notification_id: int, *, pid: int, job_pa
     try:
         cfg = Config.from_env()
         with connect_db(cfg) as conn:
-            row = conn.execute(
-                "SELECT extra_json FROM notification_outbox WHERE id = ? AND delivered_at IS NULL",
-                (int(notification_id),),
-            ).fetchone()
-            if row is None:
-                return
-            try:
-                extra = json.loads(str(row["extra_json"] or "{}"))
-            except json.JSONDecodeError:
-                extra = {}
-            if not isinstance(extra, dict):
-                extra = {}
-            extra["_public_agent_bridge_worker"] = {
-                "pid": int(pid),
-                "job_path": str(job_path),
-                "spawned_at": utc_now_iso(),
-            }
+            # BUG #1 fix -- MERGE-SAFE write. This metadata write happens AFTER the
+            # detached child is already running (see _spawn_public_agent_gateway_bridge:
+            # Popen() precedes this call), so the child may have already reset/bumped
+            # the consecutive-terminal-failure counter on this same row. The previous
+            # read-whole-dict / write-whole-dict here would serialise a STALE
+            # extra_json back and resurrect a counter the child just reset -- the core
+            # BUG #1 race that could page a maybe-delivered turn. We instead set ONLY
+            # the ``_public_agent_bridge_worker`` key with a single atomic
+            # ``json_set`` (json() so the object is stored as JSON, not a quoted
+            # string), inside SQLite's per-row write lock. The counter key is never
+            # read or written here, so this metadata write can never clobber it, and
+            # the counter writers never clobber this key.
+            worker_meta = json.dumps(
+                {
+                    "pid": int(pid),
+                    "job_path": str(job_path),
+                    "spawned_at": utc_now_iso(),
+                },
+                sort_keys=True,
+            )
             conn.execute(
-                "UPDATE notification_outbox SET extra_json = ? WHERE id = ? AND delivered_at IS NULL",
-                (json.dumps(extra, sort_keys=True), int(notification_id)),
+                """
+                UPDATE notification_outbox
+                SET extra_json = json_set(COALESCE(extra_json, '{}'), '$._public_agent_bridge_worker', json(?))
+                WHERE id = ? AND delivered_at IS NULL
+                """,
+                (worker_meta, int(notification_id)),
             )
             conn.commit()
     except Exception as exc:  # noqa: BLE001 - spawn must not fail because metadata could not be recorded.
@@ -1469,14 +1777,23 @@ def reap_orphaned_public_agent_bridge_leases(cfg: Config, *, limit: int = 50) ->
             pid = int(worker.get("pid") or 0)
             if _public_agent_bridge_worker_pid_active(pid):
                 continue
-            worker["reclaimed_at"] = now_iso
-            extra["_public_agent_bridge_worker"] = worker
+            # BUG #1 fix -- MERGE-SAFE write: stamp ONLY the worker-metadata
+            # ``reclaimed_at`` subkey via ``json_set`` instead of serialising the
+            # whole (possibly-stale) ``extra`` dict back. The read above is only used
+            # for the pid/decision logic; writing the whole dict here would clobber a
+            # concurrent counter reset/bump on the same row. Touching just the
+            # ``$._public_agent_bridge_worker.reclaimed_at`` path keeps the
+            # consecutive-terminal-failure counter (and any other key) intact.
             cursor = conn.execute(
                 """
                 UPDATE notification_outbox
                 SET next_attempt_at = ?,
                     delivery_error = ?,
-                    extra_json = ?
+                    extra_json = json_set(
+                        COALESCE(extra_json, '{}'),
+                        '$._public_agent_bridge_worker.reclaimed_at',
+                        ?
+                    )
                 WHERE id = ?
                   AND delivered_at IS NULL
                   AND next_attempt_at > ?
@@ -1484,7 +1801,7 @@ def reap_orphaned_public_agent_bridge_leases(cfg: Config, *, limit: int = 50) ->
                 (
                     now_iso,
                     f"public_agent_bridge_orphan_reclaimed: pid={pid}"[:500],
-                    json.dumps(extra, sort_keys=True),
+                    now_iso,
                     int(row["id"]),
                     now_iso,
                 ),
@@ -1532,6 +1849,9 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
             if ok:
                 with connect_db(cfg) as conn:
                     mark_notification_delivered(conn, notification_id)
+                    # Resolve-on-delivery: clear any prior terminal-attempt alert
+                    # for this turn now that it actually delivered (BUG #1).
+                    _resolve_public_agent_bridge_hiccup(conn, notification_id)
                 _append_public_agent_bridge_log(
                     json.dumps(
                         {"event": "public_agent_bridge_broker_delivered", "notification_id": notification_id},
@@ -1555,6 +1875,7 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
                 return 0
             with connect_db(cfg) as conn:
                 mark_notification_error(conn, notification_id, f"Hermes public gateway bridge failed: {error}")
+                _maybe_report_public_agent_bridge_hiccup(conn, notification_id, error=str(error))
             _append_public_agent_bridge_log(
                 json.dumps(
                     {
@@ -1572,6 +1893,7 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
         if not valid:
             with connect_db(cfg) as conn:
                 mark_notification_error(conn, notification_id, f"Hermes public gateway bridge rejected command: {reason}")
+                _maybe_report_public_agent_bridge_hiccup(conn, notification_id, error=f"rejected command: {reason}")
             _append_public_agent_bridge_log(
                 json.dumps(
                     {
@@ -1606,6 +1928,9 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
         except subprocess.TimeoutExpired:
             with connect_db(cfg) as conn:
                 mark_notification_error(conn, notification_id, "Hermes public gateway bridge timed out")
+                _maybe_report_public_agent_bridge_hiccup(
+                    conn, notification_id, error="Hermes public gateway bridge timed out"
+                )
             _append_public_agent_bridge_log(
                 json.dumps({"event": "public_agent_bridge_timeout", "notification_id": notification_id}, sort_keys=True)
             )
@@ -1619,6 +1944,7 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
             tail = detail[-1][:220] if detail else f"exit status {proc.returncode}"
             with connect_db(cfg) as conn:
                 mark_notification_error(conn, notification_id, f"Hermes public gateway bridge failed: {tail}")
+                _maybe_report_public_agent_bridge_hiccup(conn, notification_id, error=str(tail))
             _append_public_agent_bridge_log(
                 json.dumps(
                     {
@@ -1638,6 +1964,9 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
         if result.get("delivered") is True:
             with connect_db(cfg) as conn:
                 mark_notification_delivered(conn, notification_id)
+                # Resolve-on-delivery: clear any prior terminal-attempt alert for
+                # this turn now that it actually delivered (BUG #1).
+                _resolve_public_agent_bridge_hiccup(conn, notification_id)
             _append_public_agent_bridge_log(
                 json.dumps(
                     {
@@ -1668,6 +1997,7 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
             error = _public_agent_bridge_delivery_error(result, label="Hermes public gateway bridge")
             with connect_db(cfg) as conn:
                 mark_notification_error(conn, notification_id, f"Hermes public gateway bridge failed: {error}")
+                _maybe_report_public_agent_bridge_hiccup(conn, notification_id, error=str(error))
             _append_public_agent_bridge_log(
                 json.dumps(
                     {
@@ -1680,11 +2010,11 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
             )
             return 1
         with connect_db(cfg) as conn:
-            mark_notification_error(
-                conn,
-                notification_id,
-                str(result.get("error") or "Hermes public gateway bridge completed without an ok response"),
+            no_ok_error = str(
+                result.get("error") or "Hermes public gateway bridge completed without an ok response"
             )
+            mark_notification_error(conn, notification_id, no_ok_error)
+            _maybe_report_public_agent_bridge_hiccup(conn, notification_id, error=no_ok_error)
         _append_public_agent_bridge_log(
             json.dumps({"event": "public_agent_bridge_no_ok", "notification_id": notification_id}, sort_keys=True)
         )
@@ -2096,6 +2426,9 @@ def _absorb_telegram_album_siblings(
                     extra["telegram_update_json_list"] = updates
                     for absorbed_id in absorbed:
                         mark_notification_delivered(conn, absorbed_id)
+                        # Resolve-on-delivery: an absorbed album turn is served via
+                        # the leader, so clear any prior alert for it (BUG #1).
+                        _resolve_public_agent_bridge_hiccup(conn, absorbed_id)
                         mark_notification_error(conn, absorbed_id, f"absorbed_into_album_leader:{own_id}")
                 return None
         _time.sleep(0.4)
@@ -2276,6 +2609,10 @@ def run_public_agent_turns_once(
                 error = f"exception: {exc}"
             if error:
                 if error == PUBLIC_AGENT_BRIDGE_DEFERRED:
+                    # Non-terminal: the bridge job detached and will report later.
+                    # Clear any prior terminal credit so a later genuine terminal
+                    # error starts a fresh consecutive run (BUG #1).
+                    _reset_public_agent_bridge_terminal_failures(conn, int(row["id"]))
                     summary["deferred_public_agent_bridge"] += 1
                     continue
                 if _is_public_agent_bridge_unconfirmed(error):
@@ -2283,11 +2620,15 @@ def run_public_agent_turns_once(
                     summary["unconfirmed_public_agent_bridge"] += 1
                     continue
                 mark_notification_error(conn, int(row["id"]), error)
+                _maybe_report_public_agent_bridge_hiccup(conn, int(row["id"]), error=error)
                 summary["errors"] += 1
                 if verbose:
                     sys.stderr.write(f"[deliver-public-agent] id={row['id']} error={error}\n")
                 continue
             mark_notification_delivered(conn, int(row["id"]))
+            # Resolve-on-delivery: this loop only handles public-agent-turn rows,
+            # so a delivered row clears any prior terminal-attempt alert (BUG #1).
+            _resolve_public_agent_bridge_hiccup(conn, int(row["id"]))
             summary["delivered"] += 1
     return summary
 
@@ -2494,6 +2835,10 @@ def run_once(cfg: Config, *, limit: int = 50, verbose: bool = False) -> dict[str
                 summary["deferred_to_agent"] += 1
                 continue
             if error == PUBLIC_AGENT_BRIDGE_DEFERRED:
+                # Non-terminal: the bridge job detached and will report later.
+                # Clear any prior terminal credit (BUG #1).
+                if str(row.get("target_kind") or "").strip().lower() == "public-agent-turn":
+                    _reset_public_agent_bridge_terminal_failures(conn, int(row["id"]))
                 summary["deferred_public_agent_bridge"] += 1
                 continue
             if _is_public_agent_bridge_unconfirmed(error):
@@ -2505,11 +2850,19 @@ def run_once(cfg: Config, *, limit: int = 50, verbose: bool = False) -> dict[str
                 continue
             if error:
                 mark_notification_error(conn, int(row["id"]), error)
+                _maybe_report_public_agent_bridge_hiccup(conn, int(row["id"]), error=error)
                 summary["errors"] += 1
                 if verbose:
                     sys.stderr.write(f"[deliver] id={row['id']} error={error}\n")
                 continue
             mark_notification_delivered(conn, int(row["id"]))
+            # Resolve-on-delivery for public-agent-turn rows only: a turn that
+            # paged at the terminal-attempt threshold can still self-heal and
+            # deliver on a later retry (no max-attempt cap), so clear its alert
+            # (BUG #1). Guarded on target_kind so we never load Config for the
+            # vastly more common non-bridge deliveries.
+            if str(row.get("target_kind") or "").strip().lower() == "public-agent-turn":
+                _resolve_public_agent_bridge_hiccup(conn, int(row["id"]))
             _mark_wrapped_report_delivered(conn, row)
             summary["delivered"] += 1
             if (row.get("channel_kind") or "").lower() == "tui-only":

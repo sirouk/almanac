@@ -34,6 +34,7 @@ from arclink_control import (
     generate_llm_router_raw_key,
     parse_utc_iso,
     queue_notification,
+    report_operator_hiccup,
     transition_arclink_provisioning_job,
     upsert_arclink_service_health,
     utc_now,
@@ -845,13 +846,55 @@ def process_sovereign_deployment(
         return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "applied", **result}
     except Exception as exc:
         error = _safe_error(exc)
+        # Snapshot the REAL (tri-state) runtime state BEFORE the overwrite below
+        # erases it. A post-health handoff error (e.g. hermes-home-ready
+        # validation, a not-yet-ready dashboard, OR a BUG #2 ps-inspection failure)
+        # can raise AFTER compose already recorded a serving / indeterminate
+        # runtime. If we read durable-runtime only after _record_service_status()
+        # stamps every service "failed", a pod that is genuinely up -- or whose
+        # runtime is merely unreadable -- looks dead, and we would release its
+        # placement and page the Operator (a false alarm). Capture it here so the
+        # exhausted-release/page decision reflects the pre-exception truth.
+        had_durable_runtime = _deployment_has_durable_runtime(conn, deployment_id=deployment_id)
         transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="failed", error=error)
         refreshed_job = conn.execute(
             "SELECT attempt_count FROM arclink_provisioning_jobs WHERE job_id = ?",
             (str(job["job_id"]),),
         ).fetchone()
         _mark_deployment_failed_if_still_provisioning(conn, deployment_id=deployment_id)
-        _record_service_status(conn, deployment_id=deployment_id, status="failed", detail={"error": error})
+        # BUG #2 cross-pass consistency: the durable-runtime verdict must be STABLE
+        # across worker passes, because a later pass re-enters via the failed-job
+        # branch and reads LIVE recorded health with NO snapshot. If this except
+        # path overwrites the recorded health, that next pass sees the overwritten
+        # value, not the pre-exception truth, and could release/page a pod we just
+        # (correctly) retained -- a false alarm. So we overwrite ONLY in the case
+        # where overwriting cannot change the verdict:
+        #   * None (INDETERMINATE) -- compose up ok but ps inspection failed. Record
+        #     the ``unknown`` status so every subsequent pass also reads
+        #     indeterminate and retains-without-paging (overwriting to "failed" here
+        #     would make the next pass see "no runtime" and page a maybe-serving pod).
+        #   * True (SERVING) -- the pod was genuinely up before a post-health handoff
+        #     error raised. DO NOT stamp it "failed": the per-service serving/running
+        #     health recorded by _apply_deployment is exactly what makes
+        #     _deployment_has_durable_runtime return True. Overwriting it to "failed"
+        #     would make the snapshot-less re-entry pass read "no runtime" and
+        #     release+page a serving pod (the BUG #2 false alarm). Preserving the
+        #     serving health keeps every pass reaching the same retain-without-paging
+        #     verdict.
+        #   * False (genuinely DEAD) -- no service is serving and none is
+        #     indeterminate. Stamp "failed": a dead pod SHOULD read failed and page
+        #     (and re-stamping failed-over-failed cannot change the verdict).
+        if had_durable_runtime is None:
+            _record_service_status(
+                conn,
+                deployment_id=deployment_id,
+                status=ARCLINK_SERVICE_RUNTIME_INDETERMINATE,
+                detail={"error": error, "runtime": "indeterminate"},
+            )
+        elif had_durable_runtime is False:
+            _record_service_status(conn, deployment_id=deployment_id, status="failed", detail={"error": error})
+        # had_durable_runtime is True: intentionally leave the recorded serving health
+        # untouched so the snapshot-less re-entry pass still reads it as serving.
         if int(refreshed_job["attempt_count"] if refreshed_job is not None else 0) >= worker.max_attempts:
             _release_failed_deployment_placement_if_exhausted(
                 conn,
@@ -859,6 +902,7 @@ def process_sovereign_deployment(
                 job_id=str(job["job_id"]),
                 reason="max_attempts_exhausted_after_failure",
                 error=error,
+                had_durable_runtime=had_durable_runtime,
             )
         append_arclink_event(
             conn,
@@ -870,12 +914,54 @@ def process_sovereign_deployment(
         return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "failed", "error": error}
 
 
-def _deployment_has_durable_runtime(conn: sqlite3.Connection, *, deployment_id: str) -> bool:
+# BUG #2 fix: the status we record for a service whose runtime we could NOT
+# determine because the post-apply ``docker compose ps`` inspection failed (a
+# transport/inspection error), even though ``docker compose up`` itself SUCCEEDED.
+# This is NOT "the service is dead" -- it is "we don't know" -- so it must be kept
+# distinct from "failed" everywhere the runtime is judged. Treating it as failed
+# would let a post-apply inspection blip release/page a pod that is actually
+# serving (a false alarm).
+ARCLINK_SERVICE_RUNTIME_INDETERMINATE = "unknown"
+_RUNTIME_SERVING_STATES = {"healthy", "running", "ready", "active"}
+
+# Sentinel for "no runtime snapshot was passed" -- distinct from a snapshot whose
+# value is None (INDETERMINATE). Without this we could not tell "caller did not
+# pass a snapshot, read live health" apart from "caller passed an indeterminate
+# snapshot" (both would be ``None``).
+_RUNTIME_SNAPSHOT_UNSET: Any = object()
+
+
+def _deployment_has_durable_runtime(
+    conn: sqlite3.Connection, *, deployment_id: str
+) -> bool | None:
+    """Tri-state runtime judgement for a deployment, from recorded service health.
+
+    BUG #2 fix -- returns:
+      * ``True``  when ANY service is in a serving state (healthy/running/ready/
+        active): the pod is genuinely up.
+      * ``None``  (INDETERMINATE) when the runtime could not be determined -- i.e.
+        no service is serving AND at least one is the ``unknown`` inspection-failure
+        status. ``docker compose up`` succeeded but the ``ps`` reconciliation could
+        not be read, so we must NOT conclude "no runtime": treating an unreadable
+        runtime as dead would release/page a pod that may be serving (a false
+        alarm). Callers retain placement and do NOT page for this case.
+      * ``False`` when there IS recorded health, none of it is serving, and none of
+        it is indeterminate: a GENUINELY not-running pod (every service failed/
+        missing/exited). This is the only state that releases + pages.
+
+    An empty health table (no rows recorded at all) returns ``False`` -- there is
+    no evidence of a runtime, which matches the prior behaviour for that case.
+    """
     rows = conn.execute(
         "SELECT status FROM arclink_service_health WHERE deployment_id = ?",
         (deployment_id,),
     ).fetchall()
-    return any(str(row["status"] or "").strip().lower() in {"healthy", "running", "ready", "active"} for row in rows)
+    statuses = [str(row["status"] or "").strip().lower() for row in rows]
+    if any(status in _RUNTIME_SERVING_STATES for status in statuses):
+        return True
+    if any(status == ARCLINK_SERVICE_RUNTIME_INDETERMINATE for status in statuses):
+        return None
+    return False
 
 
 def _release_failed_deployment_placement_if_exhausted(
@@ -885,14 +971,46 @@ def _release_failed_deployment_placement_if_exhausted(
     job_id: str,
     reason: str,
     error: str = "",
+    had_durable_runtime: bool | None | Any = _RUNTIME_SNAPSHOT_UNSET,
 ) -> dict[str, Any] | None:
-    if _deployment_has_durable_runtime(conn, deployment_id=deployment_id):
+    # ``had_durable_runtime`` lets the caller pass a TRI-STATE runtime-state
+    # snapshot taken BEFORE its exception handler overwrites service health to
+    # "failed" (see the process_sovereign_deployment except-block):
+    #   * True  -- the pod was serving before a post-health handoff error. NOT a
+    #     terminal provisioning failure: retain placement, do not page.
+    #   * None  -- INDETERMINATE (BUG #2): ``docker compose up`` succeeded but the
+    #     post-apply ``ps`` inspection failed, so the runtime is unknown. We must
+    #     NOT treat an unreadable runtime as "no runtime": retain placement and do
+    #     NOT page (false silence is correct -- a maybe-serving pod must never be
+    #     released/paged on an inspection blip). Distinct event for traceability.
+    #   * False -- genuinely no runtime: release placement and page (terminal).
+    # When the snapshot is UNSET (the clean max-attempts path that never overwrote
+    # health), we read the live tri-state service-health table directly.
+    durable_runtime: bool | None = (
+        _deployment_has_durable_runtime(conn, deployment_id=deployment_id)
+        if had_durable_runtime is _RUNTIME_SNAPSHOT_UNSET
+        else had_durable_runtime
+    )
+    if durable_runtime is True:
         append_arclink_event(
             conn,
             subject_kind="deployment",
             subject_id=deployment_id,
             event_type="placement_retained_after_provisioning_failure",
             metadata={"job_id": job_id, "reason": reason, "durable_runtime": True},
+        )
+        return None
+    if durable_runtime is None:
+        # INDETERMINATE runtime (BUG #2): compose up succeeded but ps inspection
+        # failed. Retain placement, do NOT page -- we cannot prove the pod is dead,
+        # and paging on an inspection blip for a possibly-serving pod is exactly the
+        # false alarm this gate must avoid. The next worker pass re-inspects.
+        append_arclink_event(
+            conn,
+            subject_kind="deployment",
+            subject_id=deployment_id,
+            event_type="placement_retained_runtime_indeterminate",
+            metadata={"job_id": job_id, "reason": reason, "runtime": "indeterminate"},
         )
         return None
     removed = remove_placement(conn, deployment_id=deployment_id)
@@ -914,7 +1032,74 @@ def _release_failed_deployment_placement_if_exhausted(
         reason="released failed provisioning placement after exhausted attempts without durable runtime",
         metadata={"job_id": job_id, "reason": reason, "error": error, "placement": removed},
     )
+    # Operator hiccup: a deployment that ended in provisioning_failed AFTER its
+    # provisioning retries were exhausted (attempt_count >= max_attempts) AND has
+    # no durable runtime is a REAL, terminal failure -- the pod will not come up
+    # on its own. This is the only place we page the Operator for provisioning:
+    #   * NOT on each sovereign_provisioning_failed event -- those fire on every
+    #     retry attempt and the next attempt may self-heal (false alarm).
+    #   * NOT when the deployment still has a durable runtime (handled above with
+    #     an early return -- the pod is actually serving, so it is not a hiccup).
+    #   * NOT more than once per deployment -- we only reach here after
+    #     remove_placement() returned a row (it returns None on re-entry once the
+    #     placement is gone), and report_operator_hiccup additionally dedups on
+    #     the per-deployment audit state, so repeated worker passes never spam.
+    #
+    # RE-ARM HOOK: this per-deployment alert stays armed until a genuine recovery
+    # calls control.resolve_operator_hiccup(conn, cfg, source="sovereign_provisioning",
+    # key=f"deployment_provisioning_failed:{deployment_id}"). When an operator-repair
+    # path is built (re-queue the failed deployment / re-place + apply and observe a
+    # durable runtime), wire that resolve there so the next genuine failure pages
+    # again. There is intentionally no auto-resolve here: silence must not re-arm,
+    # and we do not invent a repair flow that does not yet exist.
+    _report_provisioning_failed_operator_hiccup(
+        conn,
+        deployment_id=deployment_id,
+        job_id=job_id,
+        reason=reason,
+        error=error,
+    )
     return removed
+
+
+def _report_provisioning_failed_operator_hiccup(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    job_id: str,
+    reason: str,
+    error: str,
+) -> None:
+    """Page the Operator about a terminally provisioning_failed deployment.
+
+    Best-effort and fail-closed: any error resolving config / queuing the notice
+    is swallowed so it can never break the worker's placement-release path. The
+    operator target is resolved from Config (loaded via ARCLINK_CONFIG_FILE) inside
+    report_operator_hiccup, never from the worker's raw os.environ.
+    """
+    try:
+        cfg = Config.from_env()
+        clean_error = str(error or reason or "").strip()[:300]
+        message = (
+            "ArcLink deployment provisioning FAILED for "
+            f"{deployment_id}. All retries were exhausted and the pod is not "
+            "running; the placement has been released. Operator attention is "
+            "needed to recover this deployment."
+        )
+        if clean_error:
+            message += f"\nLast error: {clean_error}"
+        report_operator_hiccup(
+            conn,
+            cfg,
+            source="sovereign_provisioning",
+            # Per-deployment key: one notice per terminally-failed deployment.
+            key=f"deployment_provisioning_failed:{deployment_id}",
+            message=message,
+            reason=f"provisioning exhausted retries: {reason}",
+            extra={"deployment_id": deployment_id, "job_id": job_id, "reason": reason},
+        )
+    except Exception:  # noqa: BLE001 - hiccup reporting must never break the worker.
+        return
 
 
 def _ensure_deployment_fleet_share_hub(conn: sqlite3.Connection, *, deployment: Mapping[str, Any]) -> dict[str, Any]:
@@ -1272,7 +1457,14 @@ def _apply_deployment(
         blockers = {
             service: status
             for service, status in service_statuses.items()
-            if status in {"failed", "unhealthy", "missing", "starting"}
+            # ``unknown`` (BUG #2 indeterminate -- compose up ok but ps inspection
+            # failed) also blocks handoff: we cannot confirm the pod is ready, so we
+            # must not hand off (false silence on handoff is acceptable). This raise
+            # lands in the except-block, where the durable-runtime snapshot reports
+            # the runtime as indeterminate (None) so the exhausted gate RETAINS the
+            # placement and does NOT page -- never released/paged on an unreadable
+            # runtime.
+            if status in {"failed", "unhealthy", "missing", "starting", ARCLINK_SERVICE_RUNTIME_INDETERMINATE}
         }
         if blockers:
             raise ArcLinkSovereignWorkerError(
@@ -2059,13 +2251,20 @@ def _record_service_status_after_compose(
         _record_service_status(conn, deployment_id=deployment_id, status="healthy", detail=detail_base)
         return {service_name: "healthy" for service_name in ARCLINK_PROVISIONING_SERVICE_NAMES}
     if executor.docker_runner is None:
+        # BUG #2: compose up already ran; we simply have no runner to inspect the
+        # runtime. That is "runtime indeterminate", NOT "no runtime" -- record the
+        # ``unknown`` indeterminate status so a missing inspector can never release/
+        # page a possibly-serving pod.
         _record_service_status(
             conn,
             deployment_id=deployment_id,
-            status="failed",
+            status=ARCLINK_SERVICE_RUNTIME_INDETERMINATE,
             detail={**detail_base, "reconcile_error": "docker_runner_not_available"},
         )
-        return {service_name: "failed" for service_name in ARCLINK_PROVISIONING_SERVICE_NAMES}
+        return {
+            service_name: ARCLINK_SERVICE_RUNTIME_INDETERMINATE
+            for service_name in ARCLINK_PROVISIONING_SERVICE_NAMES
+        }
     try:
         ps_result = executor.docker_runner.run(
             ("ps", "--all", "--format", "json"),
@@ -2077,13 +2276,24 @@ def _record_service_status_after_compose(
         rows = _parse_docker_compose_ps_json(str(ps_result.get("stdout") or ""))
         statuses = _docker_compose_service_statuses(rows, project_name=docker_result.project_name)
     except Exception as exc:  # noqa: BLE001 - service health reconciliation must not undo a successful apply
+        # BUG #2 fix: ``docker compose up`` SUCCEEDED (docker_result exists) but the
+        # post-apply ``docker compose ps`` inspection failed (transport/inspection
+        # error). The runtime state is therefore UNKNOWN, not "failed/no runtime":
+        # recording every service "failed" here would make a genuinely-serving pod
+        # look dead, and the exhausted-release gate would then release its placement
+        # and page the Operator -- a false alarm. Record the ``unknown``
+        # indeterminate status instead so the durable-runtime snapshot returns None
+        # (indeterminate) and the gate retains the placement without paging.
         _record_service_status(
             conn,
             deployment_id=deployment_id,
-            status="failed",
+            status=ARCLINK_SERVICE_RUNTIME_INDETERMINATE,
             detail={**detail_base, "reconcile_error": _safe_error(exc)},
         )
-        return {service_name: "failed" for service_name in ARCLINK_PROVISIONING_SERVICE_NAMES}
+        return {
+            service_name: ARCLINK_SERVICE_RUNTIME_INDETERMINATE
+            for service_name in ARCLINK_PROVISIONING_SERVICE_NAMES
+        }
 
     recorded: dict[str, str] = {}
     for service_name in ARCLINK_PROVISIONING_SERVICE_NAMES:

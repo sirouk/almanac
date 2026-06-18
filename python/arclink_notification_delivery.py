@@ -711,8 +711,14 @@ def _gateway_has_public_agent_bridge_root_wrapper(exec_prefix: list[str]) -> boo
     key = tuple(str(part) for part in exec_prefix)
     now = time.time()
     cached = _ROOT_WRAPPER_PRESENT_CACHE.get(key)
-    if cached is not None and (now - cached[0]) < _ROOT_WRAPPER_PRESENT_TTL_SECONDS:
-        return cached[1]
+    # Only ever trust a cached NEGATIVE (which only routes to the always-safe legacy
+    # command). A cached POSITIVE is ALWAYS re-probed: the container name is the cache
+    # key and survives recreate, so a rollback/recreate that drops the wrapper while L2
+    # is enabled would otherwise keep emitting the wrapper command — re-opening the
+    # wrapper-missing hard-fail for up to the TTL. Re-probing positives catches that on
+    # the very next turn; the cost is one cheap `test -e` per turn only while L2 is on.
+    if cached is not None and cached[1] is False and (now - cached[0]) < _ROOT_WRAPPER_PRESENT_TTL_SECONDS:
+        return False
     docker_binary = str(os.environ.get("ARCLINK_DOCKER_BINARY") or "").strip() or "docker"
     probe = [docker_binary, *list(exec_prefix)[1:], "test", "-e", PUBLIC_AGENT_BRIDGE_ROOT_WRAPPER_SCRIPT]
     present = False

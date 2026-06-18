@@ -3581,6 +3581,50 @@ def test_public_agent_bridge_root_wrapper_gated_on_getme_cache_flag() -> None:
     print("PASS test_public_agent_bridge_root_wrapper_gated_on_getme_cache_flag")
 
 
+def test_gateway_root_wrapper_preflight_reprobes_positive_caches_negative() -> None:
+    # Regression for the stale-positive cache: a cached "present" must be RE-PROBED so a
+    # rollback that drops the wrapper is caught on the next turn (not after TTL), while a
+    # cached "missing" stays cached (always-safe legacy, no probe hammering).
+    delivery = load_module(
+        PYTHON_DIR / "arclink_notification_delivery.py", "arclink_notification_delivery_preflight_cache_test"
+    )
+    prefix = ["docker", "exec", "test-gw-container"]
+    delivery._ROOT_WRAPPER_PRESENT_CACHE.clear()
+    returncodes: list[int] = []
+    probe_calls: list[list[str]] = []
+
+    class _FakeProc:
+        def __init__(self, rc: int) -> None:
+            self.returncode = rc
+
+    def fake_run(cmd, **kwargs):
+        del kwargs
+        probe_calls.append(list(cmd))
+        return _FakeProc(returncodes.pop(0))
+
+    orig_run = delivery.subprocess.run
+    try:
+        delivery.subprocess.run = fake_run
+        returncodes.append(0)  # first probe: wrapper present
+        expect(delivery._gateway_has_public_agent_bridge_root_wrapper(prefix) is True, "first probe should be present")
+        returncodes.append(1)  # rollback: wrapper now missing
+        expect(
+            delivery._gateway_has_public_agent_bridge_root_wrapper(prefix) is False,
+            "cached positive must be re-probed -> now missing",
+        )
+        expect(len(probe_calls) == 2, f"positive must re-probe, got {len(probe_calls)} probes")
+        before = len(probe_calls)
+        expect(
+            delivery._gateway_has_public_agent_bridge_root_wrapper(prefix) is False,
+            "cached negative should be returned",
+        )
+        expect(len(probe_calls) == before, "cached negative must NOT re-probe")
+    finally:
+        delivery.subprocess.run = orig_run
+        delivery._ROOT_WRAPPER_PRESENT_CACHE.clear()
+    print("PASS test_gateway_root_wrapper_preflight_reprobes_positive_caches_negative")
+
+
 def test_public_agent_bridge_telegram_replay_does_not_dispatch_generic_event() -> None:
     # Regression: when native replay handles the Telegram update, the bridge must NOT
     # fall through to adapter.handle_message(event) — `event` is unbound there, which
@@ -3684,6 +3728,7 @@ def main() -> int:
     test_public_agent_bridge_persists_telegram_approval_button_state()
     test_public_agent_bridge_drains_telegram_batch_tasks_before_done()
     test_public_agent_bridge_root_wrapper_gated_on_getme_cache_flag()
+    test_gateway_root_wrapper_preflight_reprobes_positive_caches_negative()
     test_public_agent_bridge_telegram_replay_does_not_dispatch_generic_event()
     test_public_bot_ready_hub_edits_payment_message_when_available()
     test_notification_due_now_normalizes_z_and_offset_timestamps()

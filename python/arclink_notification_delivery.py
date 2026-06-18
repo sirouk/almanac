@@ -332,6 +332,8 @@ PUBLIC_AGENT_BRIDGE_DEFERRED = "DEFERRED_TO_PUBLIC_AGENT_BRIDGE"
 PUBLIC_AGENT_BRIDGE_UNCONFIRMED = "PROCESSED_UNCONFIRMED_BY_PUBLIC_AGENT_BRIDGE"
 PUBLIC_AGENT_BRIDGE_PYTHON = "/opt/arclink/runtime/hermes-venv/bin/python3"
 PUBLIC_AGENT_BRIDGE_SCRIPT = "/home/arclink/arclink/python/arclink_public_agent_bridge.py"
+PUBLIC_AGENT_BRIDGE_ROOT_WRAPPER_SCRIPT = "/home/arclink/arclink/python/arclink_public_agent_bridge_root.py"
+PUBLIC_AGENT_BRIDGE_ROOT_USER = "0:0"
 PUBLIC_AGENT_BRIDGE_CONTAINER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 PUBLIC_AGENT_BRIDGE_PROJECT_RE = re.compile(r"^arclink(?:-[a-z0-9][a-z0-9_-]{0,80})?$")
 GATEWAY_EXEC_BROKER_TOKEN_HEADER = "X-ArcLink-Gateway-Exec-Token"
@@ -608,10 +610,18 @@ def _validate_public_agent_bridge_cmd(cmd: list[str], *, project_name: str = "")
     """
     parts = [str(part) for part in cmd]
     bridge_tail = [PUBLIC_AGENT_BRIDGE_PYTHON, PUBLIC_AGENT_BRIDGE_SCRIPT]
+    root_wrapper_tail = [PUBLIC_AGENT_BRIDGE_PYTHON, PUBLIC_AGENT_BRIDGE_ROOT_WRAPPER_SCRIPT]
     expected_project = str(project_name or "").strip()
 
-    if len(parts) == 6 and parts[:3] == ["docker", "exec", "-i"] and parts[4:] == bridge_tail:
-        container_name = parts[3].strip()
+    root_wrapper_exec = (
+        len(parts) == 8
+        and parts[:3] == ["docker", "exec", "-i"]
+        and parts[3:5] == ["-u", PUBLIC_AGENT_BRIDGE_ROOT_USER]
+        and parts[6:] == root_wrapper_tail
+    )
+    legacy_exec = len(parts) == 6 and parts[:3] == ["docker", "exec", "-i"] and parts[4:] == bridge_tail
+    if root_wrapper_exec or legacy_exec:
+        container_name = parts[5].strip() if root_wrapper_exec else parts[3].strip()
         if not PUBLIC_AGENT_BRIDGE_CONTAINER_RE.fullmatch(container_name):
             return False, "", "public Agent bridge container name is not allowlisted"
         service_suffix = container_name
@@ -634,14 +644,23 @@ def _validate_public_agent_bridge_cmd(cmd: list[str], *, project_name: str = "")
             return False, "", "public Agent bridge may only exec the hermes-gateway service"
         return True, "docker-exec-hermes-gateway", ""
 
-    if (
+    legacy_compose_exec = (
         len(parts) == 13
         and parts[:3] == ["docker", "compose", "-p"]
         and parts[4] == "--env-file"
         and parts[6] == "-f"
         and parts[8:11] == ["exec", "-T", "hermes-gateway"]
         and parts[11:] == bridge_tail
-    ):
+    )
+    root_wrapper_compose_exec = (
+        len(parts) == 15
+        and parts[:3] == ["docker", "compose", "-p"]
+        and parts[4] == "--env-file"
+        and parts[6] == "-f"
+        and parts[8:13] == ["exec", "-T", "-u", PUBLIC_AGENT_BRIDGE_ROOT_USER, "hermes-gateway"]
+        and parts[13:] == root_wrapper_tail
+    )
+    if legacy_compose_exec or root_wrapper_compose_exec:
         project = parts[3].strip()
         if not PUBLIC_AGENT_BRIDGE_PROJECT_RE.fullmatch(project):
             return False, "", "public Agent bridge Compose project is not allowlisted"
@@ -660,6 +679,39 @@ def _validate_public_agent_bridge_cmd(cmd: list[str], *, project_name: str = "")
         return True, "docker-compose-exec-hermes-gateway", ""
 
     return False, "", "public Agent bridge command is not allowlisted"
+
+
+def _public_agent_bridge_root_exec_cmd(container: str) -> list[str]:
+    return [
+        "docker",
+        "exec",
+        "-i",
+        "-u",
+        PUBLIC_AGENT_BRIDGE_ROOT_USER,
+        container,
+        PUBLIC_AGENT_BRIDGE_PYTHON,
+        PUBLIC_AGENT_BRIDGE_ROOT_WRAPPER_SCRIPT,
+    ]
+
+
+def _public_agent_bridge_compose_root_exec_cmd(*, project_name: str, env_file: Path, compose_file: Path) -> list[str]:
+    return [
+        "docker",
+        "compose",
+        "-p",
+        project_name,
+        "--env-file",
+        str(env_file),
+        "-f",
+        str(compose_file),
+        "exec",
+        "-T",
+        "-u",
+        PUBLIC_AGENT_BRIDGE_ROOT_USER,
+        "hermes-gateway",
+        PUBLIC_AGENT_BRIDGE_PYTHON,
+        PUBLIC_AGENT_BRIDGE_ROOT_WRAPPER_SCRIPT,
+    ]
 
 
 def _deployment_service_container(*, project_name: str, service: str, docker_binary: str = "docker") -> str:
@@ -890,13 +942,9 @@ def _run_public_agent_gateway_turn(
                 return True, PUBLIC_AGENT_BRIDGE_DEFERRED
             return False, error
         return _run_gateway_exec_broker_request(broker_request)
-    bridge_cmd = [
-        PUBLIC_AGENT_BRIDGE_PYTHON,
-        PUBLIC_AGENT_BRIDGE_SCRIPT,
-    ]
     container = _deployment_service_container(project_name=project_name, service="hermes-gateway")
     if container:
-        cmd = ["docker", "exec", "-i", container, *bridge_cmd]
+        cmd = _public_agent_bridge_root_exec_cmd(container)
     else:
         root = _deployment_root(deployment_id=deployment_id, prefix=prefix)
         if root is None:
@@ -911,20 +959,11 @@ def _run_public_agent_gateway_turn(
             )
         except ValueError as exc:
             return False, f"Hermes public gateway bridge config rejected: {str(exc)[:220]}"
-        cmd = [
-            "docker",
-            "compose",
-            "-p",
-            project_name,
-            "--env-file",
-            str(env_file),
-            "-f",
-            str(compose_file),
-            "exec",
-            "-T",
-            "hermes-gateway",
-            *bridge_cmd,
-        ]
+        cmd = _public_agent_bridge_compose_root_exec_cmd(
+            project_name=project_name,
+            env_file=env_file,
+            compose_file=compose_file,
+        )
     valid, _command_kind, reason = _validate_public_agent_bridge_cmd(cmd, project_name=project_name)
     if not valid:
         return False, f"Hermes public gateway bridge command rejected: {reason}"
@@ -998,17 +1037,13 @@ def _run_operator_agent_gateway_turn(
                 return True, PUBLIC_AGENT_BRIDGE_DEFERRED
             return False, error
         return _run_gateway_exec_broker_request(broker_request)
-    bridge_cmd = [
-        PUBLIC_AGENT_BRIDGE_PYTHON,
-        PUBLIC_AGENT_BRIDGE_SCRIPT,
-    ]
     container = _deployment_service_container(
         project_name=project_name,
         service="control-operator-hermes-gateway",
     )
     if not container:
         return False, "operator Hermes gateway container not found in the Control Node stack"
-    cmd = ["docker", "exec", "-i", container, *bridge_cmd]
+    cmd = _public_agent_bridge_root_exec_cmd(container)
     valid, _command_kind, reason = _validate_public_agent_bridge_cmd(cmd, project_name=project_name)
     if not valid:
         return False, f"Hermes operator gateway bridge command rejected: {reason}"

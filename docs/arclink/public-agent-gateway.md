@@ -185,13 +185,17 @@ Two additional cold-start layers now exist, both **default OFF**:
 - `ARCLINK_BRIDGE_GETME_CACHE=1` enables L2 Telegram `getMe` caching. The cache key is
   `HMAC(server_secret, bot_token)` hex, never the raw token or a plain token hash. The cache is
   used only when the directory is outside Agent-writable roots, root-owned, `0700`, non-symlink,
-  and writable by the bridge; the default path is
+  and writable by the root preload wrapper; the default path is
   `/var/cache/arclink-public-agent-bridge/getme`, overrideable with
   `ARCLINK_BRIDGE_GETME_CACHE_DIR`. The server secret must come from existing ArcLink private
   state (for example the session hash pepper, an operator secret file, or the per-home
   `arclink-web-access.json` session secret); absent secret, stale entry, corrupt entry, insecure
   directory, or any cache exception falls open to live `bot.initialize()`. TTL is short
   (`ARCLINK_BRIDGE_GETME_CACHE_TTL_SECONDS`, default 180 seconds, capped at 300).
+  Runtime activation uses the allowlisted `arclink_public_agent_bridge_root.py` wrapper: Docker
+  execs that wrapper as `0:0` so it can read/write the root-owned cache, then the wrapper launches
+  the real bridge script as the normal ArcLink runtime uid with only the non-secret Telegram bot
+  profile preloaded. The Hermes turn and its tools do not run as root.
 
 L2 relies on the D5 delivery-evidence contract above as its safety backstop: a revoked or rotated
 Telegram token can skip the cached `getMe` probe, but the real send still must return a platform

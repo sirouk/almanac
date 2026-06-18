@@ -262,6 +262,7 @@ APPROVAL_POLL_SECONDS = 0.25
 BRIDGE_GETME_CACHE_DEFAULT_TTL_SECONDS = 180
 BRIDGE_GETME_CACHE_MAX_TTL_SECONDS = 300
 BRIDGE_GETME_CACHE_DEFAULT_DIR = "/var/cache/arclink-public-agent-bridge/getme"
+BRIDGE_GETME_PRELOADED_USER_ENV = "ARCLINK_BRIDGE_GETME_PRELOADED_USER_JSON"
 
 
 def _bool_env(name: str, *, default: bool = False) -> bool:
@@ -505,6 +506,17 @@ def _read_getme_cache(path: Path) -> dict[str, Any]:
     return bot_user
 
 
+def _preloaded_getme_user() -> dict[str, Any]:
+    raw = str(os.environ.get(BRIDGE_GETME_PRELOADED_USER_ENV) or "").strip()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return dict(data) if isinstance(data, Mapping) else {}
+
+
 def _telegram_user_from_cache(bot: Any, bot_user: Mapping[str, Any]) -> Any | None:
     try:
         from telegram import User
@@ -581,6 +593,10 @@ def _write_getme_cache(path: Path, bot: Any) -> None:
 
 
 async def _initialize_telegram_bot(bot: Any, bot_token: str) -> None:
+    preloaded_user = _preloaded_getme_user()
+    if preloaded_user and _apply_cached_telegram_getme(bot, preloaded_user):
+        return
+
     cache_path: Path | None = None
     if BRIDGE_GETME_CACHE_ENABLED:
         try:

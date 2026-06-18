@@ -88,7 +88,7 @@ operator-internal words. The schema/operator canon keeps the technical names.
 
 ## 3. Full Current Module Map (every `python/arclink_*.py`, grouped by subsystem)
 
-There are **87** `python/arclink_*.py` files (includes helpers/legacy). The canonical
+There are **88** `python/arclink_*.py` files (includes helpers/legacy). The canonical
 `docs/arclink/architecture.md` module map mirrors this inventory, and
 `tests/test_documentation_truths.py` guards both the count and membership. Every doc must treat the
 list below as the authoritative module inventory.
@@ -165,6 +165,8 @@ list below as the authoritative module inventory.
 ### Public Agent gateway / exec-broker / pod-comms / supervisor family (MISSING from architecture.md)
 - `arclink_public_agent_bridge` — short-lived boundary process run INSIDE a Hermes gateway
   container; replays a public Telegram/Discord turn through Hermes' own native gateway pipeline.
+- `arclink_public_agent_bridge_root` — root-only Telegram `getMe` cache preload wrapper; it
+  launches the actual public Agent bridge as the normal runtime uid.
 - `arclink_gateway_exec_broker` — trusted-host broker (8911) owning Docker-exec authority for
   Raven-mediated public-channel Agent replies.
 - `arclink_deployment_exec_broker` — trusted-host broker (8912) owning the Docker socket for

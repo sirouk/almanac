@@ -15,7 +15,7 @@ No capability below should be read as live-proven unless it says so.
 
 ## Module Map
 
-There are **87** `python/arclink_*.py` modules (including helpers and legacy
+There are **88** `python/arclink_*.py` modules (including helpers and legacy
 intake modules). They are grouped below by subsystem. Plugins live under
 `plugins/hermes-agent/`, not `python/` (see the Hermes Workspace Plugins
 section). The schema mechanism is a single idempotent `ensure_schema()` with
@@ -101,6 +101,7 @@ arclink_skill_enablement.py      Per-Agent approved-skill enablement, guarded fl
 
 ```text
 arclink_public_agent_bridge.py      Short-lived boundary process run INSIDE a Hermes gateway container; replays a public Telegram/Discord turn through Hermes' own native gateway pipeline
+arclink_public_agent_bridge_root.py Root-only getMe cache preload wrapper; drops the actual bridge turn back to the runtime uid
 arclink_gateway_exec_broker.py      Trusted-host broker (8911) owning Docker-exec authority for Raven-mediated public-channel Agent replies
 arclink_deployment_exec_broker.py   Trusted-host broker (8912) owning the Docker socket for deployment-scoped Compose ops (compose_up/ps/down)
 arclink_agent_supervisor_broker.py  Trusted-host broker (8913) owning the Docker socket for the dashboard network/proxy sidecar lifecycle

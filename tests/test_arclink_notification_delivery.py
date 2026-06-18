@@ -5,6 +5,7 @@ import importlib.util
 import asyncio
 import hashlib
 import hmac
+import io
 import json
 import os
 import stat
@@ -1757,15 +1758,62 @@ def test_public_agent_bridge_command_validator_confines_compose_paths() -> None:
                 str(compose_file),
                 "exec",
                 "-T",
+                "-u",
+                "0:0",
                 "hermes-gateway",
                 "/opt/arclink/runtime/hermes-venv/bin/python3",
-                "/home/arclink/arclink/python/arclink_public_agent_bridge.py",
+                "/home/arclink/arclink/python/arclink_public_agent_bridge_root.py",
             ]
             ok, kind, error = delivery._validate_public_agent_bridge_cmd(
                 valid_cmd,
                 project_name="arclink-arcdep_test",
             )
             expect(ok is True and kind == "docker-compose-exec-hermes-gateway", error)
+
+            old_job_cmd = [
+                "docker",
+                "compose",
+                "-p",
+                "arclink-arcdep_test",
+                "--env-file",
+                str(env_file),
+                "-f",
+                str(compose_file),
+                "exec",
+                "-T",
+                "hermes-gateway",
+                "/opt/arclink/runtime/hermes-venv/bin/python3",
+                "/home/arclink/arclink/python/arclink_public_agent_bridge.py",
+            ]
+            ok, kind, error = delivery._validate_public_agent_bridge_cmd(
+                old_job_cmd,
+                project_name="arclink-arcdep_test",
+            )
+            expect(ok is True and kind == "docker-compose-exec-hermes-gateway", error)
+
+            root_direct_bridge = [
+                "docker",
+                "exec",
+                "-i",
+                "-u",
+                "0:0",
+                "arclink-arcdep_test-hermes-gateway-1",
+                "/opt/arclink/runtime/hermes-venv/bin/python3",
+                "/home/arclink/arclink/python/arclink_public_agent_bridge.py",
+            ]
+            ok, _kind, error = delivery._validate_public_agent_bridge_cmd(
+                root_direct_bridge,
+                project_name="arclink-arcdep_test",
+            )
+            expect(ok is False and "not allowlisted" in error, error)
+
+            root_wrapper_cmd = list(root_direct_bridge)
+            root_wrapper_cmd[-1] = "/home/arclink/arclink/python/arclink_public_agent_bridge_root.py"
+            ok, kind, error = delivery._validate_public_agent_bridge_cmd(
+                root_wrapper_cmd,
+                project_name="arclink-arcdep_test",
+            )
+            expect(ok is True and kind == "docker-exec-hermes-gateway", error)
 
             outside = root / "outside" / "config" / "arclink.env"
             outside.parent.mkdir(parents=True)
@@ -2348,9 +2396,11 @@ def test_gateway_exec_broker_rejects_raw_commands_and_builds_vetted_exec() -> No
                     docker_binary,
                     "exec",
                     "-i",
+                    "-u",
+                    "0:0",
                     "arclink-arcdep_test-hermes-gateway-1",
                     "/opt/arclink/runtime/hermes-venv/bin/python3",
-                    "/home/arclink/arclink/python/arclink_public_agent_bridge.py",
+                    "/home/arclink/arclink/python/arclink_public_agent_bridge_root.py",
                 ],
                 str(calls),
             )
@@ -2382,9 +2432,11 @@ def test_gateway_exec_broker_rejects_raw_commands_and_builds_vetted_exec() -> No
                     docker_binary,
                     "exec",
                     "-i",
+                    "-u",
+                    "0:0",
                     "arclink-control-operator-hermes-gateway-1",
                     "/opt/arclink/runtime/hermes-venv/bin/python3",
-                    "/home/arclink/arclink/python/arclink_public_agent_bridge.py",
+                    "/home/arclink/arclink/python/arclink_public_agent_bridge_root.py",
                 ],
                 str(calls),
             )
@@ -2431,9 +2483,11 @@ def test_gateway_exec_broker_rejects_raw_commands_and_builds_vetted_exec() -> No
                     str(compose_file),
                     "exec",
                     "-T",
+                    "-u",
+                    "0:0",
                     "hermes-gateway",
                     "/opt/arclink/runtime/hermes-venv/bin/python3",
-                    "/home/arclink/arclink/python/arclink_public_agent_bridge.py",
+                    "/home/arclink/arclink/python/arclink_public_agent_bridge_root.py",
                 ],
                 str(calls),
             )
@@ -3203,6 +3257,123 @@ def test_public_agent_bridge_l2_getme_cache_secure_dir_or_secret_unavailable_fai
             os.environ.update(old_env)
 
 
+def test_public_agent_bridge_l2_preloaded_user_skips_getme() -> None:
+    old_env = os.environ.copy()
+    previous = None
+    try:
+        os.environ.clear()
+        os.environ.update(
+            {
+                "ARCLINK_BRIDGE_GETME_CACHE": "0",
+                "ARCLINK_BRIDGE_GETME_PRELOADED_USER_JSON": json.dumps(
+                    {"id": 777, "is_bot": True, "first_name": "Preloaded", "username": "preloaded_bot"}
+                ),
+            }
+        )
+        previous, _init_calls, _user_cls = _install_public_bridge_runtime_stubs(lambda: _fake_gateway_config())
+        bridge = load_module(PYTHON_DIR / "arclink_public_agent_bridge.py", "arclink_public_agent_bridge_l2_preloaded_test")
+
+        class BotShouldNotInitialize:
+            def __init__(self):
+                self._initialized = False
+                self._bot_user = None
+
+            async def initialize(self):
+                raise AssertionError("preloaded getMe should skip live initialize")
+
+        bot = BotShouldNotInitialize()
+        asyncio.run(bridge._initialize_telegram_bot(bot, "telegram-token"))
+        expect(bot._initialized is True, "preloaded bot should be marked initialized")
+        expect(getattr(bot._bot_user, "username", "") == "preloaded_bot", repr(bot._bot_user))
+        print("PASS test_public_agent_bridge_l2_preloaded_user_skips_getme")
+    finally:
+        if previous is not None:
+            _restore_public_bridge_runtime_stubs(previous)
+        os.environ.clear()
+        os.environ.update(old_env)
+
+
+def test_public_agent_bridge_root_wrapper_preloads_and_drops_child() -> None:
+    wrapper = load_module(PYTHON_DIR / "arclink_public_agent_bridge_root.py", "arclink_public_agent_bridge_root_wrapper_test")
+    raw_payload = json.dumps(
+        {
+            "platform": "telegram",
+            "bot_token": "telegram-token",
+            "chat_id": "123",
+            "user_id": "123",
+            "text": "hello",
+        },
+        sort_keys=True,
+    )
+    calls: list[dict[str, object]] = []
+
+    class Proc:
+        returncode = 0
+        stdout = '{"delivered": true, "delivery_status": "confirmed", "message_ids": ["tg-msg-1"], "ok": true}\n'
+        stderr = ""
+
+    def fake_run(cmd, input="", check=False, text=True, capture_output=True, env=None, preexec_fn=None):
+        calls.append(
+            {
+                "cmd": cmd,
+                "input": input,
+                "check": check,
+                "text": text,
+                "capture_output": capture_output,
+                "env": dict(env or {}),
+                "preexec_fn": preexec_fn,
+            }
+        )
+        return Proc()
+
+    old_stdin = wrapper.sys.stdin
+    old_stdout = wrapper.sys.stdout
+    old_stderr = wrapper.sys.stderr
+    old_run = wrapper.subprocess.run
+    old_preload = wrapper._preload_telegram_getme
+    old_uid_gid = wrapper._runtime_uid_gid
+    old_geteuid = wrapper.os.geteuid
+    try:
+        wrapper.sys.stdin = io.StringIO(raw_payload)
+        wrapper.sys.stdout = io.StringIO()
+        wrapper.sys.stderr = io.StringIO()
+        wrapper.subprocess.run = fake_run
+        wrapper._preload_telegram_getme = lambda payload: {
+            "id": 777,
+            "is_bot": True,
+            "first_name": "Preloaded",
+            "username": "preloaded_bot",
+        }
+        wrapper._runtime_uid_gid = lambda: (123, 456)
+        wrapper.os.geteuid = lambda: 0
+        result = wrapper.main()
+        expect(result == 0, str(result))
+        expect(calls and calls[0]["input"] == raw_payload, str(calls))
+        expect(
+            calls[0]["cmd"]
+            == [
+                wrapper.sys.executable,
+                str(PYTHON_DIR / "arclink_public_agent_bridge.py"),
+            ],
+            str(calls),
+        )
+        env = calls[0]["env"]
+        expect(isinstance(env, dict), str(env))
+        preloaded = json.loads(str(env.get("ARCLINK_BRIDGE_GETME_PRELOADED_USER_JSON") or "{}"))
+        expect(preloaded.get("username") == "preloaded_bot", str(preloaded))
+        expect(callable(calls[0]["preexec_fn"]), str(calls))
+        expect("message_ids" in wrapper.sys.stdout.getvalue(), wrapper.sys.stdout.getvalue())
+        old_stdout.write("PASS test_public_agent_bridge_root_wrapper_preloads_and_drops_child\n")
+    finally:
+        wrapper.sys.stdin = old_stdin
+        wrapper.sys.stdout = old_stdout
+        wrapper.sys.stderr = old_stderr
+        wrapper.subprocess.run = old_run
+        wrapper._preload_telegram_getme = old_preload
+        wrapper._runtime_uid_gid = old_uid_gid
+        wrapper.os.geteuid = old_geteuid
+
+
 def test_public_agent_bridge_persists_telegram_approval_button_state() -> None:
     bridge = load_module(PYTHON_DIR / "arclink_public_agent_bridge.py", "arclink_public_agent_bridge_approval_state_test")
     old_env = os.environ.copy()
@@ -3414,6 +3585,8 @@ def main() -> int:
     test_public_agent_bridge_l2_getme_cache_hit_skips_network_and_hmacs_key()
     test_public_agent_bridge_l2_getme_cache_miss_stale_corrupt_fail_open()
     test_public_agent_bridge_l2_getme_cache_secure_dir_or_secret_unavailable_fail_open()
+    test_public_agent_bridge_l2_preloaded_user_skips_getme()
+    test_public_agent_bridge_root_wrapper_preloads_and_drops_child()
     test_public_agent_bridge_persists_telegram_approval_button_state()
     test_public_agent_bridge_drains_telegram_batch_tasks_before_done()
     test_public_bot_ready_hub_edits_payment_message_when_available()

@@ -207,10 +207,6 @@ def _build_gateway_exec_command(request_body: dict[str, Any]) -> tuple[list[str]
             raise ValueError("gateway exec project name is not allowlisted")
         payload = _validate_payload(request_body.get("payload"))
         timeout_seconds = _clean_timeout(request_body.get("timeout_seconds"))
-        bridge_cmd = [
-            delivery.PUBLIC_AGENT_BRIDGE_PYTHON,
-            delivery.PUBLIC_AGENT_BRIDGE_SCRIPT,
-        ]
         docker = _docker_binary()
         container = delivery._deployment_service_container(
             project_name=project_name,
@@ -219,7 +215,7 @@ def _build_gateway_exec_command(request_body: dict[str, Any]) -> tuple[list[str]
         )
         if not container:
             raise ValueError("operator Hermes gateway container not found in the Control Node stack")
-        semantic_cmd = ["docker", "exec", "-i", container, *bridge_cmd]
+        semantic_cmd = delivery._public_agent_bridge_root_exec_cmd(container)
         valid, _kind, reason = delivery._validate_public_agent_bridge_cmd(semantic_cmd, project_name=project_name)
         if not valid:
             raise ValueError(f"gateway exec command rejected: {reason}")
@@ -236,10 +232,6 @@ def _build_gateway_exec_command(request_body: dict[str, Any]) -> tuple[list[str]
         raise ValueError("gateway exec project name is not allowlisted")
     payload = _validate_payload(request_body.get("payload"))
     timeout_seconds = _clean_timeout(request_body.get("timeout_seconds"))
-    bridge_cmd = [
-        delivery.PUBLIC_AGENT_BRIDGE_PYTHON,
-        delivery.PUBLIC_AGENT_BRIDGE_SCRIPT,
-    ]
     docker = _docker_binary()
     container = delivery._deployment_service_container(
         project_name=project_name,
@@ -247,7 +239,7 @@ def _build_gateway_exec_command(request_body: dict[str, Any]) -> tuple[list[str]
         docker_binary=docker,
     )
     if container:
-        semantic_cmd = ["docker", "exec", "-i", container, *bridge_cmd]
+        semantic_cmd = delivery._public_agent_bridge_root_exec_cmd(container)
         cmd = [docker, *semantic_cmd[1:]]
     else:
         root = delivery._deployment_root(deployment_id=deployment_id, prefix=prefix)
@@ -263,20 +255,11 @@ def _build_gateway_exec_command(request_body: dict[str, Any]) -> tuple[list[str]
             )
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
-        semantic_cmd = [
-            "docker",
-            "compose",
-            "-p",
-            project_name,
-            "--env-file",
-            str(env_file),
-            "-f",
-            str(compose_file),
-            "exec",
-            "-T",
-            "hermes-gateway",
-            *bridge_cmd,
-        ]
+        semantic_cmd = delivery._public_agent_bridge_compose_root_exec_cmd(
+            project_name=project_name,
+            env_file=env_file,
+            compose_file=compose_file,
+        )
         cmd = [docker, *semantic_cmd[1:]]
     valid, _kind, reason = delivery._validate_public_agent_bridge_cmd(semantic_cmd, project_name=project_name)
     if not valid:

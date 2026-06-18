@@ -2850,6 +2850,27 @@ def test_control_docker_bootstrap_seeds_session_hash_pepper_and_gateway_broker_t
         "Compose should fail closed when a raw control stack lacks a session hash pepper",
     )
     expect(
+        'write_kv ARCLINK_BRIDGE_SINGLE_PLATFORM_CONFIG "${ARCLINK_BRIDGE_SINGLE_PLATFORM_CONFIG:-0}"' in deploy,
+        "control/docker runtime config should preserve L1 bridge single-platform config across upgrades",
+    )
+    expect(
+        'write_kv ARCLINK_BRIDGE_GETME_CACHE "${ARCLINK_BRIDGE_GETME_CACHE:-0}"' in deploy,
+        "control/docker runtime config should preserve L2 bridge getMe cache enablement across upgrades",
+    )
+    expect(
+        'write_kv ARCLINK_BRIDGE_GETME_CACHE_TTL_SECONDS "${ARCLINK_BRIDGE_GETME_CACHE_TTL_SECONDS:-180}"' in deploy,
+        "control/docker runtime config should preserve L2 bridge getMe cache TTL across upgrades",
+    )
+    expect(
+        'write_kv ARCLINK_BRIDGE_GETME_CACHE_DIR "${ARCLINK_BRIDGE_GETME_CACHE_DIR:-/var/cache/arclink-public-agent-bridge/getme}"' in deploy,
+        "control/docker runtime config should preserve L2 bridge getMe cache directory across upgrades",
+    )
+    expect(
+        "ARCLINK_BRIDGE_SINGLE_PLATFORM_CONFIG: ${ARCLINK_BRIDGE_SINGLE_PLATFORM_CONFIG:-0}" in compose
+        and "ARCLINK_BRIDGE_GETME_CACHE: ${ARCLINK_BRIDGE_GETME_CACHE:-0}" in compose,
+        "Compose should pass L1/L2 bridge speed flags into the operator gateway environment",
+    )
+    expect(
         'ARCLINK_GATEWAY_EXEC_BROKER_TOKEN="$(preserve_or_randomize_secret "${ARCLINK_GATEWAY_EXEC_BROKER_TOKEN:-}")'
         in deploy,
         "control/docker runtime config should generate a durable gateway exec broker token before writing docker.env",

@@ -692,6 +692,7 @@ def test_compose_defines_full_stack_services() -> None:
     expect("/var/run/docker.sock" not in migration_helper_block, migration_helper_block)
     expect("group_add:" not in migration_helper_block, migration_helper_block)
     expect("python/arclink_migration_capture_helper.py" in migration_helper_block, migration_helper_block)
+    expect('ARCLINK_RUNTIME_ENV_CONFIG: "1"' in migration_helper_block, migration_helper_block)
     expect("ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN" in migration_helper_block, migration_helper_block)
     agent_user_helper_block = extract(body, "  agent-user-helper:", "\n\n")
     expect('user: "0:0"' in agent_user_helper_block, f"agent-user-helper root boundary must stay explicit\n{agent_user_helper_block}")
@@ -700,6 +701,7 @@ def test_compose_defines_full_stack_services() -> None:
     expect("/var/run/docker.sock" not in agent_user_helper_block, agent_user_helper_block)
     expect("group_add:" not in agent_user_helper_block, agent_user_helper_block)
     expect("python/arclink_agent_user_helper.py" in agent_user_helper_block, agent_user_helper_block)
+    expect('ARCLINK_RUNTIME_ENV_CONFIG: "1"' in agent_user_helper_block, agent_user_helper_block)
     expect("ARCLINK_AGENT_USER_HELPER_TOKEN" in agent_user_helper_block, agent_user_helper_block)
     expect("/home/arclink/arclink/arclink-priv/state/docker/users" in agent_user_helper_block, agent_user_helper_block)
     expect("/home/arclink/arclink/arclink-priv/vault" not in agent_user_helper_block, agent_user_helper_block)
@@ -710,6 +712,7 @@ def test_compose_defines_full_stack_services() -> None:
     expect("/var/run/docker.sock" not in agent_process_helper_block, agent_process_helper_block)
     expect("group_add:" not in agent_process_helper_block, agent_process_helper_block)
     expect("python/arclink_agent_process_helper.py" in agent_process_helper_block, agent_process_helper_block)
+    expect('ARCLINK_RUNTIME_ENV_CONFIG: "1"' in agent_process_helper_block, agent_process_helper_block)
     expect("ARCLINK_AGENT_PROCESS_HELPER_TOKEN" in agent_process_helper_block, agent_process_helper_block)
     expect(re.search(rf"^\s+- {re.escape(HOST_REPO_BIND_RO)}\s*$", agent_process_helper_block, re.MULTILINE), agent_process_helper_block)
     expect(not re.search(rf"^\s+- {re.escape(HOST_REPO_BIND)}\s*$", agent_process_helper_block, re.MULTILINE), agent_process_helper_block)
@@ -1164,6 +1167,7 @@ def test_agent_process_helper_compose_boundary_minimizes_env_and_secret_mounts()
         f"agent-process-helper must not receive the global private secrets mount\n{block}",
     )
     for required_line in (
+        'ARCLINK_RUNTIME_ENV_CONFIG: "1"',
         'ARCLINK_DOCKER_MODE: "1"',
         "ARCLINK_CONTAINER_RUNTIME: docker",
         "ARCLINK_AGENT_SERVICE_MANAGER: docker-supervisor",
@@ -1248,6 +1252,7 @@ def test_gateway_exec_broker_compose_boundary_minimizes_env_and_private_mounts()
     ):
         expect(forbidden_mount not in block, f"gateway-exec-broker leaked broad private mount {forbidden_mount}\n{block}")
     for required_line in (
+        'ARCLINK_RUNTIME_ENV_CONFIG: "1"',
         "ARCLINK_STATE_ROOT_BASE: ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}",
         "ARCLINK_DOCKER_BINARY: ${ARCLINK_DOCKER_BINARY:-docker}",
         "ARCLINK_GATEWAY_EXEC_BROKER_TOKEN:",
@@ -1377,6 +1382,7 @@ def test_deployment_exec_broker_compose_boundary_minimizes_env_and_private_mount
     ):
         expect(forbidden_mount not in block, f"deployment-exec-broker leaked broad private mount {forbidden_mount}\n{block}")
     for required_line in (
+        'ARCLINK_RUNTIME_ENV_CONFIG: "1"',
         "ARCLINK_STATE_ROOT_BASE: ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}",
         "ARCLINK_FLEET_SHARE_HUB_ROOT: ${ARCLINK_FLEET_SHARE_HUB_ROOT:-/arcdata/captains}",
         "ARCLINK_DOCKER_BINARY: ${ARCLINK_DOCKER_BINARY:-docker}",
@@ -1466,6 +1472,7 @@ def test_migration_capture_helper_compose_boundary_minimizes_env_and_confines_st
     ):
         expect(forbidden_env not in block, f"migration-capture-helper leaked broad env key {forbidden_env}\n{block}")
     for required_line in (
+        'ARCLINK_RUNTIME_ENV_CONFIG: "1"',
         "ARCLINK_STATE_ROOT_BASE: ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}",
         "ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN:",
         "ARCLINK_MIGRATION_CAPTURE_HELPER_HOST: 0.0.0.0",
@@ -1557,6 +1564,7 @@ def test_agent_supervisor_broker_compose_boundary_minimizes_env_and_private_moun
     ):
         expect(forbidden_mount not in block, f"agent-supervisor-broker leaked broad private mount {forbidden_mount}\n{block}")
     for required_line in (
+        'ARCLINK_RUNTIME_ENV_CONFIG: "1"',
         'ARCLINK_DOCKER_MODE: "1"',
         "ARCLINK_DOCKER_BINARY: ${ARCLINK_DOCKER_BINARY:-docker}",
         "ARCLINK_REPO_DIR: /home/arclink/arclink",
@@ -1653,6 +1661,7 @@ def test_operator_upgrade_broker_compose_boundary_minimizes_env_and_private_moun
     ):
         expect(forbidden_mount not in block, f"operator-upgrade-broker leaked broad private mount {forbidden_mount}\n{block}")
     for required_line in (
+        'ARCLINK_RUNTIME_ENV_CONFIG: "1"',
         'ARCLINK_DOCKER_MODE: "1"',
         "ARCLINK_CONTAINER_RUNTIME: docker",
         "ARCLINK_COMPONENT_UPGRADE_MODE: docker",
@@ -6677,6 +6686,13 @@ def test_docker_operator_commands_are_present() -> None:
     expect('ensure_env_file_value ARCLINK_CONTROL_HOST_MAX_ARCPOD_SLOTS "2"' in body, body)
     expect('ensure_env_file_value ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED "0"' in body, body)
     expect('ensure_env_file_value ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST ""' in body, body)
+    expect('ensure_env_file_value ARCLINK_BRIDGE_SINGLE_PLATFORM_CONFIG "0"' in body, body)
+    expect('ensure_env_file_value ARCLINK_BRIDGE_GETME_CACHE "0"' in body, body)
+    expect('ensure_env_file_value ARCLINK_BRIDGE_GETME_CACHE_TTL_SECONDS "180"' in body, body)
+    expect(
+        'ensure_env_file_value ARCLINK_BRIDGE_GETME_CACHE_DIR "/var/cache/arclink-public-agent-bridge/getme"' in body,
+        body,
+    )
     expect(
         'ensure_env_file_value ARCLINK_FLEET_SSH_KEY_PATH "/home/arclink/arclink/arclink-priv/secrets/ssh/id_ed25519"'
         in body,

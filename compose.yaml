@@ -655,6 +655,7 @@ services:
     cap_drop:
       - ALL
     environment:
+      ARCLINK_RUNTIME_ENV_CONFIG: "1"
       ARCLINK_STATE_ROOT_BASE: ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
       ARCLINK_FLEET_SHARE_HUB_ROOT: ${ARCLINK_FLEET_SHARE_HUB_ROOT:-/arcdata/captains}
       ARCLINK_DOCKER_BINARY: ${ARCLINK_DOCKER_BINARY:-docker}
@@ -687,6 +688,7 @@ services:
     cap_drop:
       - ALL
     environment:
+      ARCLINK_RUNTIME_ENV_CONFIG: "1"
       ARCLINK_STATE_ROOT_BASE: ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
       ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED: ${ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED:-}
       ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN: ${ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN:?run ./deploy.sh control bootstrap first}
@@ -821,6 +823,7 @@ services:
     cap_drop:
       - ALL
     environment:
+      ARCLINK_RUNTIME_ENV_CONFIG: "1"
       ARCLINK_DOCKER_MODE: "1"
       ARCLINK_DOCKER_BINARY: ${ARCLINK_DOCKER_BINARY:-docker}
       ARCLINK_REPO_DIR: /home/arclink/arclink
@@ -857,6 +860,7 @@ services:
     cap_add:
       - DAC_OVERRIDE
     environment:
+      ARCLINK_RUNTIME_ENV_CONFIG: "1"
       ARCLINK_DOCKER_MODE: "1"
       ARCLINK_CONTAINER_RUNTIME: docker
       ARCLINK_COMPONENT_UPGRADE_MODE: docker
@@ -897,6 +901,7 @@ services:
       - DAC_OVERRIDE
       - FOWNER
     environment:
+      ARCLINK_RUNTIME_ENV_CONFIG: "1"
       ARCLINK_DOCKER_MODE: "1"
       ARCLINK_DOCKER_AGENT_HOME_ROOT: /home/arclink/arclink/arclink-priv/state/docker/users
       ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED: ${ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED:-}
@@ -924,6 +929,7 @@ services:
     # process handles. It never mounts the Docker socket.
     user: "0:0"
     environment:
+      ARCLINK_RUNTIME_ENV_CONFIG: "1"
       ARCLINK_DOCKER_MODE: "1"
       ARCLINK_CONTAINER_RUNTIME: docker
       ARCLINK_AGENT_SERVICE_MANAGER: docker-supervisor
@@ -1007,6 +1013,7 @@ services:
     cap_drop:
       - ALL
     environment:
+      ARCLINK_RUNTIME_ENV_CONFIG: "1"
       ARCLINK_STATE_ROOT_BASE: ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
       ARCLINK_DOCKER_BINARY: ${ARCLINK_DOCKER_BINARY:-docker}
       ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED: ${ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED:-}

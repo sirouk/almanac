@@ -172,8 +172,32 @@ Current production contract:
 
 Latency work stays on the cold-spawn path. `ensure_shared_hermes_runtime` runs a deploy-time
 `compileall` warmup (`ARCLINK_HERMES_COMPILEALL_ENABLED=1` by default) so fresh bridge processes
-can reuse bytecode. Future safe layers are single-platform config starvation and a root-owned
-Telegram `getMe` cache, both default-off until live proof.
+can reuse bytecode.
+
+Two additional cold-start layers now exist, both **default OFF**:
+
+- `ARCLINK_BRIDGE_SINGLE_PLATFORM_CONFIG=1` enables L1 single-platform config starvation. The
+  bridge snapshots the process environment immediately before `load_gateway_config()`, removes
+  only the unused platform's `TELEGRAM_*` or `DISCORD_*` variables, calls Hermes' real config
+  loader, and restores the snapshot in `finally`. If the starved call raises, the bridge restores
+  the environment and reruns the same unstarved loader. It never hand-builds Hermes
+  `PlatformConfig`; worst case is no speedup.
+- `ARCLINK_BRIDGE_GETME_CACHE=1` enables L2 Telegram `getMe` caching. The cache key is
+  `HMAC(server_secret, bot_token)` hex, never the raw token or a plain token hash. The cache is
+  used only when the directory is outside Agent-writable roots, root-owned, `0700`, non-symlink,
+  and writable by the bridge; the default path is
+  `/var/cache/arclink-public-agent-bridge/getme`, overrideable with
+  `ARCLINK_BRIDGE_GETME_CACHE_DIR`. The server secret must come from existing ArcLink private
+  state (for example the session hash pepper, an operator secret file, or the per-home
+  `arclink-web-access.json` session secret); absent secret, stale entry, corrupt entry, insecure
+  directory, or any cache exception falls open to live `bot.initialize()`. TTL is short
+  (`ARCLINK_BRIDGE_GETME_CACHE_TTL_SECONDS`, default 180 seconds, capped at 300).
+
+L2 relies on the D5 delivery-evidence contract above as its safety backstop: a revoked or rotated
+Telegram token can skip the cached `getMe` probe, but the real send still must return a platform
+message id before `notification-delivery` marks the outbox row delivered. No local CI fake proves
+runtime speed; real speedup is confirmed only through `PG-PUBLIC-AGENT-DELIVERY` or a named live
+performance gate against a real gateway container and bot token.
 
 ### 1.8 Proof-gated and degraded paths
 

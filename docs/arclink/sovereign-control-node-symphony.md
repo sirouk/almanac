@@ -1677,8 +1677,12 @@ say which proof journeys are missing instead of relying on memory.
   is what preserves lock-step and the control-side durability handoff; daemon,
   prefork, and sidecar designs are explicitly rejected under the current
   architecture. The first safe latency layer landed as deploy-time bytecode
-  warmup (`ARCLINK_HERMES_COMPILEALL_ENABLED=1`); deeper cold-import graph
-  reduction remains desirable, but must preserve the same spawn boundary.
+  warmup (`ARCLINK_HERMES_COMPILEALL_ENABLED=1`). L1 env-starved single-platform
+  config (`ARCLINK_BRIDGE_SINGLE_PLATFORM_CONFIG`) and L2 Telegram `getMe` cache
+  (`ARCLINK_BRIDGE_GETME_CACHE`) are implemented but default off, fail open or
+  no-op, and require `PG-PUBLIC-AGENT-DELIVERY` or a named live performance gate
+  before any runtime speedup claim. Deeper cold-import graph reduction remains
+  desirable, but must preserve the same spawn boundary.
 - *Evidence/governance ambition* — `arclink_evidence.evidence_governance_status`
   summarizes required journeys (`hosted`, `workspace`, `external`, `router`) and
   the operator snapshot exposes missing/incomplete journeys. `CANON.md` and

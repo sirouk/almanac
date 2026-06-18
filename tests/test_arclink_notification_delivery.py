@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import importlib.util
 import asyncio
+import hashlib
+import hmac
 import json
 import os
 import stat
 import sys
 import tempfile
+import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -2700,6 +2703,506 @@ def test_public_agent_bridge_defaults_to_streaming_progress_without_reasoning() 
     print("PASS test_public_agent_bridge_defaults_to_streaming_progress_without_reasoning")
 
 
+def _install_public_bridge_runtime_stubs(load_gateway_config):
+    module_names = [
+        "telegram",
+        "gateway",
+        "gateway.config",
+        "gateway.platforms",
+        "gateway.platforms.base",
+        "gateway.run",
+        "gateway.session",
+    ]
+    missing = object()
+    previous = {name: sys.modules.get(name, missing) for name in module_names}
+    init_calls: list[str] = []
+
+    class FakeTelegramUser:
+        def __init__(self, payload: dict[str, object]):
+            self.payload = dict(payload)
+            self.id = self.payload.get("id", 4242)
+            self.is_bot = self.payload.get("is_bot", True)
+            self.first_name = self.payload.get("first_name", "ArcBot")
+            self.username = self.payload.get("username", "arc_bot")
+
+        @classmethod
+        def de_json(cls, data, bot):
+            del bot
+            return cls(dict(data or {}))
+
+        def to_dict(self):
+            return dict(self.payload)
+
+    class FakeBot:
+        def __init__(self, token: str):
+            self.token = token
+            self._initialized = False
+            self._bot_user = None
+
+        async def initialize(self):
+            init_calls.append(self.token)
+            self._bot_user = FakeTelegramUser(
+                {"id": 4242, "is_bot": True, "first_name": "ArcBot", "username": "arc_bot"}
+            )
+            self._initialized = True
+
+        async def shutdown(self):
+            return None
+
+    class HomeChannel:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class Platform:
+        TELEGRAM = "telegram"
+        DISCORD = "discord"
+
+    class PlatformConfig:
+        def __init__(self):
+            self.enabled = False
+            self.token = ""
+            self.gateway_restart_notification = True
+            self.reply_to_mode = ""
+            self.home_channel = None
+
+    class MessageType:
+        COMMAND = "command"
+        TEXT = "text"
+
+    class MessageEvent:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class SendResult:
+        def __init__(self, success=True, message_id=None, raw_response=None, error=""):
+            self.success = success
+            self.message_id = message_id
+            self.raw_response = raw_response
+            self.error = error
+            self.continuation_message_ids = []
+
+    class SessionSource:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeAdapter:
+        MAX_MESSAGE_LENGTH = 4096
+
+        def __init__(self):
+            self._background_tasks = set()
+            self._pending_text_batch_tasks = {}
+            self._pending_photo_batch_tasks = {}
+
+        def set_message_handler(self, handler):
+            self.message_handler = handler
+
+        def set_fatal_error_handler(self, handler):
+            self.fatal_error_handler = handler
+
+        def set_session_store(self, store):
+            self.session_store = store
+
+        def set_busy_session_handler(self, handler):
+            self.busy_session_handler = handler
+
+        async def send(self, chat_id, content, reply_to=None, metadata=None):
+            del chat_id, content, reply_to, metadata
+            return SendResult(success=True, message_id="tg-msg-1", raw_response={"message_id": "tg-msg-1"})
+
+        async def handle_message(self, event):
+            await self.send(event.source.chat_id, "agent answer")
+
+    class GatewayRunner:
+        def __init__(self, cfg):
+            self.cfg = cfg
+            self.session_store = object()
+            self.adapters = {}
+
+        def _create_adapter(self, platform, platform_cfg):
+            del platform, platform_cfg
+            return FakeAdapter()
+
+        async def _handle_message(self, event):
+            del event
+
+        def _handle_adapter_fatal_error(self, *args, **kwargs):
+            del args, kwargs
+
+        def _handle_active_session_busy_message(self, *args, **kwargs):
+            del args, kwargs
+
+        def _session_key_for_source(self, source):
+            return f"{source.platform}:{source.chat_id}"
+
+    telegram_mod = types.ModuleType("telegram")
+    telegram_mod.Bot = FakeBot
+    telegram_mod.User = FakeTelegramUser
+
+    gateway_mod = types.ModuleType("gateway")
+    gateway_mod.__path__ = []
+    config_mod = types.ModuleType("gateway.config")
+    config_mod.HomeChannel = HomeChannel
+    config_mod.Platform = Platform
+    config_mod.PlatformConfig = PlatformConfig
+    config_mod.load_gateway_config = load_gateway_config
+    platforms_mod = types.ModuleType("gateway.platforms")
+    platforms_mod.__path__ = []
+    base_mod = types.ModuleType("gateway.platforms.base")
+    base_mod.MessageEvent = MessageEvent
+    base_mod.MessageType = MessageType
+    base_mod.SendResult = SendResult
+    run_mod = types.ModuleType("gateway.run")
+    run_mod.GatewayRunner = GatewayRunner
+    session_mod = types.ModuleType("gateway.session")
+    session_mod.SessionSource = SessionSource
+
+    sys.modules["telegram"] = telegram_mod
+    sys.modules["gateway"] = gateway_mod
+    sys.modules["gateway.config"] = config_mod
+    sys.modules["gateway.platforms"] = platforms_mod
+    sys.modules["gateway.platforms.base"] = base_mod
+    sys.modules["gateway.run"] = run_mod
+    sys.modules["gateway.session"] = session_mod
+    return previous, init_calls, FakeTelegramUser
+
+
+def _restore_public_bridge_runtime_stubs(previous) -> None:
+    for name, module in previous.items():
+        if module.__class__ is object:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = module
+
+
+def _fake_gateway_config(platforms=None):
+    return types.SimpleNamespace(
+        platforms=platforms if platforms is not None else {},
+        streaming=types.SimpleNamespace(enabled=False, transport=""),
+    )
+
+
+def test_public_agent_bridge_l1_l2_flags_off_preserve_config_and_getme() -> None:
+    old_env = os.environ.copy()
+    previous = None
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        runtime = root / "runtime-src"
+        runtime.mkdir()
+        snapshots: list[dict[str, str]] = []
+
+        def load_gateway_config():
+            snapshots.append({key: value for key, value in os.environ.items() if key.startswith(("TELEGRAM_", "DISCORD_"))})
+            return _fake_gateway_config()
+
+        try:
+            os.environ.clear()
+            os.environ.update(
+                {
+                    "HOME": str(root / "home"),
+                    "HERMES_AGENT_SRC": str(runtime),
+                    "DISCORD_BOT_TOKEN": "discord-token-present",
+                    "DISCORD_HOME_CHANNEL": "discord-home-present",
+                    "ARCLINK_BRIDGE_SINGLE_PLATFORM_CONFIG": "0",
+                    "ARCLINK_BRIDGE_GETME_CACHE": "0",
+                }
+            )
+            previous, init_calls, _user_cls = _install_public_bridge_runtime_stubs(load_gateway_config)
+            bridge = load_module(PYTHON_DIR / "arclink_public_agent_bridge.py", "arclink_public_agent_bridge_flags_off_test")
+            result = asyncio.run(
+                bridge._run_telegram(
+                    {
+                        "platform": "telegram",
+                        "bot_token": "telegram-turn-token",
+                        "chat_id": "tg-chat",
+                        "user_id": "tg-user",
+                        "text": "hello",
+                    }
+                )
+            )
+            expect(result["delivered"] is True, str(result))
+            expect(snapshots and snapshots[0].get("DISCORD_BOT_TOKEN") == "discord-token-present", str(snapshots))
+            expect(snapshots[0].get("TELEGRAM_BOT_TOKEN") == "telegram-turn-token", str(snapshots))
+            expect(init_calls == ["telegram-turn-token"], str(init_calls))
+            print("PASS test_public_agent_bridge_l1_l2_flags_off_preserve_config_and_getme")
+        finally:
+            if previous is not None:
+                _restore_public_bridge_runtime_stubs(previous)
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_public_agent_bridge_l1_env_starves_unused_platform_and_restores() -> None:
+    old_env = os.environ.copy()
+    previous = None
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        runtime = root / "runtime-src"
+        runtime.mkdir()
+        snapshots: list[dict[str, str]] = []
+
+        def load_gateway_config():
+            snapshots.append({key: value for key, value in os.environ.items() if key.startswith(("TELEGRAM_", "DISCORD_"))})
+            return _fake_gateway_config()
+
+        try:
+            os.environ.clear()
+            os.environ.update(
+                {
+                    "HOME": str(root / "home"),
+                    "HERMES_AGENT_SRC": str(runtime),
+                    "DISCORD_BOT_TOKEN": "discord-token-starved",
+                    "DISCORD_REPLY_TO_MODE": "first",
+                    "ARCLINK_BRIDGE_SINGLE_PLATFORM_CONFIG": "1",
+                    "ARCLINK_BRIDGE_GETME_CACHE": "0",
+                }
+            )
+            previous, _init_calls, _user_cls = _install_public_bridge_runtime_stubs(load_gateway_config)
+            bridge = load_module(PYTHON_DIR / "arclink_public_agent_bridge.py", "arclink_public_agent_bridge_l1_starve_test")
+            asyncio.run(
+                bridge._run_telegram(
+                    {
+                        "platform": "telegram",
+                        "bot_token": "telegram-turn-token",
+                        "chat_id": "tg-chat",
+                        "user_id": "tg-user",
+                        "text": "hello",
+                    }
+                )
+            )
+            expect(snapshots and "DISCORD_BOT_TOKEN" not in snapshots[0], str(snapshots))
+            expect("DISCORD_REPLY_TO_MODE" not in snapshots[0], str(snapshots))
+            expect(snapshots[0].get("TELEGRAM_BOT_TOKEN") == "telegram-turn-token", str(snapshots))
+            expect(os.environ.get("DISCORD_BOT_TOKEN") == "discord-token-starved", dict(os.environ))
+            expect(os.environ.get("DISCORD_REPLY_TO_MODE") == "first", dict(os.environ))
+            print("PASS test_public_agent_bridge_l1_env_starves_unused_platform_and_restores")
+        finally:
+            if previous is not None:
+                _restore_public_bridge_runtime_stubs(previous)
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_public_agent_bridge_l1_restores_env_when_starved_loader_raises() -> None:
+    old_env = os.environ.copy()
+    try:
+        os.environ.clear()
+        os.environ.update(
+            {
+                "ARCLINK_BRIDGE_SINGLE_PLATFORM_CONFIG": "1",
+                "ARCLINK_BRIDGE_GETME_CACHE": "0",
+                "DISCORD_BOT_TOKEN": "discord-token-restored",
+                "DISCORD_EXTRA_CONFIG": "discord-extra-restored",
+            }
+        )
+        bridge = load_module(PYTHON_DIR / "arclink_public_agent_bridge.py", "arclink_public_agent_bridge_l1_raise_test")
+        snapshots: list[dict[str, str]] = []
+
+        def load_gateway_config():
+            snapshots.append({key: value for key, value in os.environ.items() if key.startswith("DISCORD_")})
+            if len(snapshots) == 1:
+                raise RuntimeError("starved load failed")
+            return _fake_gateway_config()
+
+        result = bridge._load_gateway_config_for_platform(load_gateway_config, "telegram")
+        expect(result is not None, "fallback load should return config")
+        expect(snapshots and not snapshots[0], str(snapshots))
+        expect(snapshots[1].get("DISCORD_BOT_TOKEN") == "discord-token-restored", str(snapshots))
+        expect(os.environ.get("DISCORD_EXTRA_CONFIG") == "discord-extra-restored", dict(os.environ))
+        print("PASS test_public_agent_bridge_l1_restores_env_when_starved_loader_raises")
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+
+
+def test_public_agent_bridge_l2_getme_cache_hit_skips_network_and_hmacs_key() -> None:
+    old_env = os.environ.copy()
+    previous = None
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        cache_dir = root / "cache"
+        secret = "bridge-cache-test-secret"
+        token = "123456:telegram-token-value"
+        try:
+            os.environ.clear()
+            os.environ.update(
+                {
+                    "ARCLINK_BRIDGE_GETME_CACHE": "1",
+                    "ARCLINK_BRIDGE_GETME_CACHE_DIR": str(cache_dir),
+                    "ARCLINK_SESSION_HASH_PEPPER": secret,
+                    "HERMES_HOME": str(root / "hermes-home"),
+                }
+            )
+            previous, _init_calls, _user_cls = _install_public_bridge_runtime_stubs(lambda: _fake_gateway_config())
+            bridge = load_module(PYTHON_DIR / "arclink_public_agent_bridge.py", "arclink_public_agent_bridge_l2_hit_test")
+            cache_path = bridge._bridge_getme_cache_path(token)
+            expect(cache_path is not None, "cache path should be available under root-owned secure dir")
+            expected_key = hmac.new(secret.encode("utf-8"), token.encode("utf-8"), hashlib.sha256).hexdigest()
+            expect(cache_path.stem == expected_key, cache_path.name)
+            expect(token not in str(cache_path), str(cache_path))
+            expect(cache_path.stem != hashlib.sha256(token.encode("utf-8")).hexdigest(), cache_path.name)
+            bridge._json_write(
+                cache_path,
+                {
+                    "cached_at": int(bridge.time.time()),
+                    "expires_at": int(bridge.time.time()) + 60,
+                    "bot_user": {"id": 999, "is_bot": True, "first_name": "Cached", "username": "cached_bot"},
+                },
+            )
+
+            class BotShouldNotInitialize:
+                def __init__(self):
+                    self._initialized = False
+                    self._bot_user = None
+
+                async def initialize(self):
+                    raise AssertionError("fresh getMe should not run on cache hit")
+
+            bot = BotShouldNotInitialize()
+            asyncio.run(bridge._initialize_telegram_bot(bot, token))
+            expect(bot._initialized is True, "cached bot should be marked initialized")
+            expect(getattr(bot._bot_user, "username", "") == "cached_bot", repr(bot._bot_user))
+            st = cache_path.parent.stat()
+            expect(stat.S_IMODE(st.st_mode) == 0o700, oct(stat.S_IMODE(st.st_mode)))
+            expect(st.st_uid == 0, f"cache dir must be root-owned, got uid={st.st_uid}")
+            print("PASS test_public_agent_bridge_l2_getme_cache_hit_skips_network_and_hmacs_key")
+        finally:
+            if previous is not None:
+                _restore_public_bridge_runtime_stubs(previous)
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_public_agent_bridge_l2_getme_cache_miss_stale_corrupt_fail_open() -> None:
+    old_env = os.environ.copy()
+    previous = None
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        cache_dir = root / "cache"
+        try:
+            os.environ.clear()
+            os.environ.update(
+                {
+                    "ARCLINK_BRIDGE_GETME_CACHE": "1",
+                    "ARCLINK_BRIDGE_GETME_CACHE_DIR": str(cache_dir),
+                    "ARCLINK_SESSION_HASH_PEPPER": "bridge-cache-test-secret",
+                    "HERMES_HOME": str(root / "hermes-home"),
+                }
+            )
+            previous, _init_calls, user_cls = _install_public_bridge_runtime_stubs(lambda: _fake_gateway_config())
+            bridge = load_module(PYTHON_DIR / "arclink_public_agent_bridge.py", "arclink_public_agent_bridge_l2_failopen_test")
+
+            class LiveBot:
+                def __init__(self, username: str):
+                    self.username = username
+                    self.initialize_calls = 0
+                    self._initialized = False
+                    self._bot_user = None
+
+                async def initialize(self):
+                    self.initialize_calls += 1
+                    self._bot_user = user_cls(
+                        {"id": 123, "is_bot": True, "first_name": "Live", "username": self.username}
+                    )
+                    self._initialized = True
+
+            for token, setup in (
+                ("miss-token", "missing"),
+                ("stale-token", "stale"),
+                ("corrupt-token", "corrupt"),
+            ):
+                path = bridge._bridge_getme_cache_path(token)
+                expect(path is not None, f"cache path missing for {token}")
+                if setup == "stale":
+                    bridge._json_write(
+                        path,
+                        {
+                            "cached_at": int(bridge.time.time()) - 120,
+                            "expires_at": int(bridge.time.time()) - 60,
+                            "bot_user": {"id": 1, "is_bot": True, "first_name": "Old", "username": "old_bot"},
+                        },
+                    )
+                elif setup == "corrupt":
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("not-json\n", encoding="utf-8")
+                bot = LiveBot(f"{setup}_bot")
+                asyncio.run(bridge._initialize_telegram_bot(bot, token))
+                expect(bot.initialize_calls == 1, f"{setup} cache should fail open to live initialize")
+                cached = bridge._json_read(path)
+                expect(cached.get("bot_user", {}).get("username") == f"{setup}_bot", str(cached))
+                expect(int(cached.get("expires_at") or 0) > int(bridge.time.time()), str(cached))
+
+            print("PASS test_public_agent_bridge_l2_getme_cache_miss_stale_corrupt_fail_open")
+        finally:
+            if previous is not None:
+                _restore_public_bridge_runtime_stubs(previous)
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_public_agent_bridge_l2_getme_cache_secure_dir_or_secret_unavailable_fail_open() -> None:
+    old_env = os.environ.copy()
+    previous = None
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        insecure_cache = hermes_home / "state" / "agent-writable-cache"
+        try:
+            os.environ.clear()
+            os.environ.update(
+                {
+                    "ARCLINK_BRIDGE_GETME_CACHE": "1",
+                    "ARCLINK_BRIDGE_GETME_CACHE_DIR": str(insecure_cache),
+                    "ARCLINK_SESSION_HASH_PEPPER": "bridge-cache-test-secret",
+                    "HERMES_HOME": str(hermes_home),
+                }
+            )
+            previous, _init_calls, user_cls = _install_public_bridge_runtime_stubs(lambda: _fake_gateway_config())
+            bridge = load_module(PYTHON_DIR / "arclink_public_agent_bridge.py", "arclink_public_agent_bridge_l2_unavailable_test")
+            expect(bridge._bridge_getme_secure_cache_dir() is None, "cache under HERMES_HOME must be disabled")
+
+            class LiveBot:
+                def __init__(self):
+                    self.initialize_calls = 0
+                    self._initialized = False
+                    self._bot_user = None
+
+                async def initialize(self):
+                    self.initialize_calls += 1
+                    self._bot_user = user_cls({"id": 321, "is_bot": True, "first_name": "Live", "username": "live_bot"})
+                    self._initialized = True
+
+            bot = LiveBot()
+            asyncio.run(bridge._initialize_telegram_bot(bot, "secure-dir-disabled-token"))
+            expect(bot.initialize_calls == 1, "secure-dir-disabled cache should fail open to live getMe")
+        finally:
+            if previous is not None:
+                _restore_public_bridge_runtime_stubs(previous)
+            os.environ.clear()
+            os.environ.update(old_env)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        try:
+            os.environ.clear()
+            os.environ.update(
+                {
+                    "ARCLINK_BRIDGE_GETME_CACHE": "1",
+                    "ARCLINK_BRIDGE_GETME_CACHE_DIR": str(root / "cache"),
+                    "HERMES_HOME": str(root / "hermes-home"),
+                }
+            )
+            bridge = load_module(
+                PYTHON_DIR / "arclink_public_agent_bridge.py",
+                "arclink_public_agent_bridge_l2_missing_secret_test",
+            )
+            expect(bridge._bridge_getme_cache_secret() == b"", "missing server secret must disable cache")
+            expect(bridge._bridge_getme_cache_path("token-without-secret") is None, "cache path must be unavailable without HMAC secret")
+            print("PASS test_public_agent_bridge_l2_getme_cache_secure_dir_or_secret_unavailable_fail_open")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_public_agent_bridge_persists_telegram_approval_button_state() -> None:
     bridge = load_module(PYTHON_DIR / "arclink_public_agent_bridge.py", "arclink_public_agent_bridge_approval_state_test")
     old_env = os.environ.copy()
@@ -2905,6 +3408,12 @@ def main() -> int:
     test_gateway_exec_broker_sanitizes_subprocess_failure_tail()
     test_upgrade_notification_delivery_defers_during_deploy_operation()
     test_public_agent_bridge_defaults_to_streaming_progress_without_reasoning()
+    test_public_agent_bridge_l1_l2_flags_off_preserve_config_and_getme()
+    test_public_agent_bridge_l1_env_starves_unused_platform_and_restores()
+    test_public_agent_bridge_l1_restores_env_when_starved_loader_raises()
+    test_public_agent_bridge_l2_getme_cache_hit_skips_network_and_hmacs_key()
+    test_public_agent_bridge_l2_getme_cache_miss_stale_corrupt_fail_open()
+    test_public_agent_bridge_l2_getme_cache_secure_dir_or_secret_unavailable_fail_open()
     test_public_agent_bridge_persists_telegram_approval_button_state()
     test_public_agent_bridge_drains_telegram_batch_tasks_before_done()
     test_public_bot_ready_hub_edits_payment_message_when_available()

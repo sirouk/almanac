@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import os
+import stat
 import sys
 import tempfile
 import threading
@@ -189,6 +191,47 @@ def _add_runtime_paths() -> None:
         sys.path.insert(0, source_text)
 
 
+def _restore_env(snapshot: Mapping[str, str]) -> None:
+    for key, value in snapshot.items():
+        os.environ[key] = value
+
+
+def _unused_platform_env_prefixes(target_platform: str) -> tuple[str, ...]:
+    platform = str(target_platform or "").strip().lower()
+    if platform == "telegram":
+        return ("DISCORD_",)
+    if platform == "discord":
+        return ("TELEGRAM_",)
+    return ()
+
+
+def _load_gateway_config_for_platform(load_gateway_config: Any, target_platform: str) -> Any:
+    if not BRIDGE_SINGLE_PLATFORM_CONFIG_ENABLED:
+        return load_gateway_config()
+
+    prefixes = _unused_platform_env_prefixes(target_platform)
+    if not prefixes:
+        return load_gateway_config()
+
+    keys = [key for key in list(os.environ) if any(key.startswith(prefix) for prefix in prefixes)]
+    snapshot = {key: os.environ[key] for key in keys if key in os.environ}
+    if not snapshot:
+        return load_gateway_config()
+
+    for key in snapshot:
+        os.environ.pop(key, None)
+    try:
+        try:
+            return load_gateway_config()
+        except Exception:
+            # Safe L1 fallback: restore the untouched environment and run the
+            # same Hermes config loader the bridge used before this flag.
+            _restore_env(snapshot)
+            return load_gateway_config()
+    finally:
+        _restore_env(snapshot)
+
+
 def _set_csv_env(name: str, *values: str) -> None:
     clean_values = [str(value).strip() for value in values if str(value).strip()]
     if not clean_values:
@@ -213,8 +256,41 @@ def _is_slash_command(text: str) -> bool:
 
 
 FALSE_VALUES = {"0", "false", "no", "off"}
+TRUE_VALUES = {"1", "true", "yes", "on"}
 BRIDGE_STATE_DIRNAME = "arclink-public-bridge"
 APPROVAL_POLL_SECONDS = 0.25
+BRIDGE_GETME_CACHE_DEFAULT_TTL_SECONDS = 180
+BRIDGE_GETME_CACHE_MAX_TTL_SECONDS = 300
+BRIDGE_GETME_CACHE_DEFAULT_DIR = "/var/cache/arclink-public-agent-bridge/getme"
+
+
+def _bool_env(name: str, *, default: bool = False) -> bool:
+    text = str(os.environ.get(name, "") or "").strip().lower()
+    if not text:
+        return default
+    if text in TRUE_VALUES:
+        return True
+    if text in FALSE_VALUES:
+        return False
+    return default
+
+
+def _int_env_clamped(name: str, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(str(os.environ.get(name, "") or "").strip())
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+BRIDGE_SINGLE_PLATFORM_CONFIG_ENABLED = _bool_env("ARCLINK_BRIDGE_SINGLE_PLATFORM_CONFIG", default=False)
+BRIDGE_GETME_CACHE_ENABLED = _bool_env("ARCLINK_BRIDGE_GETME_CACHE", default=False)
+BRIDGE_GETME_CACHE_TTL_SECONDS = _int_env_clamped(
+    "ARCLINK_BRIDGE_GETME_CACHE_TTL_SECONDS",
+    default=BRIDGE_GETME_CACHE_DEFAULT_TTL_SECONDS,
+    minimum=1,
+    maximum=BRIDGE_GETME_CACHE_MAX_TTL_SECONDS,
+)
 
 
 def _bool_payload(value: Any, *, default: bool) -> bool:
@@ -279,6 +355,252 @@ def _json_write(path: Path, payload: Mapping[str, Any]) -> None:
             os.unlink(tmp_name)
         except FileNotFoundError:
             pass
+
+
+def _read_first_line(path_value: str) -> str:
+    if not path_value:
+        return ""
+    try:
+        path = Path(path_value)
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return ""
+    return lines[0].strip() if lines else ""
+
+
+def _bridge_getme_cache_secret() -> bytes:
+    candidates: list[str] = []
+    explicit_file = str(os.environ.get("ARCLINK_BRIDGE_GETME_CACHE_SECRET_FILE") or "").strip()
+    if explicit_file:
+        candidates.append(_read_first_line(explicit_file))
+    candidates.append(str(os.environ.get("ARCLINK_SESSION_HASH_PEPPER") or "").strip())
+
+    operator_secret_dir = str(os.environ.get("ARCLINK_OPERATOR_SECRET_DIR") or "").strip()
+    if operator_secret_dir:
+        candidates.append(_read_first_line(str(Path(operator_secret_dir) / "public-agent-bridge-getme-cache-secret")))
+
+    priv_dir = str(os.environ.get("ARCLINK_PRIV_DIR") or "").strip()
+    if priv_dir:
+        priv_path = Path(priv_dir)
+        candidates.append(_read_first_line(str(priv_path / "state" / "operator-secrets" / "operator-action-auth-secret")))
+        candidates.append(_read_first_line(str(priv_path / "state" / "operator" / "secrets" / "public-agent-bridge-getme-cache-secret")))
+
+    hermes_home = str(os.environ.get("HERMES_HOME") or "").strip()
+    if hermes_home:
+        access = _json_read(Path(hermes_home) / "state" / "arclink-web-access.json")
+        candidates.append(str(access.get("session_secret") or "").strip())
+        candidates.append(str(access.get("sso_session_secret") or "").strip())
+
+    for candidate in candidates:
+        if candidate and candidate not in {"change-me", "changeme"}:
+            return candidate.encode("utf-8")
+    return b""
+
+
+def _bridge_getme_cache_key(bot_token: str) -> str:
+    secret = _bridge_getme_cache_secret()
+    if not secret:
+        return ""
+    return hmac.new(secret, str(bot_token or "").encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _resolved_path(path: Path) -> Path:
+    try:
+        return path.expanduser().resolve(strict=False)
+    except Exception:
+        return path.expanduser().absolute()
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _bridge_getme_cache_outside_agent_roots(path: Path) -> bool:
+    resolved = _resolved_path(path)
+    roots: list[str] = []
+    for name in (
+        "HERMES_HOME",
+        "VAULT_DIR",
+        "DRIVE_ROOT",
+        "CODE_WORKSPACE_ROOT",
+        "TERMINAL_WORKSPACE_ROOT",
+        "ARCLINK_WORKSPACE_ROOT",
+        "ARCLINK_DRIVE_ROOT",
+        "ARCLINK_CODE_WORKSPACE_ROOT",
+    ):
+        value = str(os.environ.get(name) or "").strip()
+        if value:
+            roots.append(value)
+    for root_value in roots:
+        root = _resolved_path(Path(root_value))
+        if resolved == root or _path_is_within(resolved, root):
+            return False
+    return True
+
+
+def _bridge_getme_secure_cache_dir() -> Path | None:
+    if not BRIDGE_GETME_CACHE_ENABLED:
+        return None
+    raw_path = str(os.environ.get("ARCLINK_BRIDGE_GETME_CACHE_DIR") or BRIDGE_GETME_CACHE_DEFAULT_DIR).strip()
+    if not raw_path:
+        return None
+    path = Path(raw_path)
+    if not _bridge_getme_cache_outside_agent_roots(path):
+        return None
+    try:
+        path.mkdir(parents=True, mode=0o700, exist_ok=True)
+        lst = path.lstat()
+        if stat.S_ISLNK(lst.st_mode):
+            return None
+        os.chmod(path, 0o700)
+        st = path.stat()
+        if not stat.S_ISDIR(st.st_mode):
+            return None
+        if st.st_uid != 0:
+            return None
+        if stat.S_IMODE(st.st_mode) != 0o700:
+            return None
+        probe = path / ".probe"
+        fd = os.open(str(probe), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, b"ok\n")
+        finally:
+            os.close(fd)
+        try:
+            probe.unlink()
+        except OSError:
+            pass
+        return path
+    except Exception:
+        return None
+
+
+def _bridge_getme_cache_path(bot_token: str) -> Path | None:
+    cache_dir = _bridge_getme_secure_cache_dir()
+    if cache_dir is None:
+        return None
+    key = _bridge_getme_cache_key(bot_token)
+    if not key:
+        return None
+    return cache_dir / f"{key}.json"
+
+
+def _read_getme_cache(path: Path) -> dict[str, Any]:
+    data = _json_read(path)
+    if not data:
+        return {}
+    try:
+        expires_at = int(data.get("expires_at") or 0)
+    except (TypeError, ValueError):
+        return {}
+    if expires_at <= int(time.time()):
+        return {}
+    bot_user = data.get("bot_user")
+    if not isinstance(bot_user, dict) or not bot_user:
+        return {}
+    return bot_user
+
+
+def _telegram_user_from_cache(bot: Any, bot_user: Mapping[str, Any]) -> Any | None:
+    try:
+        from telegram import User
+
+        de_json = getattr(User, "de_json", None)
+        if callable(de_json):
+            return de_json(dict(bot_user), bot)
+    except Exception:
+        return None
+    return None
+
+
+def _apply_cached_telegram_getme(bot: Any, bot_user: Mapping[str, Any]) -> bool:
+    if not hasattr(bot, "_bot_user") or not hasattr(bot, "_initialized"):
+        return False
+    user = _telegram_user_from_cache(bot, bot_user)
+    if user is None:
+        return False
+    try:
+        setattr(bot, "_bot_user", user)
+        setattr(bot, "_initialized", True)
+    except Exception:
+        return False
+    return bool(getattr(bot, "_initialized", False))
+
+
+def _bot_user_to_cache_dict(bot: Any) -> dict[str, Any]:
+    try:
+        user = getattr(bot, "_bot_user", None)
+    except Exception:
+        return {}
+    if user is None:
+        return {}
+    if isinstance(user, Mapping):
+        data = dict(user)
+    else:
+        to_dict = getattr(user, "to_dict", None)
+        if callable(to_dict):
+            try:
+                raw = to_dict()
+            except Exception:
+                raw = {}
+            data = dict(raw) if isinstance(raw, Mapping) else {}
+        else:
+            data = {}
+            for name in ("id", "is_bot", "first_name", "last_name", "username"):
+                try:
+                    value = getattr(user, name)
+                except Exception:
+                    continue
+                if value is not None:
+                    data[name] = value
+    if not data.get("id") and not data.get("username"):
+        return {}
+    return data
+
+
+def _write_getme_cache(path: Path, bot: Any) -> None:
+    bot_user = _bot_user_to_cache_dict(bot)
+    if not bot_user:
+        return
+    now = int(time.time())
+    try:
+        _json_write(
+            path,
+            {
+                "cached_at": now,
+                "expires_at": now + BRIDGE_GETME_CACHE_TTL_SECONDS,
+                "bot_user": bot_user,
+            },
+        )
+    except Exception:
+        return
+
+
+async def _initialize_telegram_bot(bot: Any, bot_token: str) -> None:
+    cache_path: Path | None = None
+    if BRIDGE_GETME_CACHE_ENABLED:
+        try:
+            cache_path = _bridge_getme_cache_path(bot_token)
+            if cache_path is not None:
+                bot_user = _read_getme_cache(cache_path)
+                if bot_user and _apply_cached_telegram_getme(bot, bot_user):
+                    return
+        except Exception:
+            cache_path = None
+
+    await bot.initialize()
+
+    if BRIDGE_GETME_CACHE_ENABLED:
+        try:
+            cache_path = cache_path or _bridge_getme_cache_path(bot_token)
+            if cache_path is not None:
+                _write_getme_cache(cache_path, bot)
+        except Exception:
+            return
 
 
 def _session_state_file(session_key: str) -> Path:
@@ -525,7 +847,7 @@ async def _run_telegram(payload: Mapping[str, Any]) -> dict[str, Any]:
     from gateway.run import GatewayRunner
     from gateway.session import SessionSource
 
-    cfg = load_gateway_config()
+    cfg = _load_gateway_config_for_platform(load_gateway_config, "telegram")
     _enable_public_bridge_gateway_defaults(cfg)
     platform = Platform.TELEGRAM
     platform_cfg = cfg.platforms.get(platform) or PlatformConfig()
@@ -553,7 +875,7 @@ async def _run_telegram(payload: Mapping[str, Any]) -> dict[str, Any]:
     _install_delivery_evidence(adapter, evidence)
 
     bot = Bot(token=bot_token)
-    await bot.initialize()
+    await _initialize_telegram_bot(bot, bot_token)
     try:
         adapter._bot = bot  # type: ignore[attr-defined]
         source = SessionSource(
@@ -816,7 +1138,7 @@ async def _run_discord(payload: Mapping[str, Any]) -> dict[str, Any]:
     from gateway.run import GatewayRunner
     from gateway.session import SessionSource
 
-    cfg = load_gateway_config()
+    cfg = _load_gateway_config_for_platform(load_gateway_config, "discord")
     _enable_public_bridge_gateway_defaults(cfg)
     platform = Platform.DISCORD
     platform_cfg = cfg.platforms.get(platform) or PlatformConfig()

@@ -1631,6 +1631,12 @@ def render_arclink_provisioning_intent(
         "ARCLINK_CODE_WORKSPACE_ROOT": CONTAINER_CODE_WORKSPACE_DIR,
         "ARCLINK_TERMINAL_TUI_COMMAND": "/opt/arclink/runtime/hermes-venv/bin/hermes",
         "HERMES_TUI_DIR": "/opt/arclink/runtime/hermes-agent-src/ui-tui",
+        "ARCLINK_BRIDGE_SINGLE_PLATFORM_CONFIG": str(source_env.get("ARCLINK_BRIDGE_SINGLE_PLATFORM_CONFIG") or "0"),
+        "ARCLINK_BRIDGE_GETME_CACHE": str(source_env.get("ARCLINK_BRIDGE_GETME_CACHE") or "0"),
+        "ARCLINK_BRIDGE_GETME_CACHE_TTL_SECONDS": str(source_env.get("ARCLINK_BRIDGE_GETME_CACHE_TTL_SECONDS") or "180"),
+        "ARCLINK_BRIDGE_GETME_CACHE_DIR": str(
+            source_env.get("ARCLINK_BRIDGE_GETME_CACHE_DIR") or "/var/cache/arclink-public-agent-bridge/getme"
+        ),
         "TELEGRAM_REACTIONS": "true",
         "DISCORD_REACTIONS": "true",
         "QMD_STATE_DIR": CONTAINER_QMD_STATE_DIR,

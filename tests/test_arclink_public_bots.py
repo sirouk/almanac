@@ -1112,7 +1112,9 @@ def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> No
     expect(any(button.label == "Take Helm: Bob" for button in helm_buttons), str(roster_with_bob.buttons))
     expect(not any("prime" in button.label.lower() for button in helm_buttons), str(helm_buttons))
     bob_helm = next(button for button in helm_buttons if button.label == "Take Helm: Bob")
-    expect(bob_helm.command == "/agent Bob", str(bob_helm))
+    # The button encodes the unique prefix selector (not the friendly name) so it
+    # always targets exactly this deployment even if a name collides.
+    expect(bob_helm.command == "/agent arc-bob", str(bob_helm))
     now_iso = control.utc_now_iso()
     conn.execute(
         """
@@ -2384,6 +2386,517 @@ def test_public_bot_academy_training_walks_crew_with_skip() -> None:
     print("PASS test_public_bot_academy_training_walks_crew_with_skip")
 
 
+def _active_deployment_id_in_store(conn, session_id: str) -> str:
+    """Read the active-at-helm Agent the way the routing layer reads it.
+
+    The platform persists the helm choice in
+    ``arclink_onboarding_sessions.metadata_json['active_deployment_id']`` and
+    ``_deployment_for_session`` reads it back to route the Captain's messages.
+    Tests assert against that same store so a green test proves real routing.
+    """
+    row = conn.execute(
+        "SELECT metadata_json FROM arclink_onboarding_sessions WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    if row is None:
+        return ""
+    return str(json.loads(row["metadata_json"] or "{}").get("active_deployment_id") or "")
+
+
+def test_public_bot_agents_and_agent_helm_switch_are_case_insensitive_and_owner_scoped() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_helm_feature_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_helm_feature_test")
+    conn = memory_db(control)
+
+    # The Captain's own Crew: Atlas (helm to start) plus Forge.
+    seeded = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:helm",
+        prefix="arc-atlas",
+    )
+    conn.execute(
+        "UPDATE arclink_deployments SET agent_name = ?, agent_title = ? WHERE deployment_id = ?",
+        ("Atlas", "Mission Operator", seeded["deployment_id"]),
+    )
+    conn.execute(
+        "UPDATE arclink_onboarding_sessions SET metadata_json = ? WHERE session_id = ?",
+        (
+            json.dumps({"active_deployment_id": seeded["deployment_id"], "active_agent_label": "Atlas"}, sort_keys=True),
+            seeded["session_id"],
+        ),
+    )
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="arcdep_forge",
+        user_id=seeded["user_id"],
+        prefix="arc-forge",
+        base_domain="control.example.ts.net",
+        status="active",
+        metadata={
+            "agent_name": "Forge",
+            "ingress_mode": "tailscale",
+            "tailscale_dns_name": "control.example.ts.net",
+            "tailscale_host_strategy": "path",
+        },
+    )
+    # A different Captain owns Rival. The first Captain must never reach it.
+    other = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:rival-owner",
+        prefix="arc-rival",
+    )
+    conn.execute(
+        "UPDATE arclink_deployments SET agent_name = ?, agent_title = ? WHERE deployment_id = ?",
+        ("Rival", "Other Crew", other["deployment_id"]),
+    )
+    conn.commit()
+
+    # /agents lists the Captain's roster with name, title, status, and a clear
+    # marker for the one at the helm.
+    roster = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:helm",
+        text="/agents",
+    )
+    expect(roster.action == "show_agents", str(roster))
+    expect("- Atlas - Mission Operator" in roster.reply, roster.reply)
+    expect("- Forge - " in roster.reply, roster.reply)
+    expect("- at helm" in roster.reply, roster.reply)
+    # The other Captain's Agent must not appear on this roster.
+    expect("Rival" not in roster.reply, roster.reply)
+    helm_buttons = [button for button in roster.buttons if button.label.startswith("Take Helm:")]
+    # The button displays the friendly label but encodes the unique prefix
+    # selector so it always targets exactly the intended deployment.
+    forge_helm = next(button for button in helm_buttons if button.label == "Take Helm: Forge")
+    expect(forge_helm.command == "/agent arc-forge", str(roster.buttons))
+    # Atlas is already at the helm, so it gets no "Take Helm" button.
+    expect(not any("atlas" in button.label.lower() for button in helm_buttons), str(helm_buttons))
+
+    # /agent forge -- lowercase name switches the helm and persists it in the
+    # same store the routing layer reads.
+    switched = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:helm",
+        text="/agent forge",
+    )
+    expect(switched.action == "switch_agent", str(switched))
+    expect(switched.deployment_id == "arcdep_forge", str(switched))
+    expect("Forge is at the helm" in switched.reply, switched.reply)
+    expect(_active_deployment_id_in_store(conn, seeded["session_id"]) == "arcdep_forge", "Forge should persist as active")
+
+    # /AGENT Atlas -- uppercase command and mixed-case name switch back.
+    switched_back = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:helm",
+        text="/AGENT Atlas",
+    )
+    expect(switched_back.action == "switch_agent", str(switched_back))
+    expect(switched_back.deployment_id == seeded["deployment_id"], str(switched_back))
+    expect(_active_deployment_id_in_store(conn, seeded["session_id"]) == seeded["deployment_id"], "Atlas should persist as active")
+
+    # Unknown name -> graceful reply listing the valid Crew names, no switch.
+    unknown = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:helm",
+        text="/agent Nimbus",
+    )
+    expect(unknown.action == "switch_agent_not_found", str(unknown))
+    expect("`Atlas`" in unknown.reply and "`Forge`" in unknown.reply, unknown.reply)
+    expect("Rival" not in unknown.reply, unknown.reply)
+    expect(
+        _active_deployment_id_in_store(conn, seeded["session_id"]) == seeded["deployment_id"],
+        "an unknown name must not move the helm",
+    )
+
+    # An Agent the Captain does NOT own -> refused, helm unchanged.
+    refused = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:helm",
+        text="/agent Rival",
+    )
+    expect(refused.action == "switch_agent_not_found", str(refused))
+    expect(refused.deployment_id != other["deployment_id"], str(refused))
+    expect(
+        _active_deployment_id_in_store(conn, seeded["session_id"]) == seeded["deployment_id"],
+        "switching to an unowned Agent must never move the helm",
+    )
+    # The other Captain still sees only their own Agent on their roster.
+    rival_roster = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:rival-owner",
+        text="/agents",
+    )
+    expect(rival_roster.action == "show_agents", str(rival_roster))
+    expect("Atlas" not in rival_roster.reply and "Forge" not in rival_roster.reply, rival_roster.reply)
+    print("PASS test_public_bot_agents_and_agent_helm_switch_are_case_insensitive_and_owner_scoped")
+
+
+def test_public_bot_duplicate_agent_name_disambiguates_by_unique_selector() -> None:
+    control = load_module("arclink_control.py", "arclink_control_dupname_feature_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_dupname_feature_test")
+    conn = memory_db(control)
+
+    # The Captain's Crew: Atlas (at helm) plus TWO ready agents both named Forge.
+    # There is no per-user uniqueness on agent_name, so this collision is real.
+    seeded = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:dup",
+        prefix="arc-atlas",
+    )
+    conn.execute(
+        "UPDATE arclink_deployments SET agent_name = ?, agent_title = ? WHERE deployment_id = ?",
+        ("Atlas", "Mission Operator", seeded["deployment_id"]),
+    )
+    conn.execute(
+        "UPDATE arclink_onboarding_sessions SET metadata_json = ? WHERE session_id = ?",
+        (
+            json.dumps({"active_deployment_id": seeded["deployment_id"], "active_agent_label": "Atlas"}, sort_keys=True),
+            seeded["session_id"],
+        ),
+    )
+    for prefix, dep_id in (("arc-forge", "arcdep_forge_a"), ("arc-forge-2", "arcdep_forge_b")):
+        control.reserve_arclink_deployment_prefix(
+            conn,
+            deployment_id=dep_id,
+            user_id=seeded["user_id"],
+            prefix=prefix,
+            base_domain="control.example.ts.net",
+            status="active",
+            metadata={
+                "agent_name": "Forge",
+                "ingress_mode": "tailscale",
+                "tailscale_dns_name": "control.example.ts.net",
+                "tailscale_host_strategy": "path",
+            },
+        )
+    conn.commit()
+
+    # /agent Forge -- ambiguous. Must NOT silently switch; must ask to
+    # disambiguate and surface BOTH unique prefix selectors.
+    ambiguous = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:dup",
+        text="/agent Forge",
+    )
+    expect(ambiguous.action == "switch_agent_ambiguous", str(ambiguous))
+    expect("arc-forge" in ambiguous.reply and "arc-forge-2" in ambiguous.reply, ambiguous.reply)
+    # The helm must not have moved off Atlas on an ambiguous request.
+    expect(
+        _active_deployment_id_in_store(conn, seeded["session_id"]) == seeded["deployment_id"],
+        "an ambiguous name must not move the helm",
+    )
+    # Disambiguation buttons must encode the unique selectors, not the name.
+    helm_buttons = [b for b in ambiguous.buttons if b.label.startswith("Take Helm:")]
+    helm_commands = {b.command for b in helm_buttons}
+    expect("/agent arc-forge" in helm_commands, str(ambiguous.buttons))
+    expect("/agent arc-forge-2" in helm_commands, str(ambiguous.buttons))
+
+    # Selecting by the unique selector switches to EXACTLY that deployment.
+    pick_second = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:dup",
+        text="/agent arc-forge-2",
+    )
+    expect(pick_second.action == "switch_agent", str(pick_second))
+    expect(pick_second.deployment_id == "arcdep_forge_b", str(pick_second))
+    expect(
+        _active_deployment_id_in_store(conn, seeded["session_id"]) == "arcdep_forge_b",
+        "the unique selector must switch to exactly the intended deployment",
+    )
+
+    # The other unique selector targets the OTHER same-named deployment.
+    pick_first = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:dup",
+        text="/agent arc-forge",
+    )
+    expect(pick_first.action == "switch_agent", str(pick_first))
+    expect(pick_first.deployment_id == "arcdep_forge_a", str(pick_first))
+    expect(
+        _active_deployment_id_in_store(conn, seeded["session_id"]) == "arcdep_forge_a",
+        "the sibling selector must switch to the sibling deployment",
+    )
+
+    # A roster "Take Helm" button for a duplicate name encodes a unique selector
+    # that resolves to exactly the intended deployment when replayed.
+    roster = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:dup",
+        text="/agents",
+    )
+    expect(roster.action == "show_agents", str(roster))
+    roster_helm = [b for b in roster.buttons if b.label == "Take Helm: Forge"]
+    # Both duplicate Forge buttons share the friendly label but carry distinct
+    # selectors; arc-forge-a is at the helm now so only the non-active ones show.
+    roster_commands = {b.command for b in roster_helm}
+    expect(roster_commands, "expected at least one Take Helm: Forge button")
+    expect(all(cmd.startswith("/agent arc-forge") for cmd in roster_commands), str(roster_commands))
+    # Replay one button command and confirm it targets exactly that deployment.
+    target_command = sorted(roster_commands)[-1]  # "/agent arc-forge-2"
+    replay = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:dup",
+        text=target_command,
+    )
+    expect(replay.action == "switch_agent", str(replay))
+    expect(replay.deployment_id == "arcdep_forge_b", str(replay))
+    expect(
+        _active_deployment_id_in_store(conn, seeded["session_id"]) == "arcdep_forge_b",
+        "a roster button selector must uniquely target the intended deployment",
+    )
+    print("PASS test_public_bot_duplicate_agent_name_disambiguates_by_unique_selector")
+
+
+def test_public_bot_unique_prefix_selector_wins_over_label_slug_collision() -> None:
+    """A typed unique selector (deployment prefix/id) must take PRECEDENCE over
+    friendly-label matching, even when a *different* agent's name slugs to the
+    same token. This is the exact collision helm buttons hit: Agent A has prefix
+    ``arc-forge`` while Agent B is literally named "Arc Forge" (label slug
+    ``arc-forge``). ``/agent arc-forge`` must select EXACTLY Agent A, never
+    disambiguate, while typing the shared friendly name still disambiguates.
+    """
+    control = load_module("arclink_control.py", "arclink_control_typed_selector_feature_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_typed_selector_feature_test")
+    conn = memory_db(control)
+
+    # Atlas at the helm to start, so we can prove the helm only moves on a real
+    # unambiguous selection.
+    seeded = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:typed",
+        prefix="arc-atlas",
+    )
+    conn.execute(
+        "UPDATE arclink_deployments SET agent_name = ?, agent_title = ? WHERE deployment_id = ?",
+        ("Atlas", "Mission Operator", seeded["deployment_id"]),
+    )
+    conn.execute(
+        "UPDATE arclink_onboarding_sessions SET metadata_json = ? WHERE session_id = ?",
+        (
+            json.dumps({"active_deployment_id": seeded["deployment_id"], "active_agent_label": "Atlas"}, sort_keys=True),
+            seeded["session_id"],
+        ),
+    )
+
+    # Agent A: prefix "arc-forge", but a DIFFERENT friendly name so its label
+    # slug does NOT equal "arc-forge". Its only claim to "arc-forge" is the
+    # typed prefix selector.
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="arcdep_forge_prefix",
+        user_id=seeded["user_id"],
+        prefix="arc-forge",
+        base_domain="control.example.ts.net",
+        status="active",
+        metadata={
+            "agent_name": "Anvil",
+            "ingress_mode": "tailscale",
+            "tailscale_dns_name": "control.example.ts.net",
+            "tailscale_host_strategy": "path",
+        },
+    )
+    # Agent B: a different prefix, but its friendly name "Arc Forge" slugs to
+    # "arc-forge" -- the colliding LABEL slug.
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="arcdep_forge_label",
+        user_id=seeded["user_id"],
+        prefix="arc-anvilpod",
+        base_domain="control.example.ts.net",
+        status="active",
+        metadata={
+            "agent_name": "Arc Forge",
+            "ingress_mode": "tailscale",
+            "tailscale_dns_name": "control.example.ts.net",
+            "tailscale_host_strategy": "path",
+        },
+    )
+    conn.commit()
+
+    # Sanity: both share the label slug "arc-forge" so the OLD undifferentiated
+    # alias intersection would have matched BOTH.
+    deployments = bots._deployments_for_user(conn, seeded["user_id"])
+    forge_prefix = next(d for d in deployments if d["deployment_id"] == "arcdep_forge_prefix")
+    forge_label = next(d for d in deployments if d["deployment_id"] == "arcdep_forge_label")
+    expect("arc-forge" in bots._agent_selector_aliases(forge_prefix, label="Anvil", index=0), "prefix agent aliases must include arc-forge")
+    expect("arc-forge" in bots._agent_selector_aliases(forge_label, label="Arc Forge", index=1), "label-slug agent aliases must include arc-forge")
+
+    # /agent arc-forge -- the TYPED prefix selector. Must select EXACTLY Agent A
+    # (the prefix owner), never disambiguate, despite Agent B's colliding label.
+    typed = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:typed",
+        text="/agent arc-forge",
+    )
+    expect(typed.action == "switch_agent", str(typed))
+    expect(typed.deployment_id == "arcdep_forge_prefix", str(typed))
+    expect(
+        _active_deployment_id_in_store(conn, seeded["session_id"]) == "arcdep_forge_prefix",
+        "the typed prefix selector must select exactly its deployment, unambiguously",
+    )
+
+    # A roster/disambiguation BUTTON for Agent B encodes Agent B's own prefix
+    # selector. Replaying it must select EXACTLY Agent B.
+    button_b = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:typed",
+        text="/agent arc-anvilpod",
+    )
+    expect(button_b.action == "switch_agent", str(button_b))
+    expect(button_b.deployment_id == "arcdep_forge_label", str(button_b))
+    expect(
+        _active_deployment_id_in_store(conn, seeded["session_id"]) == "arcdep_forge_label",
+        "Agent B's encoded prefix selector must select exactly Agent B",
+    )
+
+    # Mixed-case typed selector still resolves exactly (prefixes are stored
+    # lower-cased; the captain may type any case).
+    typed_mixed = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:typed",
+        text="/agent ARC-FORGE",
+    )
+    expect(typed_mixed.action == "switch_agent", str(typed_mixed))
+    expect(typed_mixed.deployment_id == "arcdep_forge_prefix", str(typed_mixed))
+
+    # Now give Agent A a friendly name that ALSO slugs to "arc-forge" -- so the
+    # SHARED friendly name is genuinely ambiguous across two agents. Typing the
+    # friendly name (not a unique selector) must still disambiguate. We prove
+    # this with a request that no unique prefix/id equals: "arc forge" (spaces).
+    conn.execute(
+        "UPDATE arclink_deployments SET agent_name = ? WHERE deployment_id = ?",
+        ("Arc Forge", "arcdep_forge_prefix"),
+    )
+    conn.commit()
+    ambiguous = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:typed",
+        text="/agent Arc Forge",
+    )
+    expect(ambiguous.action == "switch_agent_ambiguous", str(ambiguous))
+    # Both unique selectors must be offered so the captain can reach either.
+    expect("arc-forge" in ambiguous.reply and "arc-anvilpod" in ambiguous.reply, ambiguous.reply)
+    # And the typed unique selector still wins after the rename: /agent arc-forge
+    # selects exactly Agent A even though both now share the friendly name.
+    still_typed = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:typed",
+        text="/agent arc-forge",
+    )
+    expect(still_typed.action == "switch_agent", str(still_typed))
+    expect(still_typed.deployment_id == "arcdep_forge_prefix", str(still_typed))
+    print("PASS test_public_bot_unique_prefix_selector_wins_over_label_slug_collision")
+
+
+def test_public_bot_agent_names_are_markdown_safe_in_replies() -> None:
+    control = load_module("arclink_control.py", "arclink_control_mdsafe_feature_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_mdsafe_feature_test")
+    conn = memory_db(control)
+
+    # A captain whose Agent name contains a backtick (markdown metachar). The
+    # active agent stays Atlas; the backtick agent is a ready crew member.
+    seeded = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:mdsafe",
+        prefix="arc-atlas",
+    )
+    conn.execute(
+        "UPDATE arclink_deployments SET agent_name = ?, agent_title = ? WHERE deployment_id = ?",
+        ("Atlas", "Mission Operator", seeded["deployment_id"]),
+    )
+    conn.execute(
+        "UPDATE arclink_onboarding_sessions SET metadata_json = ? WHERE session_id = ?",
+        (
+            json.dumps({"active_deployment_id": seeded["deployment_id"], "active_agent_label": "Atlas"}, sort_keys=True),
+            seeded["session_id"],
+        ),
+    )
+    evil_name = "Ev`il*Bot"
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="arcdep_evil",
+        user_id=seeded["user_id"],
+        prefix="arc-evil",
+        base_domain="control.example.ts.net",
+        status="active",
+        metadata={
+            "agent_name": evil_name,
+            "ingress_mode": "tailscale",
+            "tailscale_dns_name": "control.example.ts.net",
+            "tailscale_host_strategy": "path",
+        },
+    )
+    conn.commit()
+
+    safe_name = bots._safe_agent_name(evil_name)
+    # The escaped form replaces the metachars with inert look-alikes while
+    # leaving every non-metachar grapheme of the captain's name intact.
+    expect("`" not in safe_name and "*" not in safe_name, safe_name)
+    expected_safe = evil_name
+    for metachar, replacement in bots._AGENT_NAME_MARKDOWN_SUBSTITUTIONS.items():
+        expected_safe = expected_safe.replace(metachar, replacement)
+    expect(safe_name == expected_safe, safe_name)
+    expect(len(safe_name) == len(evil_name), "escaping must be 1:1 so the name stays readable")
+
+    # /agents roster renders the name safely -- no raw backtick reaches the wire.
+    roster = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:mdsafe",
+        text="/agents",
+    )
+    expect(roster.action == "show_agents", str(roster))
+    expect(evil_name not in roster.reply, "raw markdown name must not reach the roster reply")
+    expect(safe_name in roster.reply, roster.reply)
+    # Backticks in the reply must pair cleanly (even count) so Telegram entity
+    # conversion and Discord native markdown cannot mis-pair a code span.
+    expect(roster.reply.count("`") % 2 == 0, roster.reply)
+    stripped, entities = bots.telegram_markdown_to_entities(roster.reply)
+    expect("`" not in stripped, "no literal backticks should survive entity conversion")
+    expect(safe_name in stripped, stripped)
+
+    # /agent <unknown> not-found list also renders the crew names safely.
+    not_found = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:mdsafe",
+        text="/agent Nimbus",
+    )
+    expect(not_found.action == "switch_agent_not_found", str(not_found))
+    expect(evil_name not in not_found.reply, "raw markdown name must not reach the not-found reply")
+    expect(f"`{safe_name}`" in not_found.reply, not_found.reply)
+    expect(not_found.reply.count("`") % 2 == 0, not_found.reply)
+    nf_stripped, _ = bots.telegram_markdown_to_entities(not_found.reply)
+    expect("`" not in nf_stripped, "not-found reply must convert to clean code entities")
+    print("PASS test_public_bot_agent_names_are_markdown_safe_in_replies")
+
+
 def main() -> int:
     test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout()
     test_public_bot_cancel_closes_open_checkout_without_creating_new_session()
@@ -2425,7 +2938,11 @@ def main() -> int:
     test_public_bot_train_crew_flow_and_whats_changed()
     test_public_bot_academy_training_walks_crew_with_skip()
     test_public_bot_new_onboarding_workflow_wins_over_retired_history()
-    print("PASS all 40 ArcLink public bot tests")
+    test_public_bot_agents_and_agent_helm_switch_are_case_insensitive_and_owner_scoped()
+    test_public_bot_duplicate_agent_name_disambiguates_by_unique_selector()
+    test_public_bot_unique_prefix_selector_wins_over_label_slug_collision()
+    test_public_bot_agent_names_are_markdown_safe_in_replies()
+    print("PASS all 44 ArcLink public bot tests")
     return 0
 
 

@@ -2229,6 +2229,51 @@ def _agent_slug(label: str) -> str:
     return slug or "agent"
 
 
+# Markdown metacharacters that would break or inject the rendered reply when a
+# user-controlled agent name is interpolated into a Raven reply. Backticks are
+# the dangerous one inside code spans: Telegram's ``telegram_markdown_to_entities``
+# pairs spans by scanning to the next backtick, and Discord renders inline code
+# natively -- a backtick in a name would mis-pair the span and leak/inject
+# markdown on either surface. The look-alikes below stay visually faithful to
+# the captain's chosen name while remaining inert as markdown.
+_AGENT_NAME_MARKDOWN_SUBSTITUTIONS = {
+    "`": "ˋ",  # MODIFIER LETTER GRAVE ACCENT (visual stand-in for backtick)
+    "*": "∗",  # ASTERISK OPERATOR (visual stand-in for asterisk)
+    "_": "ˍ",  # MODIFIER LETTER LOW MACRON (visual stand-in for underscore)
+    "~": "˜",  # SMALL TILDE
+    "|": "ǀ",  # LATIN LETTER DENTAL CLICK (visual stand-in for pipe)
+}
+
+
+def _safe_agent_name(name: str) -> str:
+    """Neutralize markdown metacharacters in a user-controlled agent name.
+
+    The returned string is safe to interpolate into a Raven reply -- wrapped in
+    a code span or rendered inline -- without breaking Telegram entity pairing
+    or Discord native markdown. Only the agent name itself is rewritten; static
+    reply text is never touched, so we avoid over-escaping.
+    """
+    rendered = str(name or "")
+    for metachar, replacement in _AGENT_NAME_MARKDOWN_SUBSTITUTIONS.items():
+        rendered = rendered.replace(metachar, replacement)
+    return rendered
+
+
+def _agent_unique_selector(deployment: Mapping[str, Any]) -> str:
+    """Return a stable, account-unique selector for one deployment.
+
+    The deployment ``prefix`` is unique per fleet (DB enforces a unique index on
+    ``LOWER(prefix)``), so it disambiguates two same-named agents owned by the
+    same captain. ``/agent <prefix>`` already resolves through
+    ``_agent_selector_aliases``; we fall back to the deployment id when a row has
+    no prefix so a selector is always available.
+    """
+    prefix = str(deployment.get("prefix") or "").strip()
+    if prefix:
+        return prefix
+    return str(deployment.get("deployment_id") or "").strip()
+
+
 def _agent_selector_aliases(deployment: Mapping[str, Any], *, label: str, index: int) -> set[str]:
     aliases: set[str] = set()
 
@@ -2276,20 +2321,74 @@ def _agent_requested_aliases(requested: str) -> set[str]:
     return {item for item in aliases if item}
 
 
+def _exact_unique_selector_matches(
+    deployments: list[dict[str, Any]],
+    requested: str,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> list[tuple[dict[str, Any], str]]:
+    """Return deployments whose typed ``prefix``/``deployment_id`` equals ``requested``.
+
+    The deployment ``prefix`` and ``deployment_id`` are account-unique, typed
+    selectors -- not friendly labels. A helm BUTTON always encodes the prefix
+    (``_agent_unique_selector``), so this exact match must take precedence over
+    the friendly-label alias intersection. Without it, a prefix like
+    ``arc-forge`` collides with a *different* agent literally named "Arc Forge"
+    (whose label slug is also ``arc-forge``) and the unique selector would be
+    treated as ambiguous. Comparison is case-insensitive because prefixes are
+    stored lower-cased while a captain may type any case.
+    """
+    token = str(requested or "").strip().casefold()
+    if not token:
+        return []
+    matches: list[tuple[dict[str, Any], str]] = []
+    for index, item in enumerate(deployments):
+        prefix = str(item.get("prefix") or "").strip().casefold()
+        deployment_id = str(item.get("deployment_id") or "").strip().casefold()
+        if token in (prefix, deployment_id) and (prefix or deployment_id):
+            matches.append((item, _agent_label(item, index=index, conn=conn)))
+    return matches
+
+
+def _find_agent_deployments(
+    deployments: list[dict[str, Any]],
+    requested: str,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> list[tuple[dict[str, Any], str]]:
+    """Return every owned deployment whose selectors match ``requested``.
+
+    Resolution is TYPED/PRECEDENT: an exact ``prefix``/``deployment_id`` match
+    (the account-unique selector helm buttons encode) wins first and selects
+    exactly that one row, regardless of any friendly label-slug collision. Only
+    when no such exact selector matches do we fall back to friendly-label alias
+    matching. Two ready agents owned by one captain can share a display name
+    (there is no per-user uniqueness on ``agent_name``), so a friendly-name
+    request can legitimately match more than one row; callers that must not
+    silently pick the first use this to detect that ambiguity.
+    """
+    exact = _exact_unique_selector_matches(deployments, requested, conn=conn)
+    if exact:
+        return exact
+    requested_aliases = _agent_requested_aliases(requested)
+    if not requested_aliases:
+        return []
+    matches: list[tuple[dict[str, Any], str]] = []
+    for index, item in enumerate(deployments):
+        label = _agent_label(item, index=index, conn=conn)
+        if requested_aliases & _agent_selector_aliases(item, label=label, index=index):
+            matches.append((item, label))
+    return matches
+
+
 def _find_agent_deployment(
     deployments: list[dict[str, Any]],
     requested: str,
     *,
     conn: sqlite3.Connection | None = None,
 ) -> tuple[dict[str, Any], str] | None:
-    requested_aliases = _agent_requested_aliases(requested)
-    if not requested_aliases:
-        return None
-    for index, item in enumerate(deployments):
-        label = _agent_label(item, index=index, conn=conn)
-        if requested_aliases & _agent_selector_aliases(item, label=label, index=index):
-            return item, label
-    return None
+    matches = _find_agent_deployments(deployments, requested, conn=conn)
+    return matches[0] if matches else None
 
 
 def _metadata(row: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -2681,18 +2780,23 @@ def _crew_roster_lines_and_buttons(
         theme = _agent_theme_label(item, index=index)
         marker = _deployment_status_marker(item, active_id=active_id)
         suffix = f" - {marker}" if marker != "ready" else ""
-        lines.append(f"- {label} - {title} ({theme}){suffix}")
+        safe_label = _safe_agent_name(label)
+        lines.append(f"- {safe_label} - {_safe_agent_name(title)} ({_safe_agent_name(theme)}){suffix}")
         academy_marker = _academy_roster_marker(conn, str(item.get("deployment_id") or ""))
         if academy_marker:
             lines.append(f"  Academy: {academy_marker}")
         if str(item.get("status") or "") in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
             if str(item.get("deployment_id") or "") != active_id:
-                helm_buttons.append(_button(f"Take Helm: {label}"[:80], command=f"/agent {label}"))
+                # Encode a unique stable selector (prefix/id) so the button always
+                # targets exactly this deployment even when two agents share a
+                # display name; the label only carries the friendly name visually.
+                selector = _agent_unique_selector(item) or label
+                helm_buttons.append(_button(f"Take Helm: {safe_label}"[:80], command=f"/agent {selector}"))
             if include_links:
                 dashboard = _hermes_dashboard_url(_deployment_access(item))
                 if dashboard:
                     lines.append(f"  Hermes Dashboard: {dashboard}")
-                    open_buttons.append(_button(f"Open {label}"[:80], url=dashboard, style="secondary"))
+                    open_buttons.append(_button(f"Open {safe_label}"[:80], url=dashboard, style="secondary"))
     # Switching the helm is the Captain's power move; it outranks dashboard
     # links when downstream button budgets truncate.
     return lines, helm_buttons + open_buttons
@@ -4560,6 +4664,50 @@ def _agents_reply(
     )
 
 
+def _disambiguate_agent_reply(
+    *,
+    channel: str,
+    channel_identity: str,
+    matches: list[tuple[dict[str, Any], str]],
+    session: Mapping[str, Any] | None,
+    deployment: Mapping[str, Any] | None,
+) -> ArcLinkPublicBotTurn:
+    """Ask the captain to disambiguate when a name matches more than one agent.
+
+    Each match is listed with its friendly (escaped) label plus the unique
+    prefix selector, and a button that targets that selector -- so the captain
+    can always reach the exact deployment they mean, even with duplicate names.
+    """
+    lines = [
+        "More than one Agent on your roster answers to that name. Take the helm by its unique selector:",
+        "",
+    ]
+    buttons: list[ArcLinkPublicBotButton] = []
+    for item, label in matches:
+        selector = _agent_unique_selector(item)
+        marker = _deployment_status_marker(item)
+        lines.append(f"- `{_safe_agent_name(label)}` - selector `{selector}` ({marker})")
+        if (
+            selector
+            and str(item.get("status") or "") in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES
+        ):
+            buttons.append(
+                _button(f"Take Helm: {_safe_agent_name(label)} ({selector})"[:80], command=f"/agent {selector}")
+            )
+    lines.append("")
+    lines.append("Send `/raven agent <selector>` with the selector above, or tap a button.")
+    buttons.append(_button("Show My Crew", command="/agents", style="secondary"))
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="switch_agent_ambiguous",
+        reply="\n".join(lines),
+        session=session,
+        deployment=deployment,
+        buttons=tuple(buttons[:8]),
+    )
+
+
 def _switch_agent_reply(
     conn: sqlite3.Connection,
     *,
@@ -4572,7 +4720,20 @@ def _switch_agent_reply(
     if not session or not deployment:
         return _turn(channel=channel, channel_identity=channel_identity, action="switch_agent_unavailable", reply=_need_finished_onboarding_reply(), session=session)
     deployments = _deployments_for_user(conn, str(deployment.get("user_id") or ""))
-    match = _find_agent_deployment(deployments, requested_slug, conn=conn)
+    matches = _find_agent_deployments(deployments, requested_slug, conn=conn)
+    if len(matches) > 1:
+        # Two ready agents can share a display name (no per-user uniqueness on
+        # agent_name), so a friendly-name request can be ambiguous. Never pick
+        # the first silently -- ask the captain to choose by the unique prefix
+        # selector, which resolves to exactly one deployment.
+        return _disambiguate_agent_reply(
+            channel=channel,
+            channel_identity=channel_identity,
+            matches=matches,
+            session=session,
+            deployment=deployment,
+        )
+    match = matches[0] if matches else None
     if match is not None:
         item, label = match
         status = str(item.get("status") or "")
@@ -4581,7 +4742,7 @@ def _switch_agent_reply(
                 channel=channel,
                 channel_identity=channel_identity,
                 action="switch_agent_not_ready",
-                reply=f"`{label}` is {_deployment_status_marker(item)} and cannot take the helm. Choose a ready Agent from `/raven agents`.",
+                reply=f"`{_safe_agent_name(label)}` is {_deployment_status_marker(item)} and cannot take the helm. Choose a ready Agent from `/raven agents`.",
                 session=session,
                 deployment=deployment,
                 buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
@@ -4595,7 +4756,7 @@ def _switch_agent_reply(
             channel=channel,
             channel_identity=channel_identity,
             action="switch_agent",
-            reply=f"Focus moved. {label} is at the helm. Notion, backup, status, and Hermes Agent messages will route there until you choose another.",
+            reply=f"Focus moved. {_safe_agent_name(label)} is at the helm. Notion, backup, status, and Hermes Agent messages will route there until you choose another.",
             session=updated,
             deployment=item,
             buttons=(
@@ -4603,11 +4764,24 @@ def _switch_agent_reply(
                 _button("Check Status", command="/status", style="secondary"),
             ),
         )
+    valid_names = [
+        _agent_label(item, index=index, conn=conn)
+        for index, item in enumerate(deployments)
+        if str(item.get("status") or "") in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES
+    ]
+    if valid_names:
+        names_line = ", ".join(f"`{_safe_agent_name(name)}`" for name in valid_names)
+        names_reply = f" Crew names you can take the helm of: {names_line}."
+    else:
+        names_reply = " No ready Agent is on your roster yet."
     return _turn(
         channel=channel,
         channel_identity=channel_identity,
         action="switch_agent_not_found",
-        reply="That name is not on your ArcLink roster. Open `/raven agents` and take the helm from the buttons I build for your account.",
+        reply=(
+            "That name is not on your ArcLink roster." + names_reply
+            + " Open `/raven agents` and take the helm from the buttons I build for your account."
+        ),
         session=session,
         deployment=deployment,
         buttons=(_button("Show My Crew", command="/agents"),),
@@ -7011,7 +7185,7 @@ def _help_reply(
         action="show_help",
         reply=(
             "Bridge is open.\n\n"
-            "Your first Hermes Agent is aboard, so I can show you the machinery now. Use the buttons for the common work. If you prefer typed controls, start with `/raven` or use `/raven agents`, `/raven status`, `/raven credentials`, `/raven connect_notion`, `/raven config_backup`, `/raven link_channel`, `/raven add_agent`, `/raven retire_agent`, `/raven share_create`, or `/raven cancel`.\n\n"
+            "Your first Hermes Agent is aboard, so I can show you the machinery now. Use the buttons for the common work. If you prefer typed controls, start with `/raven` or use `/raven agents`, `/raven agent <name>`, `/raven status`, `/raven credentials`, `/raven connect_notion`, `/raven config_backup`, `/raven link_channel`, `/raven add_agent`, `/raven retire_agent`, `/raven share_create`, or `/raven cancel`.\n\n"
             "Pick one lane and I will keep the steps tight and the path clean."
         ),
         session=session,

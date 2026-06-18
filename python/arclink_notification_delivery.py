@@ -681,7 +681,24 @@ def _validate_public_agent_bridge_cmd(cmd: list[str], *, project_name: str = "")
     return False, "", "public Agent bridge command is not allowlisted"
 
 
+def _public_agent_bridge_root_wrapper_enabled() -> bool:
+    # The root-exec wrapper exists ONLY so L2 (the Telegram getMe cache) can keep a
+    # root-owned cache; it hard-depends on arclink_public_agent_bridge_root.py being
+    # baked into the gateway container image (the scripts are NOT host-mounted). Gate
+    # it on the L2 flag so the default — and ANY pre-wrapper or partially-upgraded
+    # image — uses the proven legacy command. This makes a missing/skewed wrapper a
+    # no-L2 degradation instead of a total bridge outage (lock-step safety).
+    # Read os.environ (same source the bridge's _bool_env uses, and the same as the
+    # DETACHED flag in this module) so the gate only picks the wrapper once the gateway
+    # was actually (re)created WITH the flag AND the new image — never from a live
+    # docker.env edit that the running gateway image hasn't picked up yet.
+    raw = str(os.environ.get("ARCLINK_BRIDGE_GETME_CACHE", "0") or "").strip().lower()
+    return raw not in {"", "0", "false", "no", "off"}
+
+
 def _public_agent_bridge_root_exec_cmd(container: str) -> list[str]:
+    if not _public_agent_bridge_root_wrapper_enabled():
+        return ["docker", "exec", "-i", container, PUBLIC_AGENT_BRIDGE_PYTHON, PUBLIC_AGENT_BRIDGE_SCRIPT]
     return [
         "docker",
         "exec",
@@ -695,6 +712,13 @@ def _public_agent_bridge_root_exec_cmd(container: str) -> list[str]:
 
 
 def _public_agent_bridge_compose_root_exec_cmd(*, project_name: str, env_file: Path, compose_file: Path) -> list[str]:
+    if not _public_agent_bridge_root_wrapper_enabled():
+        return [
+            "docker", "compose", "-p", project_name,
+            "--env-file", str(env_file), "-f", str(compose_file),
+            "exec", "-T", "hermes-gateway",
+            PUBLIC_AGENT_BRIDGE_PYTHON, PUBLIC_AGENT_BRIDGE_SCRIPT,
+        ]
     return [
         "docker",
         "compose",

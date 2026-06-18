@@ -2396,11 +2396,9 @@ def test_gateway_exec_broker_rejects_raw_commands_and_builds_vetted_exec() -> No
                     docker_binary,
                     "exec",
                     "-i",
-                    "-u",
-                    "0:0",
                     "arclink-arcdep_test-hermes-gateway-1",
                     "/opt/arclink/runtime/hermes-venv/bin/python3",
-                    "/home/arclink/arclink/python/arclink_public_agent_bridge_root.py",
+                    "/home/arclink/arclink/python/arclink_public_agent_bridge.py",
                 ],
                 str(calls),
             )
@@ -2432,11 +2430,9 @@ def test_gateway_exec_broker_rejects_raw_commands_and_builds_vetted_exec() -> No
                     docker_binary,
                     "exec",
                     "-i",
-                    "-u",
-                    "0:0",
                     "arclink-control-operator-hermes-gateway-1",
                     "/opt/arclink/runtime/hermes-venv/bin/python3",
-                    "/home/arclink/arclink/python/arclink_public_agent_bridge_root.py",
+                    "/home/arclink/arclink/python/arclink_public_agent_bridge.py",
                 ],
                 str(calls),
             )
@@ -2483,11 +2479,9 @@ def test_gateway_exec_broker_rejects_raw_commands_and_builds_vetted_exec() -> No
                     str(compose_file),
                     "exec",
                     "-T",
-                    "-u",
-                    "0:0",
                     "hermes-gateway",
                     "/opt/arclink/runtime/hermes-venv/bin/python3",
-                    "/home/arclink/arclink/python/arclink_public_agent_bridge_root.py",
+                    "/home/arclink/arclink/python/arclink_public_agent_bridge.py",
                 ],
                 str(calls),
             )
@@ -3546,6 +3540,33 @@ def test_notification_due_now_normalizes_z_and_offset_timestamps() -> None:
     print("PASS test_notification_due_now_normalizes_z_and_offset_timestamps")
 
 
+def test_public_agent_bridge_root_wrapper_gated_on_getme_cache_flag() -> None:
+    # Regression for the L2 outage: the root-exec wrapper depends on a script baked
+    # into the gateway image, so it must be gated on ARCLINK_BRIDGE_GETME_CACHE.
+    # Default/off => proven legacy command (no wrapper dependency); on => wrapper.
+    delivery = load_module(
+        PYTHON_DIR / "arclink_notification_delivery.py", "arclink_notification_delivery_wrapper_gate_test"
+    )
+    container = "arclink-control-operator-hermes-gateway-1"
+    prev = os.environ.pop("ARCLINK_BRIDGE_GETME_CACHE", None)
+    try:
+        cmd_off = delivery._public_agent_bridge_root_exec_cmd(container)
+        expect("-u" not in cmd_off, f"flag-off must not use -u root exec: {cmd_off}")
+        expect(cmd_off[-1].endswith("arclink_public_agent_bridge.py"), f"flag-off must be legacy bridge: {cmd_off}")
+        expect(delivery._validate_public_agent_bridge_cmd(cmd_off, project_name="arclink")[0], "legacy cmd must validate")
+
+        os.environ["ARCLINK_BRIDGE_GETME_CACHE"] = "1"
+        cmd_on = delivery._public_agent_bridge_root_exec_cmd(container)
+        expect(cmd_on[3:5] == ["-u", "0:0"], f"flag-on must use -u 0:0: {cmd_on}")
+        expect(cmd_on[-1].endswith("arclink_public_agent_bridge_root.py"), f"flag-on must be root wrapper: {cmd_on}")
+        expect(delivery._validate_public_agent_bridge_cmd(cmd_on, project_name="arclink")[0], "wrapper cmd must validate")
+    finally:
+        os.environ.pop("ARCLINK_BRIDGE_GETME_CACHE", None)
+        if prev is not None:
+            os.environ["ARCLINK_BRIDGE_GETME_CACHE"] = prev
+    print("PASS test_public_agent_bridge_root_wrapper_gated_on_getme_cache_flag")
+
+
 def main() -> int:
     test_discord_operator_delivery_supports_channel_ids()
     test_public_bot_user_delivery_supports_telegram_and_discord_dm()
@@ -3589,6 +3610,7 @@ def main() -> int:
     test_public_agent_bridge_root_wrapper_preloads_and_drops_child()
     test_public_agent_bridge_persists_telegram_approval_button_state()
     test_public_agent_bridge_drains_telegram_batch_tasks_before_done()
+    test_public_agent_bridge_root_wrapper_gated_on_getme_cache_flag()
     test_public_bot_ready_hub_edits_payment_message_when_available()
     test_notification_due_now_normalizes_z_and_offset_timestamps()
     print("PASS all notification delivery regression tests")

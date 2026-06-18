@@ -1095,6 +1095,29 @@ services:
       - arclink-qmd:/home/arclink/.qmd
     command: ["./bin/docker-job-loop.sh", "fleet-inventory-worker", "30", "python3", "python/arclink_fleet_inventory_worker.py", "--once", "--json", "--notify"]
 
+  # Keeps the LLM router's effective allow-list in sync with the upstream model
+  # provider's public -TEE catalog. Writes active -TEE rows into arclink_model_catalog, which the
+  # router consults per-request (no router restart). On a fetch failure / too
+  # few models it KEEPS the last-known-good set (never empties it) and notifies
+  # the Operator once (deduped). Hourly.
+  llm-model-sync:
+    <<: *arclink-app
+    cap_drop:
+      - ALL
+    environment:
+      <<: *arclink-env
+      ARCLINK_LLM_ROUTER_CHUTES_BASE_URL: ${ARCLINK_LLM_ROUTER_CHUTES_BASE_URL:-https://llm.chutes.ai/v1}
+      ARCLINK_LLM_ROUTER_CHUTES_API_KEY: ${ARCLINK_LLM_ROUTER_CHUTES_API_KEY:-}
+      ARCLINK_LLM_ROUTER_MODEL_CATALOG_AUTH_STRATEGY: ${ARCLINK_LLM_ROUTER_MODEL_CATALOG_AUTH_STRATEGY:-bearer}
+      ARCLINK_LLM_ROUTER_MODEL_SYNC_MIN_MODELS: ${ARCLINK_LLM_ROUTER_MODEL_SYNC_MIN_MODELS:-1}
+    volumes:
+      - ./arclink-priv/config:/home/arclink/arclink/arclink-priv/config
+      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
+    command: ["./bin/docker-job-loop.sh", "llm-model-sync", "3600", "python3", "python/arclink_llm_model_sync.py", "--once", "--json"]
+    depends_on:
+      control-api:
+        condition: service_healthy
+
   # Control-plane membership convergence for Captain fleet shared folders: enrols
   # newly-active agents and deregisters torn-down ones. The actual read-write git
   # sync runs in-pod per agent (arclink_fleet_share sync-local) where each working

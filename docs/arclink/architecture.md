@@ -15,7 +15,7 @@ No capability below should be read as live-proven unless it says so.
 
 ## Module Map
 
-There are **88** `python/arclink_*.py` modules (including helpers and legacy
+There are **89** `python/arclink_*.py` modules (including helpers and legacy
 intake modules). They are grouped below by subsystem. Plugins live under
 `plugins/hermes-agent/`, not `python/` (see the Hermes Workspace Plugins
 section). The schema mechanism is a single idempotent `ensure_schema()` with
@@ -44,6 +44,7 @@ arclink_surface_contract.py Executable cross-surface finish-gate linter (GAP-033
 
 ```text
 arclink_llm_router.py       FastAPI ASGI router (control-llm-router, 8090): /health, /v1/models, /v1/chat/completions, policy/reservation/relay/settlement, fallback cascade
+arclink_llm_model_sync.py   Hourly llm-model-sync job: refreshes the router's allowed -TEE model catalog from Chutes (last-known-good on failure, Operator-notified)
 arclink_chutes.py           Chutes catalog parse, deployment boundary, usage ingestion, fake key/inference
 arclink_chutes_live.py      Chutes account/usage/key/OAuth-introspect adapter (TEST-ONLY, UNWIRED)
 arclink_chutes_oauth.py     Chutes PKCE OAuth helpers (TEST-ONLY, UNWIRED, fake exchanger)

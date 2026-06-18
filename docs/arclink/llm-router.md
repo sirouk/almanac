@@ -202,7 +202,7 @@ Direct Chutes key mounting is retained only behind
 | `ARCLINK_LLM_ROUTER_MODEL_AUTO_PROMOTE` | `1` | Allows newer/deprecated/unavailable catalog rows to route to their replacement or latest same-family active model |
 | `ARCLINK_LLM_ROUTER_MODEL_REPLACEMENTS` | none | Comma-separated `old-model=new-model` overrides for emergency promotion |
 | `ARCLINK_LLM_ROUTER_REFRESH_MODEL_CATALOG_ON_STARTUP` | `1` | Refreshes Chutes `/models` into `arclink_model_catalog` when the router starts |
-| `ARCLINK_LLM_ROUTER_MARK_MISSING_MODELS_UNAVAILABLE` | `1` | Marks previously active catalog rows unavailable after a successful refresh omits them |
+| `ARCLINK_LLM_ROUTER_MARK_MISSING_MODELS_UNAVAILABLE` | `1` | Deprecated/no-op for startup: startup refresh is now strictly additive (never marks rows unavailable). Destructive removal of omitted `-TEE` models is owned by the hourly `llm-model-sync` job, which guards on the `-TEE` subset before removing |
 | `ARCLINK_LLM_ROUTER_MODEL_CATALOG_AUTH_STRATEGY` | `bearer` | Auth strategy for catalog refresh: `bearer`, `x-api-key`, or `none` |
 | `ARCLINK_LLM_ROUTER_MAX_BODY_BYTES` | `1048576` | Request body cap |
 | `ARCLINK_LLM_ROUTER_PROMPT_ESTIMATE_TOKEN_CAP` | `120000` | Prompt estimate cap |
@@ -298,8 +298,13 @@ The Control Node stores Chutes model catalog rows in `arclink_model_catalog`.
 Rows include capabilities, confidential-compute support, per-million input and
 output cents, status, replacement model, inferred family, version sort key, and
 raw provider metadata. On router startup, ArcLink refreshes the catalog from
-Chutes `/models` with the central router credential and marks omitted active
-models `unavailable` only after that refresh succeeds.
+Chutes `/models` with the central router credential **additively** — it adds and
+updates rows but never marks omitted models `unavailable`, so a partial or
+`-TEE`-light startup response can never empty the allow-list. Destructive removal
+of vanished models is owned solely by the hourly `llm-model-sync` job
+(`arclink_llm_model_sync.py`), which guards on the `-TEE` subset (floor +
+proportional-drop check) and notifies the Operator before keeping last-known-good
+on a degraded response.
 
 Promotion policy is centralized in the router:
 

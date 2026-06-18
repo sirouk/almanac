@@ -88,7 +88,7 @@ operator-internal words. The schema/operator canon keeps the technical names.
 
 ## 3. Full Current Module Map (every `python/arclink_*.py`, grouped by subsystem)
 
-There are **88** `python/arclink_*.py` files (includes helpers/legacy). The canonical
+There are **89** `python/arclink_*.py` files (includes helpers/legacy). The canonical
 `docs/arclink/architecture.md` module map mirrors this inventory, and
 `tests/test_documentation_truths.py` guards both the count and membership. Every doc must treat the
 list below as the authoritative module inventory.
@@ -115,6 +115,8 @@ list below as the authoritative module inventory.
 ### LLM router / providers
 - `arclink_llm_router` — FastAPI ASGI router (`control-llm-router`, port 8090): `/health`,
   `/v1/models`, `/v1/chat/completions`, policy/reservation/relay/settlement, fallback cascade.
+- `arclink_llm_model_sync` — hourly `llm-model-sync` job: refreshes the router's allowed `-TEE`
+  model catalog from Chutes (last-known-good on failure, Operator-notified).
 - `arclink_chutes` — catalog parse, deployment boundary, usage ingestion, fake key/inference.
 - `arclink_chutes_live` — Chutes account/usage/key/OAuth-introspect adapter. **TEST-ONLY, UNWIRED.**
 - `arclink_chutes_oauth` — Chutes PKCE OAuth helpers. **TEST-ONLY, UNWIRED, fake exchanger.**

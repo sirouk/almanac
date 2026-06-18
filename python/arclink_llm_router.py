@@ -347,6 +347,14 @@ def _open_control_conn(config: RouterConfig) -> sqlite3.Connection:
     return conn
 
 
+# Floor below which a startup /models response is considered untrustworthy.
+# An empty or near-empty successful response (e.g. ``data: []``) must NOT be
+# allowed to mark every active row unavailable -- that would silently empty the
+# DB-backed allow-list with no notice. This mirrors the last-known-good guard in
+# the arclink-llm-model-sync worker.
+_STARTUP_REFRESH_MIN_MODELS = 1
+
+
 def _refresh_model_catalog_once(config: RouterConfig, *, http_client: Any | None = None) -> dict[str, Any]:
     if not config.enabled:
         return {"status": "skipped", "reason": "router_disabled"}
@@ -360,20 +368,50 @@ def _refresh_model_catalog_once(config: RouterConfig, *, http_client: Any | None
         api_key="" if strategy == "none" else config.chutes_api_key,
         auth_strategy="x-api-key" if strategy == "x-api-key" else "bearer",
     )
+    # Last-known-good guard: a successful-but-empty/too-few result must not reach
+    # upsert_model_catalog with mark_missing_unavailable, which would flip every
+    # active row to unavailable and empty the router's effective allow-list. The
+    # hourly arclink-llm-model-sync worker owns the authoritative refresh (with
+    # operator notification); here we simply refuse to destroy last-known-good.
+    fetched = len(models)
+    if fetched < _STARTUP_REFRESH_MIN_MODELS:
+        return {
+            "status": "skipped",
+            "reason": "too_few_models",
+            "model_count": fetched,
+            "kept_last_known_good": True,
+            "auth_strategy": strategy,
+        }
+    # This best-effort startup refresh only ADDS/UPDATES catalog rows; it never
+    # marks any model unavailable. The hourly arclink-llm-model-sync worker is the
+    # sole authority that removes -TEE models, and it does so behind its own
+    # floor + proportional-drop guards computed on the -TEE subset.
+    #
+    # Why this is the robust fix: the count/floor guard above is on ALL Chutes
+    # models, but the router's effective allow-list reads only
+    # ``model_id LIKE '%-TEE'`` (see ``_synced_global_allowed_models``). A /models
+    # response with plenty of non-TEE models but zero (or few) -TEE models would
+    # clear that all-models guard, then ``mark_missing_unavailable=True`` would flip
+    # every active -TEE row to unavailable and EMPTY the allow-list (GLM/Kimi gone)
+    # with no operator notice. Forcing mark-missing OFF here makes startup purely
+    # additive, so a partial / TEE-light response can never drop GLM-5.x-TEE or
+    # Kimi-K2.x-TEE from the allow-list. Destructive removals stay with the guarded,
+    # operator-notifying sync worker (which guards on the -TEE subset specifically).
+    mark_missing = False
     conn = _open_control_conn(config)
     try:
         rows = upsert_model_catalog(
             conn,
             provider="chutes",
             models=models,
-            mark_missing_unavailable=config.mark_missing_models_unavailable,
+            mark_missing_unavailable=mark_missing,
         )
     finally:
         conn.close()
     return {
         "status": "ok",
         "model_count": len(rows),
-        "mark_missing_unavailable": config.mark_missing_models_unavailable,
+        "mark_missing_unavailable": mark_missing,
         "auth_strategy": strategy,
     }
 
@@ -650,6 +688,48 @@ def _resolve_router_model(
         }
         return replacement, target_entry, metadata
     return requested, entry, {"requested_model": requested, "upstream_model": requested, "replacement_reason": ""}
+
+
+def _synced_global_allowed_models(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """Active confidential-compute (``-TEE``) models from the synced catalog.
+
+    The ``arclink-llm-model-sync`` worker keeps ``arclink_model_catalog`` in
+    sync with the Chutes ``-TEE`` catalog. Reading it here lets the router's
+    effective global allow-list follow the synced set on the very next request
+    without a restart (the worker never empties this set on failure). Returns an
+    empty tuple if the table is unreadable or holds no active ``-TEE`` rows, so
+    callers fall back to the static env allow-list.
+    """
+    try:
+        rows = conn.execute(
+            """
+            SELECT model_id
+            FROM arclink_model_catalog
+            WHERE provider = 'chutes' AND status = 'active' AND model_id LIKE '%-TEE'
+            ORDER BY model_id
+            """
+        ).fetchall()
+    except sqlite3.Error:
+        return ()
+    models: list[str] = []
+    for row in rows:
+        model_id = str((row["model_id"] if isinstance(row, sqlite3.Row) else row[0]) or "").strip()
+        if model_id and model_id not in models:
+            models.append(model_id)
+    return tuple(models)
+
+
+def _effective_global_allowed_models(
+    conn: sqlite3.Connection,
+    config: RouterConfig,
+) -> tuple[str, ...]:
+    """Global allow-list the router enforces, preferring the synced catalog.
+
+    Falls back to ``config.allowed_models`` (the static env list) so the
+    allow-list is never empty even if the catalog is empty/unreadable.
+    """
+    synced = _synced_global_allowed_models(conn)
+    return synced or config.allowed_models
 
 
 def _router_model_allowed(
@@ -1127,7 +1207,10 @@ def _preflight_chat_request(
     if not model:
         return None, _router_error(400, "missing_model", "ArcLink LLM router requires a model.")
     key_allowed_models = tuple(auth_record.get("allowed_models") or ())
-    allowed_models = key_allowed_models or config.allowed_models
+    # Per-key allow-lists still win; otherwise the global allow-list reflects
+    # the synced Chutes -TEE catalog (DB-backed, so it tracks the sync worker
+    # without a router restart), falling back to the static env list.
+    allowed_models = key_allowed_models or _effective_global_allowed_models(conn, config)
     allow_default_model = not key_allowed_models
     if not _router_model_allowed(config, model, allowed_models, allow_default_model=allow_default_model):
         return None, _router_error(403, "model_not_allowed", "Requested model is not allowed for this ArcPod.")
@@ -1954,7 +2037,16 @@ def create_app(
             return auth_error
         allowed_models = tuple(auth_record.get("allowed_models") or ()) if auth_record else ()
         if not allowed_models:
-            allowed_models = router_config.allowed_models
+            # Reflect the synced Chutes -TEE catalog for the global allow-list,
+            # mirroring the per-request enforcement in _preflight_chat_request.
+            try:
+                conn = _open_control_conn(router_config)
+                try:
+                    allowed_models = _effective_global_allowed_models(conn, router_config)
+                finally:
+                    conn.close()
+            except sqlite3.Error:
+                allowed_models = router_config.allowed_models
         return JSONResponse(
             {
                 "object": "list",

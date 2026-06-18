@@ -983,6 +983,134 @@ def test_catalog_refreshes_and_promotes_newer_family_model() -> None:
     print("PASS test_catalog_refreshes_and_promotes_newer_family_model")
 
 
+def test_startup_refresh_empty_response_does_not_empty_catalog() -> None:
+    # BUG #2: the startup catalog refresh writes whatever /models returns with
+    # mark_missing_unavailable. An empty (or near-empty) successful response must
+    # NOT mark every active row unavailable -- that would silently empty the
+    # DB-backed allow-list with no notice. Last-known-good must be preserved.
+    tmp, db_path = temp_router_db()
+    try:
+        _seed_model_catalog(db_path)
+        control = load_module("arclink_control.py", "arclink_control_router_startup_lkg_test")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            baseline = [
+                str(row["model_id"])
+                for row in conn.execute(
+                    "SELECT model_id FROM arclink_model_catalog "
+                    "WHERE provider='chutes' AND status='active' ORDER BY model_id"
+                ).fetchall()
+            ]
+        finally:
+            conn.close()
+        expect(len(baseline) >= 1, str(baseline))
+
+        router = load_module("arclink_llm_router.py", "arclink_llm_router_startup_lkg_test")
+        config = router.load_router_config(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_REFRESH_MODEL_CATALOG_ON_STARTUP": "1",
+                "ARCLINK_LLM_ROUTER_MARK_MISSING_MODELS_UNAVAILABLE": "1",
+            }
+        )
+        # A successful-but-empty /models response (data: []).
+        empty_http = FixtureCatalogHttpClient({"data": []})
+        result = router._refresh_model_catalog_once(config, http_client=empty_http)
+        expect(result["status"] == "skipped", str(result))
+        expect(result.get("kept_last_known_good") is True, str(result))
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            after = [
+                str(row["model_id"])
+                for row in conn.execute(
+                    "SELECT model_id FROM arclink_model_catalog "
+                    "WHERE provider='chutes' AND status='active' ORDER BY model_id"
+                ).fetchall()
+            ]
+        finally:
+            conn.close()
+        expect(after == baseline, f"empty refresh must not empty the catalog: {after} != {baseline}")
+    finally:
+        tmp.cleanup()
+    print("PASS test_startup_refresh_empty_response_does_not_empty_catalog")
+
+
+def test_startup_refresh_non_tee_heavy_response_keeps_tee_allow_list() -> None:
+    # FIX D: a successful /models response that is HEAVY on non-TEE models but
+    # carries ZERO -TEE models must NOT empty the router's -TEE allow-list.
+    # The old startup path counted ALL Chutes models for its floor/proportional
+    # guard, so such a response cleared the guard, then mark_missing_unavailable
+    # flipped every active -TEE row (GLM/Kimi) to unavailable. The fix makes the
+    # startup refresh purely additive; -TEE removal is owned by the guarded,
+    # operator-notifying hourly sync worker.
+    tmp, db_path = temp_router_db()
+    try:
+        control = load_module("arclink_control.py", "arclink_control_router_startup_tee_light_test")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            control.ensure_schema(conn)
+            # Seed the production -TEE allow-list (GLM + Kimi) as active.
+            control.upsert_model_catalog(
+                conn,
+                provider="chutes",
+                models={
+                    "zai-org/GLM-5.2-TEE": {"confidential_compute": True},
+                    "moonshotai/Kimi-K2.6-TEE": {"confidential_compute": True},
+                },
+            )
+            baseline = [
+                str(row["model_id"])
+                for row in conn.execute(
+                    "SELECT model_id FROM arclink_model_catalog "
+                    "WHERE provider='chutes' AND status='active' AND model_id LIKE '%-TEE' ORDER BY model_id"
+                ).fetchall()
+            ]
+        finally:
+            conn.close()
+        expect(baseline == ["moonshotai/Kimi-K2.6-TEE", "zai-org/GLM-5.2-TEE"], str(baseline))
+
+        router = load_module("arclink_llm_router.py", "arclink_llm_router_startup_tee_light_test")
+        config = router.load_router_config(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_REFRESH_MODEL_CATALOG_ON_STARTUP": "1",
+                "ARCLINK_LLM_ROUTER_MARK_MISSING_MODELS_UNAVAILABLE": "1",
+            }
+        )
+        # Heavy on non-TEE models (clears any all-models floor), zero -TEE models.
+        non_tee_heavy = FixtureCatalogHttpClient(
+            {"data": [{"id": f"vendor/plain-model-{i:02d}"} for i in range(8)]}
+        )
+        result = router._refresh_model_catalog_once(config, http_client=non_tee_heavy)
+        expect(result["status"] == "ok", str(result))
+        expect(result["mark_missing_unavailable"] is False, str(result))
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            after_tee = [
+                str(row["model_id"])
+                for row in conn.execute(
+                    "SELECT model_id FROM arclink_model_catalog "
+                    "WHERE provider='chutes' AND status='active' AND model_id LIKE '%-TEE' ORDER BY model_id"
+                ).fetchall()
+            ]
+        finally:
+            conn.close()
+        expect(after_tee == baseline, f"-TEE allow-list must survive a TEE-light startup: {after_tee} != {baseline}")
+    finally:
+        tmp.cleanup()
+    print("PASS test_startup_refresh_non_tee_heavy_response_keeps_tee_allow_list")
+
+
 def test_chat_promotes_missing_requested_model_to_latest_same_family() -> None:
     tmp, db_path = temp_router_db()
     try:
@@ -1148,6 +1276,92 @@ def test_chat_preflight_rejects_invalid_model_and_size_limits() -> None:
     finally:
         tmp.cleanup()
     print("PASS test_chat_preflight_rejects_invalid_model_and_size_limits")
+
+
+def test_global_allowlist_reflects_synced_tee_catalog_without_restart() -> None:
+    # With an empty per-key allow-list the router falls back to the global
+    # allow-list, which is now sourced from the synced -TEE catalog rows
+    # (arclink_model_catalog). Updating those rows takes effect on the next
+    # request without recreating/restarting the router.
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(db_path)
+        control = load_module("arclink_control.py", "arclink_control_global_synced_allowlist_test")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            control.ensure_schema(conn)
+            # Mirror production: per-key allow-lists cleared to [] so every key
+            # falls back to the global (now catalog-sourced) allow-list.
+            conn.execute("UPDATE arclink_llm_router_keys SET allowed_models_json = '[]'")
+            conn.commit()
+            control.upsert_model_catalog(
+                conn,
+                provider="chutes",
+                models={
+                    "moonshotai/Kimi-K2.6-TEE": {"confidential_compute": True},
+                    "zai-org/GLM-5.1-TEE": {"confidential_compute": True},
+                },
+            )
+        finally:
+            conn.close()
+        upstream = fake_upstream_transport()
+        client = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                # Static env allow-list is deliberately a *different* model so we
+                # prove the catalog (not env) is what is being enforced.
+                "ARCLINK_LLM_ROUTER_ALLOWED_MODELS": "env-fallback-only-model",
+                "ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS": "100000",
+            },
+            upstream_transport=upstream,
+        )
+        # /v1/models lists the synced -TEE set, not the env list.
+        models_resp = client.get("/v1/models", headers={"Authorization": f"Bearer {raw_key}"})
+        expect(models_resp.status_code == 200, models_resp.text)
+        listed = {entry["id"] for entry in models_resp.json()["data"]}
+        expect(listed == {"moonshotai/Kimi-K2.6-TEE", "zai-org/GLM-5.1-TEE"}, str(listed))
+
+        # A synced -TEE model is allowed through the chat path.
+        allowed = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "moonshotai/Kimi-K2.6-TEE", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        expect(allowed.status_code == 200, allowed.text)
+
+        # The static env model is NOT in the synced catalog, so it is rejected.
+        blocked = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "env-fallback-only-model", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        expect(blocked.status_code == 403, blocked.text)
+        expect(blocked.json()["error"]["code"] == "model_not_allowed", blocked.text)
+
+        # Simulate a live sync that drops one model: the router reflects it on
+        # the next request, no restart.
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute(
+                "UPDATE arclink_model_catalog SET status='unavailable' WHERE model_id=?",
+                ("zai-org/GLM-5.1-TEE",),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        dropped = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "zai-org/GLM-5.1-TEE", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        expect(dropped.status_code == 403, dropped.text)
+    finally:
+        tmp.cleanup()
+    print("PASS test_global_allowlist_reflects_synced_tee_catalog_without_restart")
 
 
 def test_chat_preflight_enforces_budget_and_billing_fail_closed() -> None:
@@ -1932,9 +2146,12 @@ def main() -> int:
     test_low_fuel_notice_without_channel_does_not_poison_dedupe()
     test_chat_uses_catalog_pricing_and_promotes_deprecated_models()
     test_catalog_refreshes_and_promotes_newer_family_model()
+    test_startup_refresh_empty_response_does_not_empty_catalog()
+    test_startup_refresh_non_tee_heavy_response_keeps_tee_allow_list()
     test_chat_promotes_missing_requested_model_to_latest_same_family()
     test_key_allowlist_blocks_global_default_replacement_and_fallback_escape()
     test_chat_preflight_rejects_invalid_model_and_size_limits()
+    test_global_allowlist_reflects_synced_tee_catalog_without_restart()
     test_chat_preflight_enforces_budget_and_billing_fail_closed()
     test_chat_operator_observe_unlimited_is_server_authorized_and_metered()
     test_chat_spoofed_observe_unlimited_demotes_to_capped_lane_and_records_evidence()
@@ -1948,7 +2165,7 @@ def main() -> int:
     test_provider_side_fallback_csv_default_model_is_allowed_as_single_model_string()
     test_chat_streaming_retries_pre_stream_fallback_and_records_metadata()
     test_chat_partial_stream_failure_settles_without_prompt_or_secret_storage()
-    print("PASS all 28 ArcLink LLM router tests")
+    print("PASS all 31 ArcLink LLM router tests")
     return 0
 
 

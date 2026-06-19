@@ -22,7 +22,7 @@ import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 from urllib import error as urlerror
 from urllib import parse as urlparse
 from urllib import request as urlrequest
@@ -88,6 +88,36 @@ def parse_utc_iso(value: str | None) -> dt.datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=dt.timezone.utc)
     return parsed.astimezone(dt.timezone.utc)
+
+
+def arclink_event_ordering_key(value: "str | int | float | None") -> float | None:
+    """Normalize an event-ordering timestamp to comparable unix seconds.
+
+    billing-C2 (entitlement event ordering): Stripe webhooks can be delivered out of
+    order, so the subscription mirror / entitlement writes must apply MONOTONICALLY --
+    only when the incoming event is newer than the last one already applied. This
+    accepts either a Stripe ``event.created`` unix epoch (int / float / numeric
+    string) or an ISO 8601 timestamp, returning unix seconds for comparison. Empty /
+    unparseable input returns None, which callers treat as "apply unconditionally"
+    (the backward-compatible default for callers that do not pass an ordering key).
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    parsed = parse_utc_iso(text)
+    if parsed is None:
+        return None
+    return parsed.timestamp()
 
 
 def format_utc_iso_brief(value: str | None) -> str:
@@ -2225,6 +2255,12 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     _ensure_column(conn, "arclink_users", "captain_mission", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_users", "captain_treatment", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_users", "wrapped_frequency", "TEXT NOT NULL DEFAULT 'daily'")
+    # billing-C2: last-applied event-ordering key (Stripe event.created unix seconds)
+    # for monotonic entitlement / subscription-mirror writes. Idempotent + crash-safe
+    # ADD COLUMN on a populated DB; '' means "no ordering applied yet" -> first
+    # ordered write always lands.
+    _ensure_column(conn, "arclink_users", "entitlement_last_event_at", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_subscriptions", "last_event_at", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_deployments", "agent_name", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_deployments", "agent_title", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_deployments", "asu_weight", "REAL NOT NULL DEFAULT 1.0")
@@ -2390,6 +2426,32 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_arclink_audit_log_action_created
         ON arclink_audit_log (action, created_at)
+        """
+    )
+    # conc-M3 (comp double-comp): the comp idempotency was check-then-INSERT with no
+    # write lock and no unique constraint, so two concurrent admins/webhooks could
+    # both pass the existence check and INSERT two comp audit rows (double comp). A
+    # partial UNIQUE index makes the SECOND comp INSERT for the same target a hard
+    # IntegrityError; comp_arclink_subscription treats that as "already comped".
+    # Defensively collapse any pre-existing duplicate comp rows on a populated prod
+    # DB FIRST, else the unique index creation would fail on startup.
+    conn.execute(
+        """
+        DELETE FROM arclink_audit_log
+        WHERE action = 'comp_subscription'
+          AND rowid NOT IN (
+            SELECT MIN(rowid)
+            FROM arclink_audit_log
+            WHERE action = 'comp_subscription'
+            GROUP BY target_id
+          )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_arclink_audit_log_comp_subscription_target
+        ON arclink_audit_log (action, target_id)
+        WHERE action = 'comp_subscription'
         """
     )
     conn.execute(
@@ -2660,14 +2722,66 @@ def _sql_column_expr(columns: set[str], column: str, fallback: str) -> str:
     return column if column in columns else fallback
 
 
-def _migrate_fleet_enrollments_schema(conn: sqlite3.Connection) -> None:
-    row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arclink_fleet_enrollments'"
-    ).fetchone()
-    if row is None:
+def _atomic_rebuild_migration(
+    conn: sqlite3.Connection,
+    *,
+    already_done: Callable[[sqlite3.Connection], bool],
+    rebuild: Callable[[sqlite3.Connection], None],
+) -> None:
+    """Run a guarded, atomic, concurrency-safe ``*__new`` rebuild migration.
+
+    Concurrency model (WAL/DELETE, busy_timeout=15000, sqlite3 default isolation):
+    a bare SELECT only takes a read lock, so a check-then-rebuild without a write
+    lock is a TOCTOU window -- two workers restarting at once could both pass the
+    guard and then collide on ``DROP TABLE``/``CREATE __new``, crashing one
+    worker's startup and (worse) being able to observe a tableless/indexless
+    intermediate.
+
+    This helper closes that window:
+
+    * Fast path -- ``already_done`` is checked with only a read lock; a completed
+      migration is a cheap no-op (the common case on every restart).
+    * Serialize -- if we are not already inside a caller transaction we take
+      ``BEGIN IMMEDIATE``, which acquires the database write lock. This is the
+      advisory schema lock: only ONE worker can be inside the rebuild block at a
+      time; a concurrent worker BLOCKS here (up to busy_timeout) instead of racing
+      the DROP/CREATE.
+    * Re-check under the lock -- after winning the write lock we re-run
+      ``already_done``; the loser worker (which blocked, then woke once the winner
+      committed) now observes the completed schema and no-ops without rebuilding.
+    * Atomic -- ``rebuild`` performs the whole CREATE ``__new`` -> copy -> DROP old
+      -> RENAME -> recreate-indexes using plain ``conn.execute`` (NEVER
+      ``executescript``, which forces an implicit commit and would break
+      atomicity). A crash anywhere mid-rebuild rolls the BEGIN IMMEDIATE back as a
+      unit, leaving the original table + indexes intact -- no stranded rows, no
+      leftover ``__new`` scratch.
+    """
+    if already_done(conn):
         return
-    sql = str(row["sql"] or "")
-    columns = set(_table_columns(conn, "arclink_fleet_enrollments"))
+    own_txn = not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        # Re-read the guard now that we hold the write lock: a worker that lost the
+        # race blocked on BEGIN IMMEDIATE, woke after the winner committed, and must
+        # observe the rebuilt schema as a clean no-op (not rebuild a second time).
+        if already_done(conn):
+            if own_txn:
+                conn.commit()
+            return
+        rebuild(conn)
+    except BaseException:
+        if own_txn:
+            conn.rollback()
+        raise
+    if own_txn:
+        conn.commit()
+
+
+def _migrate_fleet_enrollments_schema(conn: sqlite3.Connection) -> None:
+    # Atomic + concurrency-safe rebuild (see _atomic_rebuild_migration). The guard
+    # is re-read under the write lock so a worker that loses the BEGIN IMMEDIATE
+    # race no-ops on the already-migrated schema.
     required = {
         "enrollment_id",
         "token_hash",
@@ -2679,128 +2793,161 @@ def _migrate_fleet_enrollments_schema(conn: sqlite3.Connection) -> None:
         "status",
         "audit_ref",
     }
-    if required <= columns and "'pending'" in sql and "'consumed'" in sql:
-        return
 
-    backup = "arclink_fleet_enrollments__legacy"
-    suffix = 0
-    while conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (backup,)).fetchone():
-        suffix += 1
-        backup = f"arclink_fleet_enrollments__legacy_{suffix}"
+    def _already_done(c: sqlite3.Connection) -> bool:
+        row = c.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arclink_fleet_enrollments'"
+        ).fetchone()
+        if row is None:
+            # No table yet -> nothing to rebuild (ensure_schema CREATE handles it).
+            return True
+        sql = str(row["sql"] or "")
+        columns = set(_table_columns(c, "arclink_fleet_enrollments"))
+        return required <= columns and "'pending'" in sql and "'consumed'" in sql
 
-    status_expr = "CASE LOWER(COALESCE(status, '')) "
-    status_expr += "WHEN 'pending' THEN 'pending' "
-    status_expr += "WHEN 'minted' THEN 'pending' "
-    status_expr += "WHEN 'consumed' THEN 'consumed' "
-    status_expr += "WHEN 'used' THEN 'consumed' "
-    status_expr += "WHEN 'revoked' THEN 'revoked' "
-    status_expr += "WHEN 'expired' THEN 'expired' "
-    status_expr += "ELSE 'expired' END"
-    select_columns = [
-        _sql_column_expr(columns, "enrollment_id", "'flenr_legacy_' || lower(hex(randomblob(12)))"),
-        _sql_column_expr(columns, "token_hash", "''"),
-        _sql_column_expr(columns, "created_by_user_id", "'legacy'"),
-        _sql_column_expr(columns, "created_at", "datetime('now')"),
-        _sql_column_expr(columns, "expires_at", "datetime('now')"),
-        _sql_column_expr(columns, "consumed_at", "''"),
-        _sql_column_expr(columns, "redeemed_by_inventory_id", "''"),
-        status_expr,
-        _sql_column_expr(columns, "audit_ref", "''"),
-    ]
+    def _rebuild(c: sqlite3.Connection) -> None:
+        columns = set(_table_columns(c, "arclink_fleet_enrollments"))
+        backup = "arclink_fleet_enrollments__legacy"
+        suffix = 0
+        while c.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (backup,)
+        ).fetchone():
+            suffix += 1
+            backup = f"arclink_fleet_enrollments__legacy_{suffix}"
 
-    conn.executescript(
-        """
-        DROP INDEX IF EXISTS idx_arclink_fleet_enrollments_status_expiry;
-        DROP INDEX IF EXISTS idx_arclink_fleet_enrollments_token_hash;
-        DROP TABLE IF EXISTS arclink_fleet_enrollments__new;
-        CREATE TABLE arclink_fleet_enrollments__new (
-          enrollment_id TEXT PRIMARY KEY,
-          token_hash TEXT NOT NULL,
-          created_by_user_id TEXT NOT NULL,
-          created_at TEXT NOT NULL,
-          expires_at TEXT NOT NULL,
-          consumed_at TEXT NOT NULL DEFAULT '',
-          redeemed_by_inventory_id TEXT NOT NULL DEFAULT '',
-          status TEXT NOT NULL CHECK (status IN ('pending', 'consumed', 'expired', 'revoked')),
-          audit_ref TEXT NOT NULL DEFAULT ''
-        );
-        """
-    )
-    conn.execute(
-        f"""
-        INSERT OR IGNORE INTO arclink_fleet_enrollments__new (
-          enrollment_id, token_hash, created_by_user_id, created_at, expires_at,
-          consumed_at, redeemed_by_inventory_id, status, audit_ref
+        status_expr = "CASE LOWER(COALESCE(status, '')) "
+        status_expr += "WHEN 'pending' THEN 'pending' "
+        status_expr += "WHEN 'minted' THEN 'pending' "
+        status_expr += "WHEN 'consumed' THEN 'consumed' "
+        status_expr += "WHEN 'used' THEN 'consumed' "
+        status_expr += "WHEN 'revoked' THEN 'revoked' "
+        status_expr += "WHEN 'expired' THEN 'expired' "
+        status_expr += "ELSE 'expired' END"
+        select_columns = [
+            _sql_column_expr(columns, "enrollment_id", "'flenr_legacy_' || lower(hex(randomblob(12)))"),
+            _sql_column_expr(columns, "token_hash", "''"),
+            _sql_column_expr(columns, "created_by_user_id", "'legacy'"),
+            _sql_column_expr(columns, "created_at", "datetime('now')"),
+            _sql_column_expr(columns, "expires_at", "datetime('now')"),
+            _sql_column_expr(columns, "consumed_at", "''"),
+            _sql_column_expr(columns, "redeemed_by_inventory_id", "''"),
+            status_expr,
+            _sql_column_expr(columns, "audit_ref", "''"),
+        ]
+
+        c.execute("DROP INDEX IF EXISTS idx_arclink_fleet_enrollments_status_expiry")
+        c.execute("DROP INDEX IF EXISTS idx_arclink_fleet_enrollments_token_hash")
+        c.execute("DROP TABLE IF EXISTS arclink_fleet_enrollments__new")
+        c.execute(
+            """
+            CREATE TABLE arclink_fleet_enrollments__new (
+              enrollment_id TEXT PRIMARY KEY,
+              token_hash TEXT NOT NULL,
+              created_by_user_id TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              expires_at TEXT NOT NULL,
+              consumed_at TEXT NOT NULL DEFAULT '',
+              redeemed_by_inventory_id TEXT NOT NULL DEFAULT '',
+              status TEXT NOT NULL CHECK (status IN ('pending', 'consumed', 'expired', 'revoked')),
+              audit_ref TEXT NOT NULL DEFAULT ''
+            )
+            """
         )
-        SELECT {', '.join(select_columns)}
-        FROM arclink_fleet_enrollments
-        """
-    )
-    conn.execute(f"ALTER TABLE arclink_fleet_enrollments RENAME TO {backup}")
-    conn.execute("ALTER TABLE arclink_fleet_enrollments__new RENAME TO arclink_fleet_enrollments")
-    conn.commit()
+        c.execute(
+            f"""
+            INSERT OR IGNORE INTO arclink_fleet_enrollments__new (
+              enrollment_id, token_hash, created_by_user_id, created_at, expires_at,
+              consumed_at, redeemed_by_inventory_id, status, audit_ref
+            )
+            SELECT {', '.join(select_columns)}
+            FROM arclink_fleet_enrollments
+            """
+        )
+        c.execute(f"ALTER TABLE arclink_fleet_enrollments RENAME TO {backup}")
+        c.execute("ALTER TABLE arclink_fleet_enrollments__new RENAME TO arclink_fleet_enrollments")
+        # Recreate ALL live indexes that the DROP tore down, INSIDE this txn, so a
+        # single ensure_schema pass yields the table WITH its index and a concurrent
+        # worker can never observe an indexless intermediate.
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_arclink_fleet_enrollments_status_expiry "
+            "ON arclink_fleet_enrollments (status, expires_at)"
+        )
+
+    _atomic_rebuild_migration(conn, already_done=_already_done, rebuild=_rebuild)
 
 
 def _migrate_fleet_host_probes_schema(conn: sqlite3.Connection) -> None:
-    columns = set(_table_columns(conn, "arclink_fleet_host_probes"))
+    # Atomic + concurrency-safe rebuild (see _atomic_rebuild_migration).
     required = {"probe_id", "host_id", "probed_at", "kind", "ok", "latency_ms", "payload_json", "error"}
-    if required <= columns:
-        return
 
-    kind_expr = "'liveness'"
-    if "kind" in columns:
-        kind_expr = "CASE WHEN kind IN ('liveness', 'capacity', 'inventory') THEN kind ELSE 'liveness' END"
-    elif "probe_kind" in columns:
-        kind_expr = "CASE WHEN probe_kind IN ('liveness', 'capacity', 'inventory') THEN probe_kind ELSE 'liveness' END"
+    def _already_done(c: sqlite3.Connection) -> bool:
+        table = c.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'arclink_fleet_host_probes'"
+        ).fetchone()
+        if table is None:
+            return True
+        return required <= set(_table_columns(c, "arclink_fleet_host_probes"))
 
-    ok_expr = "0"
-    if "ok" in columns:
-        ok_expr = "CASE WHEN CAST(ok AS INTEGER) = 1 THEN 1 ELSE 0 END"
-    elif "status" in columns:
-        ok_expr = "CASE WHEN LOWER(COALESCE(status, '')) IN ('ok', 'success', 'healthy', 'active', 'ready') THEN 1 ELSE 0 END"
+    def _rebuild(c: sqlite3.Connection) -> None:
+        columns = set(_table_columns(c, "arclink_fleet_host_probes"))
 
-    select_columns = [
-        _sql_column_expr(columns, "probe_id", "'flprb_legacy_' || lower(hex(randomblob(12)))"),
-        _sql_column_expr(columns, "host_id", "''"),
-        _sql_column_expr(columns, "probed_at", "datetime('now')"),
-        kind_expr,
-        ok_expr,
-        _sql_column_expr(columns, "latency_ms", "0"),
-        _sql_column_expr(columns, "payload_json", "'{}'"),
-        _sql_column_expr(columns, "error", "''"),
-    ]
+        kind_expr = "'liveness'"
+        if "kind" in columns:
+            kind_expr = "CASE WHEN kind IN ('liveness', 'capacity', 'inventory') THEN kind ELSE 'liveness' END"
+        elif "probe_kind" in columns:
+            kind_expr = "CASE WHEN probe_kind IN ('liveness', 'capacity', 'inventory') THEN probe_kind ELSE 'liveness' END"
 
-    conn.executescript(
-        """
-        DROP TABLE IF EXISTS arclink_fleet_host_probes__new;
-        CREATE TABLE arclink_fleet_host_probes__new (
-          probe_id TEXT PRIMARY KEY,
-          host_id TEXT NOT NULL,
-          probed_at TEXT NOT NULL,
-          kind TEXT NOT NULL CHECK (kind IN ('liveness', 'capacity', 'inventory')),
-          ok INTEGER NOT NULL CHECK (ok IN (0, 1)),
-          latency_ms INTEGER NOT NULL DEFAULT 0,
-          payload_json TEXT NOT NULL DEFAULT '',
-          error TEXT NOT NULL DEFAULT ''
-        );
-        """
-    )
-    conn.execute(
-        f"""
-        INSERT OR IGNORE INTO arclink_fleet_host_probes__new (
-          probe_id, host_id, probed_at, kind, ok, latency_ms, payload_json, error
+        ok_expr = "0"
+        if "ok" in columns:
+            ok_expr = "CASE WHEN CAST(ok AS INTEGER) = 1 THEN 1 ELSE 0 END"
+        elif "status" in columns:
+            ok_expr = "CASE WHEN LOWER(COALESCE(status, '')) IN ('ok', 'success', 'healthy', 'active', 'ready') THEN 1 ELSE 0 END"
+
+        select_columns = [
+            _sql_column_expr(columns, "probe_id", "'flprb_legacy_' || lower(hex(randomblob(12)))"),
+            _sql_column_expr(columns, "host_id", "''"),
+            _sql_column_expr(columns, "probed_at", "datetime('now')"),
+            kind_expr,
+            ok_expr,
+            _sql_column_expr(columns, "latency_ms", "0"),
+            _sql_column_expr(columns, "payload_json", "'{}'"),
+            _sql_column_expr(columns, "error", "''"),
+        ]
+
+        c.execute("DROP INDEX IF EXISTS idx_arclink_fleet_host_probes_host_kind_time")
+        c.execute("DROP TABLE IF EXISTS arclink_fleet_host_probes__new")
+        c.execute(
+            """
+            CREATE TABLE arclink_fleet_host_probes__new (
+              probe_id TEXT PRIMARY KEY,
+              host_id TEXT NOT NULL,
+              probed_at TEXT NOT NULL,
+              kind TEXT NOT NULL CHECK (kind IN ('liveness', 'capacity', 'inventory')),
+              ok INTEGER NOT NULL CHECK (ok IN (0, 1)),
+              latency_ms INTEGER NOT NULL DEFAULT 0,
+              payload_json TEXT NOT NULL DEFAULT '',
+              error TEXT NOT NULL DEFAULT ''
+            )
+            """
         )
-        SELECT {', '.join(select_columns)}
-        FROM arclink_fleet_host_probes
-        """
-    )
-    conn.executescript(
-        """
-        DROP TABLE arclink_fleet_host_probes;
-        ALTER TABLE arclink_fleet_host_probes__new RENAME TO arclink_fleet_host_probes;
-        """
-    )
-    conn.commit()
+        c.execute(
+            f"""
+            INSERT OR IGNORE INTO arclink_fleet_host_probes__new (
+              probe_id, host_id, probed_at, kind, ok, latency_ms, payload_json, error
+            )
+            SELECT {', '.join(select_columns)}
+            FROM arclink_fleet_host_probes
+            """
+        )
+        c.execute("DROP TABLE arclink_fleet_host_probes")
+        c.execute("ALTER TABLE arclink_fleet_host_probes__new RENAME TO arclink_fleet_host_probes")
+        # Recreate the live index torn down by the DROP, inside this txn.
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_arclink_fleet_host_probes_host_kind_time "
+            "ON arclink_fleet_host_probes (host_id, kind, probed_at)"
+        )
+
+    _atomic_rebuild_migration(conn, already_done=_already_done, rebuild=_rebuild)
 
 
 def _fleet_audit_chain_hash(
@@ -2823,7 +2970,9 @@ def _fleet_audit_chain_hash(
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
-def _repair_fleet_audit_chain_hashes(conn: sqlite3.Connection) -> None:
+def _repair_fleet_audit_chain_hashes(conn: sqlite3.Connection, *, commit: bool = True) -> None:
+    # commit=False lets this run inside a caller's BEGIN IMMEDIATE rebuild txn (an
+    # implicit commit there would break the atomic copy/swap); the caller commits.
     rows = conn.execute(
         """
         SELECT rowid, inventory_id, event, actor, event_at, metadata_json
@@ -2852,7 +3001,8 @@ def _repair_fleet_audit_chain_hashes(conn: sqlite3.Connection) -> None:
             (prev_hash, entry_hash, int(row["rowid"])),
         )
         prev_by_inventory[inventory_id] = entry_hash
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def _fleet_audit_chain_legacy_backup_exists(conn: sqlite3.Connection) -> bool:
@@ -2869,85 +3019,116 @@ def _fleet_audit_chain_legacy_backup_exists(conn: sqlite3.Connection) -> bool:
 
 
 def _migrate_fleet_audit_chain_schema(conn: sqlite3.Connection) -> None:
-    row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arclink_fleet_audit_chain'"
-    ).fetchone()
-    if row is None:
-        return
-    columns = set(_table_columns(conn, "arclink_fleet_audit_chain"))
     required = {"entry_id", "inventory_id", "event", "actor", "event_at", "prev_hash", "entry_hash", "metadata_json"}
-    if required <= columns:
-        if (
-            _fleet_audit_chain_legacy_backup_exists(conn)
-            and get_setting(conn, "fleet_audit_chain_hash_repair_v1", "") != "done"
-        ):
-            _repair_fleet_audit_chain_hashes(conn)
-            upsert_setting(conn, "fleet_audit_chain_hash_repair_v1", "done")
+
+    def _table_present(c: sqlite3.Connection) -> bool:
+        return (
+            c.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'arclink_fleet_audit_chain'"
+            ).fetchone()
+            is not None
+        )
+
+    def _already_done(c: sqlite3.Connection) -> bool:
+        if not _table_present(c):
+            return True
+        return required <= set(_table_columns(c, "arclink_fleet_audit_chain"))
+
+    def _rebuild(c: sqlite3.Connection) -> None:
+        columns = set(_table_columns(c, "arclink_fleet_audit_chain"))
+        backup = "arclink_fleet_audit_chain__legacy"
+        existing_tables = {
+            str(table_row["name"])
+            for table_row in c.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+        }
+        if backup in existing_tables:
+            suffix = 1
+            while f"arclink_fleet_audit_chain__legacy_{suffix}" in existing_tables:
+                suffix += 1
+            backup = f"arclink_fleet_audit_chain__legacy_{suffix}"
+
+        event_expr = "'verified'"
+        legacy_event = "event" if "event" in columns else "event_type" if "event_type" in columns else ""
+        if legacy_event:
+            event_expr = (
+                f"CASE WHEN {legacy_event} IN ('enrolled', 'verified', 'activated', 'degraded', "
+                "'drained', 'resumed', 'removed', 're-attested') "
+                f"THEN {legacy_event} WHEN {legacy_event} IN ('warning', 'failed', 'error') "
+                "THEN 'degraded' ELSE 'verified' END"
+            )
+
+        select_columns = [
+            _sql_column_expr(columns, "entry_id", _sql_column_expr(columns, "chain_id", "'fachain_legacy_' || lower(hex(randomblob(12)))")),
+            _sql_column_expr(columns, "inventory_id", _sql_column_expr(columns, "inventory_machine_id", _sql_column_expr(columns, "host_id", "''"))),
+            event_expr,
+            _sql_column_expr(columns, "actor", "'legacy'"),
+            _sql_column_expr(columns, "event_at", _sql_column_expr(columns, "created_at", "datetime('now')")),
+            _sql_column_expr(columns, "prev_hash", _sql_column_expr(columns, "previous_hash", "''")),
+            _sql_column_expr(columns, "entry_hash", "'legacy_' || lower(hex(randomblob(16)))"),
+            _sql_column_expr(columns, "metadata_json", "'{}'"),
+        ]
+
+        c.execute("DROP INDEX IF EXISTS idx_arclink_fleet_audit_chain_inventory_time")
+        c.execute("DROP INDEX IF EXISTS idx_arclink_fleet_audit_chain_host_time")
+        c.execute("DROP TABLE IF EXISTS arclink_fleet_audit_chain__new")
+        c.execute(
+            """
+            CREATE TABLE arclink_fleet_audit_chain__new (
+              entry_id TEXT PRIMARY KEY,
+              inventory_id TEXT NOT NULL,
+              event TEXT NOT NULL CHECK (event IN ('enrolled', 'verified', 'activated', 'degraded', 'drained', 'resumed', 'removed', 're-attested')),
+              actor TEXT NOT NULL,
+              event_at TEXT NOT NULL,
+              prev_hash TEXT NOT NULL DEFAULT '',
+              entry_hash TEXT NOT NULL,
+              metadata_json TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        c.execute(
+            f"""
+            INSERT OR IGNORE INTO arclink_fleet_audit_chain__new (
+              entry_id, inventory_id, event, actor, event_at, prev_hash, entry_hash, metadata_json
+            )
+            SELECT {', '.join(select_columns)}
+            FROM arclink_fleet_audit_chain
+            """
+        )
+        c.execute(f"ALTER TABLE arclink_fleet_audit_chain RENAME TO {backup}")
+        c.execute("ALTER TABLE arclink_fleet_audit_chain__new RENAME TO arclink_fleet_audit_chain")
+        # Recreate the live index inside the same txn.
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_arclink_fleet_audit_chain_inventory_time "
+            "ON arclink_fleet_audit_chain (inventory_id, event_at)"
+        )
+        # Re-chain the freshly migrated rows (legacy entry_hashes are placeholders).
+        # commit=False keeps this inside the atomic rebuild txn; the helper commits.
+        _repair_fleet_audit_chain_hashes(c, commit=False)
+        # Mark the repair done inside the SAME txn so the post-rebuild repair branch
+        # below does not re-run it; non-committing upsert (the helper commits).
+        c.execute(
+            """
+            INSERT INTO settings (key, value, updated_at)
+            VALUES ('fleet_audit_chain_hash_repair_v1', 'done', ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (utc_now_iso(),),
+        )
+
+    needed_rebuild = not _already_done(conn)
+    _atomic_rebuild_migration(conn, already_done=_already_done, rebuild=_rebuild)
+    if needed_rebuild:
+        # Rebuild path already re-chained + marked the repair done inside its txn.
         return
-
-    backup = "arclink_fleet_audit_chain__legacy"
-    existing_tables = {
-        str(table_row["name"])
-        for table_row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
-    }
-    if backup in existing_tables:
-        suffix = 1
-        while f"arclink_fleet_audit_chain__legacy_{suffix}" in existing_tables:
-            suffix += 1
-        backup = f"arclink_fleet_audit_chain__legacy_{suffix}"
-
-    event_expr = "'verified'"
-    legacy_event = "event" if "event" in columns else "event_type" if "event_type" in columns else ""
-    if legacy_event:
-        event_expr = (
-            f"CASE WHEN {legacy_event} IN ('enrolled', 'verified', 'activated', 'degraded', "
-            "'drained', 'resumed', 'removed', 're-attested') "
-            f"THEN {legacy_event} WHEN {legacy_event} IN ('warning', 'failed', 'error') "
-            "THEN 'degraded' ELSE 'verified' END"
-        )
-
-    select_columns = [
-        _sql_column_expr(columns, "entry_id", _sql_column_expr(columns, "chain_id", "'fachain_legacy_' || lower(hex(randomblob(12)))")),
-        _sql_column_expr(columns, "inventory_id", _sql_column_expr(columns, "inventory_machine_id", _sql_column_expr(columns, "host_id", "''"))),
-        event_expr,
-        _sql_column_expr(columns, "actor", "'legacy'"),
-        _sql_column_expr(columns, "event_at", _sql_column_expr(columns, "created_at", "datetime('now')")),
-        _sql_column_expr(columns, "prev_hash", _sql_column_expr(columns, "previous_hash", "''")),
-        _sql_column_expr(columns, "entry_hash", "'legacy_' || lower(hex(randomblob(16)))"),
-        _sql_column_expr(columns, "metadata_json", "'{}'"),
-    ]
-
-    conn.executescript(
-        """
-        DROP INDEX IF EXISTS idx_arclink_fleet_audit_chain_inventory_time;
-        DROP INDEX IF EXISTS idx_arclink_fleet_audit_chain_host_time;
-        DROP TABLE IF EXISTS arclink_fleet_audit_chain__new;
-        CREATE TABLE arclink_fleet_audit_chain__new (
-          entry_id TEXT PRIMARY KEY,
-          inventory_id TEXT NOT NULL,
-          event TEXT NOT NULL CHECK (event IN ('enrolled', 'verified', 'activated', 'degraded', 'drained', 'resumed', 'removed', 're-attested')),
-          actor TEXT NOT NULL,
-          event_at TEXT NOT NULL,
-          prev_hash TEXT NOT NULL DEFAULT '',
-          entry_hash TEXT NOT NULL,
-          metadata_json TEXT NOT NULL DEFAULT ''
-        );
-        """
-    )
-    conn.execute(
-        f"""
-        INSERT OR IGNORE INTO arclink_fleet_audit_chain__new (
-          entry_id, inventory_id, event, actor, event_at, prev_hash, entry_hash, metadata_json
-        )
-        SELECT {', '.join(select_columns)}
-        FROM arclink_fleet_audit_chain
-        """
-    )
-    conn.execute(f"ALTER TABLE arclink_fleet_audit_chain RENAME TO {backup}")
-    conn.execute("ALTER TABLE arclink_fleet_audit_chain__new RENAME TO arclink_fleet_audit_chain")
-    conn.commit()
-    _repair_fleet_audit_chain_hashes(conn)
-    upsert_setting(conn, "fleet_audit_chain_hash_repair_v1", "done")
+    # Already-migrated schema, but a legacy backup may exist from a prior (pre-fix)
+    # rebuild that did not finish re-chaining. Run the one-shot repair idempotently.
+    if (
+        _table_present(conn)
+        and _fleet_audit_chain_legacy_backup_exists(conn)
+        and get_setting(conn, "fleet_audit_chain_hash_repair_v1", "") != "done"
+    ):
+        _repair_fleet_audit_chain_hashes(conn)
+        upsert_setting(conn, "fleet_audit_chain_hash_repair_v1", "done")
 
 
 def _migrate_llm_budget_reservations_add_expired_status(conn: sqlite3.Connection) -> None:
@@ -3032,95 +3213,138 @@ def _migrate_llm_budget_reservations_add_expired_status(conn: sqlite3.Connection
 
 
 def _migrate_arclink_rollouts_status_schema(conn: sqlite3.Connection) -> None:
-    row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arclink_rollouts'",
-    ).fetchone()
-    ddl = str(row["sql"] or "") if row is not None else ""
-    if all(status in ddl for status in ("in_progress", "paused", "completed")):
-        return
-    conn.executescript(
-        """
-        DROP TABLE IF EXISTS arclink_rollouts__new;
-        CREATE TABLE arclink_rollouts__new (
-          rollout_id TEXT PRIMARY KEY,
-          deployment_id TEXT NOT NULL DEFAULT '',
-          version_tag TEXT NOT NULL DEFAULT '',
-          status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'in_progress', 'paused', 'completed', 'failed', 'rolled_back')),
-          wave_count INTEGER NOT NULL DEFAULT 1,
-          current_wave INTEGER NOT NULL DEFAULT 0,
-          waves_json TEXT NOT NULL DEFAULT '[]',
-          rollback_plan_json TEXT NOT NULL DEFAULT '{}',
-          metadata_json TEXT NOT NULL DEFAULT '{}',
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        );
-        INSERT INTO arclink_rollouts__new (
-          rollout_id, deployment_id, version_tag, status, wave_count, current_wave,
-          waves_json, rollback_plan_json, metadata_json, created_at, updated_at
+    def _already_done(c: sqlite3.Connection) -> bool:
+        row = c.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arclink_rollouts'",
+        ).fetchone()
+        ddl = str(row["sql"] or "") if row is not None else ""
+        # No table -> ensure_schema CREATE handles it; a fresh table already has the
+        # new CHECK so this is also the completed-migration no-op.
+        if row is None:
+            return True
+        return all(status in ddl for status in ("in_progress", "paused", "completed"))
+
+    def _rebuild(c: sqlite3.Connection) -> None:
+        c.execute("DROP TABLE IF EXISTS arclink_rollouts__new")
+        c.execute(
+            """
+            CREATE TABLE arclink_rollouts__new (
+              rollout_id TEXT PRIMARY KEY,
+              deployment_id TEXT NOT NULL DEFAULT '',
+              version_tag TEXT NOT NULL DEFAULT '',
+              status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'in_progress', 'paused', 'completed', 'failed', 'rolled_back')),
+              wave_count INTEGER NOT NULL DEFAULT 1,
+              current_wave INTEGER NOT NULL DEFAULT 0,
+              waves_json TEXT NOT NULL DEFAULT '[]',
+              rollback_plan_json TEXT NOT NULL DEFAULT '{}',
+              metadata_json TEXT NOT NULL DEFAULT '{}',
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            )
+            """
         )
-        SELECT
-          rollout_id,
-          deployment_id,
-          version_tag,
-          CASE status
-            WHEN 'running' THEN 'in_progress'
-            WHEN 'succeeded' THEN 'completed'
-            ELSE status
-          END,
-          wave_count,
-          current_wave,
-          waves_json,
-          rollback_plan_json,
-          metadata_json,
-          created_at,
-          updated_at
-        FROM arclink_rollouts;
-        DROP TABLE arclink_rollouts;
-        ALTER TABLE arclink_rollouts__new RENAME TO arclink_rollouts;
-        """
-    )
-    conn.commit()
+        c.execute(
+            """
+            INSERT INTO arclink_rollouts__new (
+              rollout_id, deployment_id, version_tag, status, wave_count, current_wave,
+              waves_json, rollback_plan_json, metadata_json, created_at, updated_at
+            )
+            SELECT
+              rollout_id,
+              deployment_id,
+              version_tag,
+              CASE status
+                WHEN 'running' THEN 'in_progress'
+                WHEN 'succeeded' THEN 'completed'
+                ELSE status
+              END,
+              wave_count,
+              current_wave,
+              waves_json,
+              rollback_plan_json,
+              metadata_json,
+              created_at,
+              updated_at
+            FROM arclink_rollouts
+            """
+        )
+        c.execute("DROP TABLE arclink_rollouts")
+        c.execute("ALTER TABLE arclink_rollouts__new RENAME TO arclink_rollouts")
+        # Recreate the live index torn down with the old table, inside this txn.
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_arclink_rollouts_deployment_status "
+            "ON arclink_rollouts (deployment_id, status)"
+        )
+
+    _atomic_rebuild_migration(conn, already_done=_already_done, rebuild=_rebuild)
 
 
 def _migrate_notion_identity_claims_remove_legacy_nonce(conn: sqlite3.Connection) -> None:
-    columns = _table_columns(conn, "notion_identity_claims")
-    if "verification_nonce" not in columns:
-        return
-    conn.executescript(
-        """
-        DROP TABLE IF EXISTS notion_identity_claims__new;
-        CREATE TABLE notion_identity_claims__new (
-          claim_id TEXT PRIMARY KEY,
-          session_id TEXT NOT NULL DEFAULT '',
-          agent_id TEXT NOT NULL,
-          unix_user TEXT NOT NULL,
-          claimed_notion_email TEXT NOT NULL,
-          notion_page_id TEXT NOT NULL DEFAULT '',
-          notion_page_url TEXT NOT NULL DEFAULT '',
-          status TEXT NOT NULL DEFAULT 'pending',
-          failure_reason TEXT NOT NULL DEFAULT '',
-          verified_notion_user_id TEXT NOT NULL DEFAULT '',
-          verified_notion_email TEXT NOT NULL DEFAULT '',
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL,
-          expires_at TEXT NOT NULL,
-          verified_at TEXT
-        );
-        INSERT INTO notion_identity_claims__new (
-          claim_id, session_id, agent_id, unix_user, claimed_notion_email,
-          notion_page_id, notion_page_url, status, failure_reason,
-          verified_notion_user_id, verified_notion_email, created_at, updated_at, expires_at, verified_at
+    def _already_done(c: sqlite3.Connection) -> bool:
+        table = c.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'notion_identity_claims'"
+        ).fetchone()
+        if table is None:
+            return True
+        return "verification_nonce" not in _table_columns(c, "notion_identity_claims")
+
+    def _rebuild(c: sqlite3.Connection) -> None:
+        c.execute("DROP INDEX IF EXISTS idx_notion_identity_claims_page_id")
+        c.execute("DROP INDEX IF EXISTS idx_notion_identity_claims_status_expires")
+        c.execute("DROP INDEX IF EXISTS idx_notion_identity_claims_session_created")
+        c.execute("DROP TABLE IF EXISTS notion_identity_claims__new")
+        c.execute(
+            """
+            CREATE TABLE notion_identity_claims__new (
+              claim_id TEXT PRIMARY KEY,
+              session_id TEXT NOT NULL DEFAULT '',
+              agent_id TEXT NOT NULL,
+              unix_user TEXT NOT NULL,
+              claimed_notion_email TEXT NOT NULL,
+              notion_page_id TEXT NOT NULL DEFAULT '',
+              notion_page_url TEXT NOT NULL DEFAULT '',
+              status TEXT NOT NULL DEFAULT 'pending',
+              failure_reason TEXT NOT NULL DEFAULT '',
+              verified_notion_user_id TEXT NOT NULL DEFAULT '',
+              verified_notion_email TEXT NOT NULL DEFAULT '',
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              expires_at TEXT NOT NULL,
+              verified_at TEXT
+            )
+            """
         )
-        SELECT
-          claim_id, session_id, agent_id, unix_user, claimed_notion_email,
-          notion_page_id, notion_page_url, status, failure_reason,
-          verified_notion_user_id, verified_notion_email, created_at, updated_at, expires_at, verified_at
-        FROM notion_identity_claims;
-        DROP TABLE notion_identity_claims;
-        ALTER TABLE notion_identity_claims__new RENAME TO notion_identity_claims;
-        """
-    )
-    conn.commit()
+        c.execute(
+            """
+            INSERT INTO notion_identity_claims__new (
+              claim_id, session_id, agent_id, unix_user, claimed_notion_email,
+              notion_page_id, notion_page_url, status, failure_reason,
+              verified_notion_user_id, verified_notion_email, created_at, updated_at, expires_at, verified_at
+            )
+            SELECT
+              claim_id, session_id, agent_id, unix_user, claimed_notion_email,
+              notion_page_id, notion_page_url, status, failure_reason,
+              verified_notion_user_id, verified_notion_email, created_at, updated_at, expires_at, verified_at
+            FROM notion_identity_claims
+            """
+        )
+        c.execute("DROP TABLE notion_identity_claims")
+        c.execute("ALTER TABLE notion_identity_claims__new RENAME TO notion_identity_claims")
+        # Recreate ALL live indexes torn down with the old table, inside this txn.
+        c.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_notion_identity_claims_page_id "
+            "ON notion_identity_claims (notion_page_id) WHERE notion_page_id != ''"
+        )
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notion_identity_claims_status_expires "
+            "ON notion_identity_claims (status, expires_at)"
+        )
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notion_identity_claims_session_created "
+            "ON notion_identity_claims (session_id, created_at)"
+        )
+
+    _atomic_rebuild_migration(conn, already_done=_already_done, rebuild=_rebuild)
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
@@ -4031,32 +4255,85 @@ def set_arclink_user_entitlement(
     user_id: str,
     entitlement_state: str,
     stripe_customer_id: str = "",
+    event_at: "str | int | float | None" = None,
     commit: bool = True,
 ) -> dict[str, Any]:
+    """Set a user's entitlement state, applying ordered events MONOTONICALLY.
+
+    billing-C2: previously this overwrote entitlement_state/customer unconditionally
+    (last-writer-wins by Stripe delivery order), so an out-of-order webhook could
+    revert a newer state. When ``event_at`` is supplied (Stripe ``event.created`` /
+    the subscription object timestamp), the write only lands if the incoming event is
+    newer than the last-applied one for this user; a stale event is DROPPED (the
+    caller still records the webhook processed). ``event_at`` defaults to None ->
+    apply unconditionally, so existing callers are unchanged until they pass it.
+    """
     clean_state = str(entitlement_state or "").strip().lower()
     if clean_state not in ARCLINK_ENTITLEMENT_STATES:
         raise ValueError(f"unsupported ArcLink entitlement state: {clean_state}")
-    row = conn.execute("SELECT * FROM arclink_users WHERE user_id = ?", (user_id,)).fetchone()
-    if row is None:
-        return upsert_arclink_user(
-            conn,
-            user_id=user_id,
-            stripe_customer_id=stripe_customer_id,
-            entitlement_state=clean_state,
-            commit=commit,
+    incoming_key = arclink_event_ordering_key(event_at)
+    own_txn = commit and not conn.in_transaction
+    if own_txn:
+        # Make read-last-event + compare + write one atomic critical section so two
+        # concurrent ordered writers cannot both read a stale last_event_at.
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute("SELECT * FROM arclink_users WHERE user_id = ?", (user_id,)).fetchone()
+        if row is None:
+            created = upsert_arclink_user(
+                conn,
+                user_id=user_id,
+                stripe_customer_id=stripe_customer_id,
+                entitlement_state=clean_state,
+                commit=False,
+            )
+            if incoming_key is not None:
+                conn.execute(
+                    "UPDATE arclink_users SET entitlement_last_event_at = ? WHERE user_id = ?",
+                    (repr(incoming_key), user_id),
+                )
+                created = dict(conn.execute("SELECT * FROM arclink_users WHERE user_id = ?", (user_id,)).fetchone())
+            if own_txn:
+                conn.commit()
+            elif commit:
+                _arclink_commit(conn, commit=commit)
+            return created if isinstance(created, dict) else dict(created)
+        if incoming_key is not None:
+            stored_key = arclink_event_ordering_key(str(row["entitlement_last_event_at"] or ""))
+            if stored_key is not None and incoming_key <= stored_key:
+                # Stale event: a newer one already applied. Drop the write.
+                if own_txn:
+                    conn.commit()
+                return dict(row)
+        new_last_event_at = repr(incoming_key) if incoming_key is not None else str(row["entitlement_last_event_at"] or "")
+        conn.execute(
+            """
+            UPDATE arclink_users
+            SET entitlement_state = ?,
+                entitlement_updated_at = ?,
+                entitlement_last_event_at = ?,
+                stripe_customer_id = CASE WHEN ? != '' THEN ? ELSE stripe_customer_id END,
+                updated_at = ?
+            WHERE user_id = ?
+            """,
+            (
+                clean_state,
+                utc_now_iso(),
+                new_last_event_at,
+                stripe_customer_id,
+                stripe_customer_id,
+                utc_now_iso(),
+                user_id,
+            ),
         )
-    conn.execute(
-        """
-        UPDATE arclink_users
-        SET entitlement_state = ?,
-            entitlement_updated_at = ?,
-            stripe_customer_id = CASE WHEN ? != '' THEN ? ELSE stripe_customer_id END,
-            updated_at = ?
-        WHERE user_id = ?
-        """,
-        (clean_state, utc_now_iso(), stripe_customer_id, stripe_customer_id, utc_now_iso(), user_id),
-    )
-    _arclink_commit(conn, commit=commit)
+    except BaseException:
+        if own_txn:
+            conn.rollback()
+        raise
+    if own_txn:
+        conn.commit()
+    else:
+        _arclink_commit(conn, commit=commit)
     return dict(conn.execute("SELECT * FROM arclink_users WHERE user_id = ?", (user_id,)).fetchone())
 
 
@@ -4201,20 +4478,39 @@ def comp_arclink_subscription(
             raise ValueError("targeted ArcLink comp deployment does not belong to user")
     target_kind = "deployment" if clean_deployment_id else "user"
     target_id = clean_deployment_id or user_id
-    if _arclink_comp_audit_exists(conn, user_id=user_id, deployment_id=clean_deployment_id):
+
+    def _already_comped_user() -> dict[str, Any]:
         row = conn.execute("SELECT * FROM arclink_users WHERE user_id = ?", (user_id,)).fetchone()
         if row is None:
             return upsert_arclink_user(conn, user_id=user_id, entitlement_state="none")
         return dict(row)
-    append_arclink_audit(
-        conn,
-        action="comp_subscription",
-        actor_id=actor_id,
-        target_kind=target_kind,
-        target_id=target_id,
-        reason=clean_reason,
-        metadata={"user_id": user_id, "deployment_id": clean_deployment_id},
-    )
+
+    # Fast-path idempotency (read-only): an already-recorded comp is a no-op.
+    if _arclink_comp_audit_exists(conn, user_id=user_id, deployment_id=clean_deployment_id):
+        return _already_comped_user()
+    # conc-M3: the read above only takes a read lock, so two concurrent comps for the
+    # same target can both pass it. The partial UNIQUE index on
+    # arclink_audit_log(action, target_id) WHERE action='comp_subscription' makes the
+    # SECOND INSERT raise IntegrityError -- we treat that as "already comped" (no
+    # double comp) rather than crashing.
+    try:
+        append_arclink_audit(
+            conn,
+            action="comp_subscription",
+            actor_id=actor_id,
+            target_kind=target_kind,
+            target_id=target_id,
+            reason=clean_reason,
+            metadata={"user_id": user_id, "deployment_id": clean_deployment_id},
+        )
+    except sqlite3.IntegrityError:
+        # Another concurrent comp won the race and recorded the audit row first. Clear
+        # the failed-statement state and return the existing comp result.
+        try:
+            conn.rollback()
+        except sqlite3.Error:
+            pass
+        return _already_comped_user()
     if clean_deployment_id:
         user = conn.execute("SELECT * FROM arclink_users WHERE user_id = ?", (user_id,)).fetchone()
         if user is None:
@@ -4916,38 +5212,79 @@ def upsert_arclink_subscription_mirror(
     stripe_subscription_id: str = "",
     current_period_end: str = "",
     raw: Mapping[str, Any] | None = None,
+    event_at: "str | int | float | None" = None,
     commit: bool = True,
 ) -> None:
+    """Mirror a Stripe subscription, applying ordered events MONOTONICALLY.
+
+    billing-C2: previously every delivery overwrote status/period unconditionally, so
+    an out-of-order webhook could revert the mirror to a stale status. When
+    ``event_at`` is supplied (Stripe ``event.created`` / the subscription object
+    timestamp), the upsert only applies if the incoming event is newer than the
+    last-applied one for this subscription; a stale event is DROPPED (caller still
+    records the webhook processed). ``event_at`` defaults to None -> apply
+    unconditionally, so existing callers are unchanged until they pass it.
+    """
     clean_status = _validate_arclink_status(status, ARCLINK_SUBSCRIPTION_STATUSES, label="subscription")
+    incoming_key = arclink_event_ordering_key(event_at)
     now = utc_now_iso()
-    conn.execute(
-        """
-        INSERT INTO arclink_subscriptions (
-          subscription_id, user_id, stripe_customer_id, stripe_subscription_id,
-          status, current_period_end, raw_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(subscription_id) DO UPDATE SET
-          user_id = excluded.user_id,
-          stripe_customer_id = excluded.stripe_customer_id,
-          stripe_subscription_id = excluded.stripe_subscription_id,
-          status = excluded.status,
-          current_period_end = excluded.current_period_end,
-          raw_json = excluded.raw_json,
-          updated_at = excluded.updated_at
-        """,
-        (
-            subscription_id,
-            user_id,
-            stripe_customer_id,
-            stripe_subscription_id,
-            clean_status,
-            current_period_end,
-            _arclink_json(raw),
-            now,
-            now,
-        ),
-    )
-    _arclink_commit(conn, commit=commit)
+    own_txn = commit and not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        if incoming_key is not None:
+            existing = conn.execute(
+                "SELECT last_event_at FROM arclink_subscriptions WHERE subscription_id = ?",
+                (subscription_id,),
+            ).fetchone()
+            if existing is not None:
+                stored_key = arclink_event_ordering_key(str(existing["last_event_at"] or ""))
+                if stored_key is not None and incoming_key <= stored_key:
+                    # Stale event: a newer one already applied. Drop the write.
+                    if own_txn:
+                        conn.commit()
+                    return
+        new_last_event_at = repr(incoming_key) if incoming_key is not None else ""
+        conn.execute(
+            """
+            INSERT INTO arclink_subscriptions (
+              subscription_id, user_id, stripe_customer_id, stripe_subscription_id,
+              status, current_period_end, raw_json, last_event_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(subscription_id) DO UPDATE SET
+              user_id = excluded.user_id,
+              stripe_customer_id = excluded.stripe_customer_id,
+              stripe_subscription_id = excluded.stripe_subscription_id,
+              status = excluded.status,
+              current_period_end = excluded.current_period_end,
+              raw_json = excluded.raw_json,
+              last_event_at = CASE
+                WHEN excluded.last_event_at != '' THEN excluded.last_event_at
+                ELSE arclink_subscriptions.last_event_at
+              END,
+              updated_at = excluded.updated_at
+            """,
+            (
+                subscription_id,
+                user_id,
+                stripe_customer_id,
+                stripe_subscription_id,
+                clean_status,
+                current_period_end,
+                _arclink_json(raw),
+                new_last_event_at,
+                now,
+                now,
+            ),
+        )
+    except BaseException:
+        if own_txn:
+            conn.rollback()
+        raise
+    if own_txn:
+        conn.commit()
+    else:
+        _arclink_commit(conn, commit=commit)
 
 
 def create_arclink_provisioning_job(
@@ -4976,34 +5313,98 @@ def transition_arclink_provisioning_job(
     job_id: str,
     status: str,
     error: str = "",
-) -> None:
+) -> bool:
+    """Atomically transition a provisioning job, returning False on a lost claim.
+
+    conc-C2 (sovereign double-execute): the previous flow SELECTed status, validated
+    the READ value in Python, then BLIND-UPDATEd with no ``WHERE status=<expected>``
+    guard and no ``BEGIN IMMEDIATE`` -- two sovereign workers could each read
+    ``queued`` and both move the SAME job to ``running``, double-executing the
+    apply/teardown. This is now an atomic Compare-And-Swap:
+
+    * An unknown ``status`` raises ValueError and a missing job raises KeyError --
+      caller-misuse contracts are unchanged.
+    * A structurally invalid transition (the requested target is neither the current
+      status nor reachable from it per the map) still raises ValueError.
+    * The write is ``UPDATE ... WHERE job_id=? AND status IN (<allowed-from>)`` inside
+      a ``BEGIN IMMEDIATE`` txn. ``<allowed-from>`` is exactly the map source states
+      from which ``clean_status`` is reachable -- it deliberately does NOT include
+      ``clean_status`` itself. So if the row is ALREADY in ``clean_status`` (a
+      concurrent worker won the race, e.g. another worker already moved
+      ``queued -> running``), the CAS matches 0 rows -> we return False ("lost the
+      claim") so the caller SKIPS instead of double-executing. A matched row returns
+      True.
+    """
     clean_status = str(status or "").strip().lower()
     if clean_status not in ARCLINK_PROVISIONING_JOB_STATUSES:
         raise ValueError(f"unsupported ArcLink provisioning job status: {clean_status}")
-    row = conn.execute("SELECT status, attempt_count FROM arclink_provisioning_jobs WHERE job_id = ?", (job_id,)).fetchone()
-    if row is None:
-        raise KeyError(job_id)
-    current = str(row["status"] or "")
-    if clean_status != current and clean_status not in ARCLINK_PROVISIONING_JOB_TRANSITIONS.get(current, set()):
-        raise ValueError(f"invalid ArcLink provisioning job transition: {current} -> {clean_status}")
-    now = utc_now_iso()
-    reset_for_retry = current == "failed" and clean_status == "queued"
-    started_at = now if clean_status == "running" else None
-    finished_at = now if clean_status in {"succeeded", "failed", "cancelled"} else None
-    attempt_increment = 1 if clean_status == "running" and current != "running" else 0
-    conn.execute(
-        """
-        UPDATE arclink_provisioning_jobs
-        SET status = ?,
-            attempt_count = attempt_count + ?,
-            started_at = CASE WHEN ? THEN NULL ELSE COALESCE(?, started_at) END,
-            finished_at = CASE WHEN ? THEN NULL ELSE COALESCE(?, finished_at) END,
-            error = ?
-        WHERE job_id = ?
-        """,
-        (clean_status, attempt_increment, reset_for_retry, started_at, reset_for_retry, finished_at, error, job_id),
-    )
-    conn.commit()
+    own_txn = not conn.in_transaction
+    if own_txn:
+        # Serialize concurrent claimers: BEGIN IMMEDIATE takes the write lock so the
+        # read + CAS is one critical section (no read-lock-only TOCTOU window).
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute(
+            "SELECT status, attempt_count FROM arclink_provisioning_jobs WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(job_id)
+        current = str(row["status"] or "")
+        if clean_status != current and clean_status not in ARCLINK_PROVISIONING_JOB_TRANSITIONS.get(current, set()):
+            raise ValueError(f"invalid ArcLink provisioning job transition: {current} -> {clean_status}")
+        if clean_status == current:
+            # Already in the target state. The transition map has no self-loops, so the
+            # only way to be here is that this (or a concurrent) call already applied
+            # it. Report a lost claim so a racing worker does NOT double-execute.
+            if own_txn:
+                conn.commit()
+            return False
+        # The map source states from which clean_status is reachable (NOT clean_status
+        # itself). The CAS only wins from a genuine source -> exactly one claimer wins.
+        allowed_from = {
+            source
+            for source, targets in ARCLINK_PROVISIONING_JOB_TRANSITIONS.items()
+            if clean_status in targets
+        }
+        now = utc_now_iso()
+        reset_for_retry = current == "failed" and clean_status == "queued"
+        started_at = now if clean_status == "running" else None
+        finished_at = now if clean_status in {"succeeded", "failed", "cancelled"} else None
+        attempt_increment = 1 if clean_status == "running" and current != "running" else 0
+        placeholders = ", ".join("?" for _ in allowed_from)
+        cursor = conn.execute(
+            f"""
+            UPDATE arclink_provisioning_jobs
+            SET status = ?,
+                attempt_count = attempt_count + ?,
+                started_at = CASE WHEN ? THEN NULL ELSE COALESCE(?, started_at) END,
+                finished_at = CASE WHEN ? THEN NULL ELSE COALESCE(?, finished_at) END,
+                error = ?
+            WHERE job_id = ? AND status IN ({placeholders})
+            """,
+            (
+                clean_status,
+                attempt_increment,
+                reset_for_retry,
+                started_at,
+                reset_for_retry,
+                finished_at,
+                error,
+                job_id,
+                *sorted(allowed_from),
+            ),
+        )
+        claimed = cursor.rowcount > 0
+    except BaseException:
+        if own_txn:
+            conn.rollback()
+        raise
+    if own_txn:
+        conn.commit()
+    # rowcount == 0 -> a concurrent worker moved the row between our read and CAS;
+    # the claim was lost. Caller must skip (NOT double-execute apply/teardown).
+    return claimed
 
 
 def arclink_drift_checks(conn: sqlite3.Connection) -> list[dict[str, str]]:

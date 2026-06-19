@@ -24,6 +24,7 @@ from arclink_control import (
     connect_db,
     link_arclink_action_operation,
     note_refresh_job,
+    set_arclink_user_entitlement,
     utc_now_iso,
 )
 from arclink_boundary import json_dumps_safe, json_loads_safe, reject_secret_material, rowdict
@@ -64,8 +65,38 @@ _EXECUTOR_ACTIONS = frozenset({
     "restart", "reprovision", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp", "stripe_entitlement_recovery", "backup_write_check",
 })
 
-_STALE_THRESHOLD_SECONDS = 3600  # 1 hour
+# conc-H1 (lease > longest uninterrupted op). The action worker stamps
+# `claimed_at` once at claim and only re-touches it via the lease heartbeat
+# below at action boundaries -- never DURING a single dispatch. The longest a
+# single live action can sit in 'running' without a heartbeat is a pod
+# migration / rollout, whose own executor steps can chain up to two back-to-back
+# long subprocess ops (rsync + `docker compose up`). If the stale threshold were
+# shorter than that worst case, a genuinely-alive but slow worker would be
+# declared stale and reclaimed mid-flight -> double-execute. So the FLOOR is the
+# longest a single action step can run WITHOUT a heartbeat, mirroring the
+# pod_migration lease>op-timeout fix:
+#     stale_threshold >= (2 * _SUBPROCESS_LONG_TIMEOUT) + margin
+from arclink_executor import _SUBPROCESS_LONG_TIMEOUT as _EXECUTOR_LONG_OP_TIMEOUT_SECONDS
+
+_MAX_UNINTERRUPTED_ACTION_OP_SECONDS = 2 * int(_EXECUTOR_LONG_OP_TIMEOUT_SECONDS)
+_STALE_LEASE_SAFETY_MARGIN_SECONDS = 600
+MINIMUM_STALE_THRESHOLD_SECONDS = (
+    _MAX_UNINTERRUPTED_ACTION_OP_SECONDS + _STALE_LEASE_SAFETY_MARGIN_SECONDS
+)
+# Default stays generous and is clamped UP to the floor so an operator who
+# shortens it via env can never push it below the heartbeat-safe point.
+_STALE_THRESHOLD_SECONDS = max(3600, MINIMUM_STALE_THRESHOLD_SECONDS)  # >= ~1h
+# A live worker refreshes its `claimed_at` heartbeat at action boundaries while
+# it still owns the row, so a long-but-alive action never crosses the threshold.
+_LEASE_HEARTBEAT_SECONDS = 300
 _STALE_RECOVERY_MAX_ATTEMPTS = 3
+# conc-H8: a deterministically-failing action must dead-letter instead of
+# crash-looping the live path. Once an intent has accumulated this many attempts
+# it is moved to 'failed' rather than retried again.
+_LIVE_MAX_ATTEMPTS = 5
+# conc-H8: backoff applied in the main supervisor loop after a transient error
+# so a single bad iteration cannot busy-crash-loop the process.
+_MAIN_LOOP_ERROR_BACKOFF_SECONDS = 5.0
 _ActionExecutorCache = dict[tuple[str, str, str], ArcLinkExecutor]
 _ACTION_EXECUTOR_CACHE: _ActionExecutorCache = {}
 _LIFECYCLE_PATH_OVERRIDE_KEYS = ("project_name", "env_file", "compose_file")
@@ -275,6 +306,89 @@ def _latest_subscription_for_user(conn: sqlite3.Connection, user_id: str) -> sql
     ).fetchone()
 
 
+# Subscription statuses that still confer a paid entitlement. A refund must only
+# close the gates if it actually corresponds to one of THESE; refunding an
+# unrelated one-off charge must never cancel one of them.
+_ACTIVE_PAID_SUBSCRIPTION_STATUSES = frozenset({"active", "trialing", "paid", "past_due"})
+
+
+def _active_paid_subscriptions_for_user(
+    conn: sqlite3.Connection, user_id: str
+) -> list[sqlite3.Row]:
+    rows = conn.execute(
+        "SELECT * FROM arclink_subscriptions WHERE user_id = ? ORDER BY updated_at DESC, created_at DESC",
+        (user_id,),
+    ).fetchall()
+    return [r for r in rows if str(r["status"] or "").strip().lower() in _ACTIVE_PAID_SUBSCRIPTION_STATUSES]
+
+
+def _refund_targets_active_subscription(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    stripe_metadata: Mapping[str, Any],
+) -> tuple[bool, str]:
+    """Decide whether a refund should downgrade the user's entitlement (billing-H4).
+
+    A refund emits no ``customer.subscription.deleted`` webhook, so the gates only
+    close if the worker downgrades locally. But a refund can target a NON-subscription
+    one-off charge -- doing the downgrade unconditionally would cancel an unrelated,
+    still-ACTIVE subscription. The danger is specifically: the user HAS a tracked active
+    subscription AND this refund demonstrably maps to something OTHER than it.
+
+    We downgrade when:
+
+    * the action explicitly targeted a subscription that is still active-paid; or
+    * the refund metadata names a ``stripe_subscription_id`` / ``subscription_id`` that
+      matches one of the user's active-paid subscriptions; or
+    * the user has at most ONE tracked active-paid subscription and the refund does not
+      name a DIFFERENT subscription (the natural "refund my only plan" / no-tracked-sub
+      legacy charge case -- there is no other active subscription to wrongly cancel).
+
+    We do NOT downgrade when:
+
+    * the metadata names a subscription that is NOT one of the user's active-paid
+      subscriptions (an unrelated / one-off charge), or
+    * the user has 2+ active-paid subscriptions and the refund names none of them
+      (ambiguous -- refuse to guess and cancel the wrong one).
+
+    Returns ``(should_downgrade, reason)``.
+    """
+    active = _active_paid_subscriptions_for_user(conn, user_id)
+    active_stripe_ids = {str(r["stripe_subscription_id"] or "").strip() for r in active if str(r["stripe_subscription_id"] or "").strip()}
+    active_local_ids = {str(r["subscription_id"] or "").strip() for r in active if str(r["subscription_id"] or "").strip()}
+
+    named_stripe = str(stripe_metadata.get("stripe_subscription_id") or "").strip()
+    named_local = str(stripe_metadata.get("subscription_id") or "").strip()
+    target_kind = str(stripe_metadata.get("action_target_kind") or "").strip()
+    names_a_subscription = bool(named_stripe or named_local)
+    matches_active = (named_stripe in active_stripe_ids) or (named_local in active_local_ids)
+
+    if matches_active:
+        # The refund provably concerns one of the user's active-paid subscriptions.
+        return True, "explicit_active_subscription_target" if target_kind == "subscription" else "metadata_matches_active_subscription"
+
+    if names_a_subscription:
+        # Names a specific subscription/charge that is NOT one of the active-paid ones:
+        # an unrelated / one-off refund -- never cancel the active subscription.
+        return False, "named_subscription_not_active"
+
+    if target_kind == "subscription":
+        # Targeted a subscription by id that resolved to no active-paid row -> nothing
+        # live to cancel.
+        return False, "subscription_target_not_active"
+
+    if len(active) >= 2:
+        # Multiple active-paid subscriptions and no disambiguating reference: refuse to
+        # guess which one the refund maps to rather than cancel the wrong one.
+        return False, "ambiguous_multiple_active_subscriptions"
+
+    # Zero or exactly one tracked active-paid subscription and the refund names none:
+    # there is no OTHER active subscription that could be wrongly cancelled, so closing
+    # the gate is safe (covers the legacy single-charge / sole-plan refund).
+    return True, "sole_or_untracked_subscription"
+
+
 def _validate_explicit_target(metadata: Mapping[str, Any], key: str, resolved: str) -> None:
     explicit = str(metadata.get(key) or "").strip()
     if explicit and resolved and explicit != resolved:
@@ -441,17 +555,26 @@ def _finish_attempt(
     status: str,
     result: Mapping[str, Any] | None = None,
     error: str = "",
-) -> None:
+) -> bool:
+    """CAS-finish an in-flight attempt; return True iff this caller stamped it.
+
+    conc-M5: stale recovery and the owning worker can both try to stamp the same
+    attempt terminal. Guarding on ``status = 'running'`` means whichever writes
+    first wins and the loser is a no-op (rowcount 0) instead of overwriting a
+    recovery-stamped failure with a late success (or vice versa) -> no ledger drift.
+    """
     if status not in ARCLINK_ACTION_ATTEMPT_STATUSES:
         raise ArcLinkActionWorkerError(f"unsupported ArcLink action attempt status: {status or 'blank'}")
     now = utc_now_iso()
     result_json = json_dumps_safe(result, label="ArcLink action worker", error_cls=ArcLinkActionWorkerError) if result else "{}"
     if error:
         _reject_secrets({"error": error}, path="$")
-    conn.execute(
-        "UPDATE arclink_action_attempts SET status = ?, result_json = ?, error = ?, finished_at = ? WHERE attempt_id = ?",
+    cursor = conn.execute(
+        "UPDATE arclink_action_attempts SET status = ?, result_json = ?, error = ?, finished_at = ? "
+        "WHERE attempt_id = ? AND status = 'running'",
         (status, result_json, error, now, attempt_id),
     )
+    return cursor.rowcount >= 1
 
 
 def _update_intent_status(
@@ -459,23 +582,103 @@ def _update_intent_status(
     *,
     action_id: str,
     status: str,
-) -> None:
+    worker_id: str | None = None,
+) -> bool:
+    """Write a terminal/queued intent status; return True iff a row was written.
+
+    conc-M5: ``_finish_attempt`` is a CAS on the attempt row, but the intent write
+    that follows a dispatch used to be UNCONDITIONAL -- so a worker that had ALREADY
+    lost its lease (stale recovery re-queued / a new owner re-claimed the action in
+    the gap of a long dispatch) would still stamp the intent terminal, clobbering the
+    recovery/new owner's state and corrupting the ledger. When ``worker_id`` is
+    supplied this update becomes a CAS that ONLY lands while the row is still
+    ``status='running'`` AND owned by the SAME ``worker_id``; if ownership moved on,
+    rowcount is 0 and the caller learns the recovery/new owner governs (and must NOT
+    overwrite). ``worker_id`` defaults to None -> the legitimate pre-dispatch callers
+    (executor-selection failure, dead-letter cap), which still hold the freshly-claimed
+    row, write unconditionally and are unchanged.
+    """
     if status not in ARCLINK_ACTION_INTENT_STATUSES:
         raise ArcLinkActionWorkerError(f"unsupported ArcLink action intent status: {status or 'blank'}")
+    guarded = worker_id is not None
     if status == "queued":
-        conn.execute(
+        if guarded:
+            cursor = conn.execute(
+                """
+                UPDATE arclink_action_intents
+                SET status = ?, worker_id = '', claimed_at = '', updated_at = ?
+                WHERE action_id = ? AND status = 'running' AND worker_id = ?
+                """,
+                (status, utc_now_iso(), action_id, worker_id),
+            )
+        else:
+            cursor = conn.execute(
+                """
+                UPDATE arclink_action_intents
+                SET status = ?, worker_id = '', claimed_at = '', updated_at = ?
+                WHERE action_id = ?
+                """,
+                (status, utc_now_iso(), action_id),
+            )
+    else:
+        if guarded:
+            cursor = conn.execute(
+                "UPDATE arclink_action_intents SET status = ?, updated_at = ? "
+                "WHERE action_id = ? AND status = 'running' AND worker_id = ?",
+                (status, utc_now_iso(), action_id, worker_id),
+            )
+        else:
+            cursor = conn.execute(
+                "UPDATE arclink_action_intents SET status = ?, updated_at = ? WHERE action_id = ?",
+                (status, utc_now_iso(), action_id),
+            )
+    return cursor.rowcount >= 1
+
+
+def _renew_action_lease(
+    conn: sqlite3.Connection,
+    *,
+    action_id: str,
+    worker_id: str,
+    claimed_at: str,
+) -> tuple[str, bool]:
+    """Touch `claimed_at` on a still-owned 'running' intent; report ownership.
+
+    conc-H1 (lease renewal): the stale sweep declares an intent dead purely by
+    the wall-clock age of `claimed_at`, which is stamped ONCE at claim. A live
+    worker beats this heartbeat at action boundaries so a long-but-alive action
+    (migrate / rollout) never crosses the stale threshold and is never reclaimed
+    mid-flight. The update is a CAS on the EXACT row identity read at claim
+    (status='running' AND worker_id=? AND claimed_at=?): if a concurrent
+    recovery already re-queued / re-stamped the row, rowcount is 0 and the worker
+    learns it no longer owns the lease. Returns ``(new_claimed_at, still_owned)``;
+    on a lost lease the OLD ``claimed_at`` is returned unchanged so the caller can
+    abort without stamping a row it no longer owns.
+    """
+    now = utc_now_iso()
+    own_txn = not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        cursor = conn.execute(
             """
             UPDATE arclink_action_intents
-            SET status = ?, worker_id = '', claimed_at = '', updated_at = ?
+            SET claimed_at = ?, updated_at = ?
             WHERE action_id = ?
+              AND status = 'running'
+              AND worker_id = ?
+              AND claimed_at = ?
             """,
-            (status, utc_now_iso(), action_id),
+            (now, now, action_id, worker_id, claimed_at),
         )
-    else:
-        conn.execute(
-            "UPDATE arclink_action_intents SET status = ?, updated_at = ? WHERE action_id = ?",
-            (status, utc_now_iso(), action_id),
-        )
+        still_owned = cursor.rowcount >= 1
+        if own_txn:
+            conn.commit()
+    except Exception:
+        if own_txn and conn.in_transaction:
+            conn.rollback()
+        raise
+    return (now if still_owned else claimed_at), still_owned
 
 
 def _claim_next_queued_action(conn: sqlite3.Connection, *, worker_id: str) -> dict[str, Any] | None:
@@ -671,13 +874,26 @@ def process_next_arclink_action(
     env: Mapping[str, str] | None = None,
     executor_cache: _ActionExecutorCache | None = None,
 ) -> dict[str, Any] | None:
-    """Claim and execute the oldest queued action intent. Returns the result or None if empty."""
-    clean_worker_id = str(worker_id or "").strip() or _worker_id("wrk")
-    intent = _claim_next_queued_action(conn, worker_id=clean_worker_id)
-    if intent is None:
-        return None
+    """Claim and execute the oldest queued action intent. Returns the result or None if empty.
 
-    return _execute_action(conn, intent=intent, executor=executor, env=env, executor_cache=executor_cache)
+    conc-H8: the direct entrypoint must be just as poison-safe as the batch / main
+    loops -- a single unexpected error (poison row, lock) used to propagate straight
+    out of here and crash any caller that drives the worker one action at a time. The
+    claim + execute is now wrapped in the SAME try/except + ``_handle_poison_action``
+    path the batch loop uses: on an unexpected error the partial transaction is rolled
+    back, the intent is CAS-failed / dead-lettered, and a failure result is returned
+    instead of raising.
+    """
+    clean_worker_id = str(worker_id or "").strip() or _worker_id("wrk")
+    claimed_action_id = ""
+    try:
+        intent = _claim_next_queued_action(conn, worker_id=clean_worker_id)
+        if intent is None:
+            return None
+        claimed_action_id = str(intent.get("action_id") or "")
+        return _execute_action(conn, intent=intent, executor=executor, env=env, executor_cache=executor_cache)
+    except Exception as exc:  # poison row / lock error: do not crash the caller
+        return _handle_poison_action(conn, action_id=claimed_action_id, exc=exc)
 
 
 def process_arclink_action_batch(
@@ -689,23 +905,101 @@ def process_arclink_action_batch(
     env: Mapping[str, str] | None = None,
     executor_cache: _ActionExecutorCache | None = None,
 ) -> list[dict[str, Any]]:
-    """Process up to batch_size queued actions."""
+    """Process up to batch_size queued actions.
+
+    conc-H8: a single poison row / lock error must not kill the worker. Each
+    action is processed inside a try/except that, on an unexpected error, rolls
+    back the partial transaction, CAS-fails the intent (recording the error), and
+    continues to the next action instead of propagating up and crash-looping the
+    supervisor.
+    """
     if batch_size < 1:
         raise ArcLinkActionWorkerError("batch size must be at least 1")
     clean_worker_id = str(worker_id or "").strip() or _worker_id("wrk")
     results = []
     for _ in range(batch_size):
-        result = process_next_arclink_action(
-            conn,
-            executor=executor,
-            worker_id=clean_worker_id,
-            env=env,
-            executor_cache=executor_cache,
-        )
+        claimed_action_id = ""
+        try:
+            intent = _claim_next_queued_action(conn, worker_id=clean_worker_id)
+            if intent is None:
+                break
+            claimed_action_id = str(intent.get("action_id") or "")
+            result = _execute_action(
+                conn,
+                intent=intent,
+                executor=executor,
+                env=env,
+                executor_cache=executor_cache,
+            )
+        except Exception as exc:  # poison row / lock error: do not crash the loop
+            result = _handle_poison_action(conn, action_id=claimed_action_id, exc=exc)
+            if result is None:
+                # Could not even identify the offending row; stop this batch but
+                # let the supervisor loop continue on the next interval.
+                break
         if result is None:
             break
         results.append(result)
     return results
+
+
+def _handle_poison_action(
+    conn: sqlite3.Connection,
+    *,
+    action_id: str,
+    exc: Exception,
+) -> dict[str, Any] | None:
+    """Roll back a failed in-flight action and CAS-fail its intent (conc-H8).
+
+    Returns a failure result dict so the batch can record it and move on, or
+    None when the offending row could not be identified / re-marked.
+    """
+    if conn.in_transaction:
+        try:
+            conn.rollback()
+        except sqlite3.Error:
+            pass
+    if not action_id:
+        return None
+    error_msg = _safe_error_message(exc)
+    error_code = _safe_error_code(exc)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.execute(
+            "UPDATE arclink_action_intents SET status = 'failed', updated_at = ? "
+            "WHERE action_id = ? AND status = 'running'",
+            (utc_now_iso(), action_id),
+        )
+        if cursor.rowcount >= 1:
+            conn.execute(
+                "UPDATE arclink_action_attempts SET status = 'failed', "
+                "error = CASE WHEN error = '' THEN ? ELSE error END, "
+                "finished_at = CASE WHEN finished_at = '' THEN ? ELSE finished_at END "
+                "WHERE action_id = ? AND status = 'running'",
+                (error_msg, utc_now_iso(), action_id),
+            )
+            append_arclink_event(
+                conn,
+                subject_kind="action",
+                subject_id=action_id,
+                event_type="action_poison_dead_lettered",
+                metadata={"action_id": action_id, "error_code": error_code, "error": error_msg},
+                commit=False,
+            )
+        conn.commit()
+    except sqlite3.Error:
+        if conn.in_transaction:
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
+        return None
+    return {
+        "action_id": action_id,
+        "status": "failed",
+        "error_code": error_code,
+        "error": error_msg,
+    }
 
 
 def _execute_action(
@@ -761,6 +1055,53 @@ def _execute_action(
             "error": error_msg,
         }
 
+    # conc-H8 (live max-attempt cap): a deterministically-failing action that
+    # keeps getting re-queued (e.g. by stale recovery) must dead-letter instead
+    # of crash-looping the live path. The attempts already on record gate this
+    # BEFORE we record a new one, so the (N+1)-th attempt is refused.
+    prior_attempts_row = conn.execute(
+        "SELECT COUNT(*) AS n FROM arclink_action_attempts WHERE action_id = ?",
+        (action_id,),
+    ).fetchone()
+    prior_attempts = int(prior_attempts_row["n"] if prior_attempts_row is not None else 0)
+    if _LIVE_MAX_ATTEMPTS > 0 and prior_attempts >= _LIVE_MAX_ATTEMPTS:
+        error_msg = f"action dead-lettered after {prior_attempts} attempt(s) (live cap {_LIVE_MAX_ATTEMPTS})"
+        attempt_id = _record_attempt(
+            conn,
+            action_id=action_id,
+            status="failed",
+            adapter=selected_executor.config.adapter_name,
+            error=error_msg,
+        )
+        _update_intent_status(conn, action_id=action_id, status="failed")
+        append_arclink_event(
+            conn,
+            subject_kind=target_kind,
+            subject_id=target_id,
+            event_type=f"action_dead_lettered:{action_type}",
+            metadata={"action_id": action_id, "attempt_id": attempt_id, "attempt_count": prior_attempts, **routing},
+            commit=False,
+        )
+        append_arclink_audit(
+            conn,
+            action=f"action_worker_dead_lettered:{action_type}",
+            actor_id="system:action_worker",
+            target_kind=target_kind,
+            target_id=target_id,
+            reason=error_msg,
+            metadata={"action_id": action_id, "attempt_id": attempt_id, "attempt_count": prior_attempts, **routing},
+            commit=False,
+        )
+        conn.commit()
+        return {
+            "action_id": action_id,
+            "attempt_id": attempt_id,
+            "status": "dead_lettered",
+            "action_type": action_type,
+            "error_code": "action_attempt_cap_exceeded",
+            "error": error_msg,
+        }
+
     attempt_id = _record_attempt(
         conn, action_id=action_id, adapter=selected_executor.config.adapter_name,
     )
@@ -793,6 +1134,41 @@ def _execute_action(
         commit=False,
     )
     conn.commit()
+
+    # conc-H1 (lease renewal): refresh `claimed_at` to NOW at the action boundary
+    # before any live side effect, confirming we still own the exact row we
+    # claimed. The bumped lease + the stale-threshold floor (>= 2*long-op-timeout
+    # + margin) means a single in-flight dispatch can never cross the threshold
+    # and be reclaimed mid-flight. If recovery already took the row from under us
+    # (rowcount 0), abort without dispatching so we never double-execute.
+    intent_worker_id = str(intent.get("worker_id") or "")
+    intent_claimed_at = str(intent.get("claimed_at") or "")
+    _renewed_claimed_at, still_owned = _renew_action_lease(
+        conn,
+        action_id=action_id,
+        worker_id=intent_worker_id,
+        claimed_at=intent_claimed_at,
+    )
+    if not still_owned:
+        error_msg = "action lease lost before dispatch (reclaimed by stale recovery); aborting to avoid double-execute"
+        _finish_attempt(conn, attempt_id=attempt_id, status="failed", error=error_msg)
+        append_arclink_event(
+            conn,
+            subject_kind=target_kind,
+            subject_id=target_id,
+            event_type=f"action_lease_lost:{action_type}",
+            metadata={"action_id": action_id, "attempt_id": attempt_id, **routing},
+            commit=False,
+        )
+        conn.commit()
+        return {
+            "action_id": action_id,
+            "attempt_id": attempt_id,
+            "status": "lease_lost",
+            "action_type": action_type,
+            "error_code": "action_lease_lost",
+            "error": error_msg,
+        }
 
     try:
         result = _dispatch_action(
@@ -832,7 +1208,33 @@ def _execute_action(
             error = ""
 
         _finish_attempt(conn, attempt_id=attempt_id, status=attempt_status, result=result, error=error)
-        _update_intent_status(conn, action_id=action_id, status=intent_status)
+        # conc-M5: CAS the intent terminal ONLY while we still own the running row.
+        # A long dispatch can outlive the lease (stale recovery re-queues / a new
+        # owner re-claims); honoring the rowcount means we never overwrite the
+        # recovery/new owner's state with our late, now-irrelevant outcome.
+        still_owned = _update_intent_status(
+            conn, action_id=action_id, status=intent_status, worker_id=intent_worker_id,
+        )
+        if not still_owned:
+            note = "action lease lost during dispatch (reclaimed by stale recovery); not overwriting re-claimed intent"
+            append_arclink_event(
+                conn,
+                subject_kind=target_kind,
+                subject_id=target_id,
+                event_type=f"action_lease_lost_post_dispatch:{action_type}",
+                metadata={"action_id": action_id, "attempt_id": attempt_id, "dispatch_status": outcome_status, **routing},
+                commit=False,
+            )
+            conn.commit()
+            return {
+                "action_id": action_id,
+                "attempt_id": attempt_id,
+                "status": "lease_lost",
+                "action_type": action_type,
+                "error_code": "action_lease_lost",
+                "error": note,
+                "result": result,
+            }
         append_arclink_event(
             conn,
             subject_kind=target_kind,
@@ -863,7 +1265,10 @@ def _execute_action(
         error_msg = _safe_error_message(exc)
         error_code = _safe_error_code(exc)
         _finish_attempt(conn, attempt_id=attempt_id, status="failed", error=error_msg)
-        _update_intent_status(conn, action_id=action_id, status="failed")
+        # conc-M5: same ownership CAS on the failure path -- a worker that lost its
+        # lease mid-dispatch must not stamp the re-claimed intent 'failed' on top of
+        # the recovery/new owner's state.
+        _update_intent_status(conn, action_id=action_id, status="failed", worker_id=intent_worker_id)
         append_arclink_event(
             conn,
             subject_kind=target_kind,
@@ -1003,7 +1408,59 @@ def _dispatch_action(
             idempotency_key=operation_key,
             metadata=stripe_metadata,
         ))
-        return {"live": result.live, "status": result.status, "action": result.action, "target_resolved_by": "control_db", "operation_kind": "stripe_action_apply", "operation_idempotency_key": operation_key}
+        response = {"live": result.live, "status": result.status, "action": result.action, "target_resolved_by": "control_db", "operation_kind": "stripe_action_apply", "operation_idempotency_key": operation_key}
+        if action_type == "refund":
+            # billing-H4: a refund does NOT emit a subscription.deleted webhook, so
+            # without this the customer keeps a 'paid' entitlement after being
+            # refunded. We downgrade the local entitlement to 'cancelled' (the same
+            # non-paid state customer.subscription.deleted maps to) so the gates
+            # close -- BUT ONLY when the refund actually corresponds to the user's
+            # active subscription. Refunding an unrelated one-off charge must NOT
+            # cancel a still-active subscription. The 'cancel' branch is left to its
+            # subscription.deleted webhook and is NOT touched here.
+            refund_user_id = str(stripe_metadata.get("user_id") or "").strip()
+            should_downgrade = False
+            downgrade_reason = "no_user"
+            if refund_user_id:
+                should_downgrade, downgrade_reason = _refund_targets_active_subscription(
+                    conn, user_id=refund_user_id, stripe_metadata=stripe_metadata,
+                )
+            response["entitlement_downgrade_reason"] = downgrade_reason
+            if should_downgrade:
+                # Idempotent: skip the write + event if the entitlement is already in a
+                # non-paid terminal state (a retry / replayed refund must not re-emit).
+                current_row = conn.execute(
+                    "SELECT entitlement_state FROM arclink_users WHERE user_id = ?",
+                    (refund_user_id,),
+                ).fetchone()
+                current_state = str(current_row["entitlement_state"] or "").strip().lower() if current_row is not None else ""
+                already_downgraded = current_state in ("cancelled", "none")
+                if not already_downgraded:
+                    set_arclink_user_entitlement(
+                        conn,
+                        user_id=refund_user_id,
+                        entitlement_state="cancelled",
+                        stripe_customer_id=str(stripe_metadata.get("stripe_customer_id") or ""),
+                        commit=False,
+                    )
+                    append_arclink_event(
+                        conn,
+                        subject_kind="user",
+                        subject_id=refund_user_id,
+                        event_type="entitlement_downgraded_on_refund",
+                        metadata={
+                            "action_id": action_id,
+                            "entitlement_state": "cancelled",
+                            "operation_kind": "stripe_action_apply",
+                            "downgrade_reason": downgrade_reason,
+                        },
+                        commit=False,
+                    )
+                response["entitlement_state"] = "cancelled"
+                response["entitlement_downgraded"] = True
+            else:
+                response["entitlement_downgraded"] = False
+        return response
 
     if action_type == "comp":
         operation_key = str(metadata.get("idempotency_key") or idempotency_key)
@@ -2351,13 +2808,65 @@ def _materialize_academy_apply(
 # Stale action recovery
 # ---------------------------------------------------------------------------
 
+def _has_fresh_migration_heartbeat(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    now: Any,
+    stale_threshold_seconds: int,
+) -> bool:
+    """True iff a `running` migration of this deployment heartbeat recently.
+
+    conc-H1 (long-reprovision protection): a `reprovision` action's whole side
+    effect is ``migrate_pod`` -> a single long-running migration that beats ITS OWN
+    heartbeat on ``arclink_pod_migrations.updated_at`` (sub-step granularity, far
+    finer than the action lease). That long dispatch can exceed the action stale
+    threshold while the action's ``claimed_at`` is only refreshed at action
+    boundaries -- so the action lease can look stale even though the work is alive.
+    Before reclaiming + double-dispatching such an action, we consult the migration
+    row: if a `running` migration for the same deployment heartbeat within the stale
+    window, the action is provably still in flight and is SKIPPED. This is the
+    self-contained alternative to threading a lease-renew callback through
+    ``migrate_pod`` (which lives in another module).
+    """
+    from arclink_control import parse_utc_iso
+
+    clean_deployment = str(deployment_id or "").strip()
+    if not clean_deployment:
+        return False
+    rows = conn.execute(
+        "SELECT updated_at, created_at FROM arclink_pod_migrations "
+        "WHERE deployment_id = ? AND status = 'running'",
+        (clean_deployment,),
+    ).fetchall()
+    for mig in rows:
+        stamp = str(mig["updated_at"] or "") or str(mig["created_at"] or "")
+        beat = parse_utc_iso(stamp)
+        if beat is None:
+            continue
+        if (now - beat).total_seconds() < stale_threshold_seconds:
+            return True
+    return False
+
+
 def recover_stale_actions(
     conn: sqlite3.Connection,
     *,
     stale_threshold_seconds: int = _STALE_THRESHOLD_SECONDS,
     max_attempts: int = _STALE_RECOVERY_MAX_ATTEMPTS,
 ) -> list[dict[str, Any]]:
-    """Return running actions older than threshold to queued or failed."""
+    """Return running actions whose lease has expired to queued or failed.
+
+    conc-H1: a row is considered stale by the age of its LEASE HEARTBEAT
+    (`claimed_at`, refreshed by the owning worker via ``_renew_action_lease``),
+    falling back to ``updated_at`` for legacy rows that never carried a lease.
+    Each reclaim runs in its own BEGIN IMMEDIATE transaction and is a CAS on the
+    EXACT row identity that was read (status='running' AND worker_id AND
+    claimed_at AND updated_at): if the owning worker beat its heartbeat (or
+    finished) in the gap between the SELECT and the UPDATE, rowcount is 0 and the
+    row is SKIPPED, so a slow-but-alive action is never reclaimed and two
+    concurrent recoveries can never both reclaim the same row.
+    """
     from arclink_control import parse_utc_iso, utc_now
     now = utc_now()
     rows = conn.execute(
@@ -2365,13 +2874,30 @@ def recover_stale_actions(
     ).fetchall()
     recovered = []
     for row in rows:
-        updated = parse_utc_iso(row["updated_at"])
-        if updated is None:
+        # Lease heartbeat drives staleness; fall back to updated_at for legacy rows.
+        lease_stamp = str(row["claimed_at"] or "") or str(row["updated_at"] or "")
+        leased = parse_utc_iso(lease_stamp)
+        if leased is None:
             continue
-        elapsed = (now - updated).total_seconds()
+        elapsed = (now - leased).total_seconds()
         if elapsed < stale_threshold_seconds:
             continue
+        # conc-H1: a `reprovision` action's dispatch IS a long migration that
+        # heartbeats its own `arclink_pod_migrations` row. If that migration is still
+        # running and beating, the action is alive -- never reclaim/double-dispatch it,
+        # even though its action-level lease looks stale.
+        if str(row["action_type"] or "") == "reprovision" and str(row["target_kind"] or "") == "deployment":
+            if _has_fresh_migration_heartbeat(
+                conn,
+                deployment_id=str(row["target_id"] or ""),
+                now=now,
+                stale_threshold_seconds=stale_threshold_seconds,
+            ):
+                continue
         action_id = str(row["action_id"])
+        worker_id = str(row["worker_id"] or "")
+        claimed_at = str(row["claimed_at"] or "")
+        updated_at = str(row["updated_at"] or "")
         attempts_row = conn.execute(
             "SELECT COUNT(*) AS n FROM arclink_action_attempts WHERE action_id = ?",
             (action_id,),
@@ -2379,49 +2905,87 @@ def recover_stale_actions(
         attempt_count = int(attempts_row["n"] if attempts_row is not None else 0)
         terminal = int(max_attempts or 0) > 0 and attempt_count >= int(max_attempts or 0)
         new_status = "failed" if terminal else "queued"
-        if terminal:
-            error = f"stale running action exceeded {int(max_attempts)} attempt(s)"
-            conn.execute(
-                """
-                UPDATE arclink_action_attempts
-                SET status = 'failed',
-                    error = CASE WHEN error = '' THEN ? ELSE error END,
-                    finished_at = CASE WHEN finished_at = '' THEN ? ELSE finished_at END
-                WHERE action_id = ?
-                  AND status = 'running'
-                """,
-                (error, utc_now_iso(), action_id),
+        now_iso = utc_now_iso()
+        # Each reclaim is its own transaction with a CAS on the exact identity read.
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if new_status == "queued":
+                cursor = conn.execute(
+                    """
+                    UPDATE arclink_action_intents
+                    SET status = 'queued', worker_id = '', claimed_at = '', updated_at = ?
+                    WHERE action_id = ?
+                      AND status = 'running'
+                      AND worker_id = ?
+                      AND claimed_at = ?
+                      AND updated_at = ?
+                    """,
+                    (now_iso, action_id, worker_id, claimed_at, updated_at),
+                )
+            else:
+                cursor = conn.execute(
+                    """
+                    UPDATE arclink_action_intents
+                    SET status = 'failed', updated_at = ?
+                    WHERE action_id = ?
+                      AND status = 'running'
+                      AND worker_id = ?
+                      AND claimed_at = ?
+                      AND updated_at = ?
+                    """,
+                    (now_iso, action_id, worker_id, claimed_at, updated_at),
+                )
+            if cursor.rowcount != 1:
+                # Lost the race (owner heartbeat / finished, or another recovery
+                # already reclaimed): skip without touching attempts or ledger.
+                conn.commit()
+                continue
+            if terminal:
+                error = f"stale running action exceeded {int(max_attempts)} attempt(s)"
+                conn.execute(
+                    """
+                    UPDATE arclink_action_attempts
+                    SET status = 'failed',
+                        error = CASE WHEN error = '' THEN ? ELSE error END,
+                        finished_at = CASE WHEN finished_at = '' THEN ? ELSE finished_at END
+                    WHERE action_id = ?
+                      AND status = 'running'
+                    """,
+                    (error, utc_now_iso(), action_id),
+                )
+            append_arclink_event(
+                conn,
+                subject_kind=row["target_kind"],
+                subject_id=row["target_id"],
+                event_type="action_stale_failed" if terminal else "action_stale_recovered",
+                metadata={"action_id": action_id, "elapsed_seconds": int(elapsed), "attempt_count": attempt_count},
+                commit=False,
             )
-        _update_intent_status(conn, action_id=action_id, status=new_status)
-        append_arclink_event(
-            conn,
-            subject_kind=row["target_kind"],
-            subject_id=row["target_id"],
-            event_type="action_stale_failed" if terminal else "action_stale_recovered",
-            metadata={"action_id": action_id, "elapsed_seconds": int(elapsed), "attempt_count": attempt_count},
-            commit=False,
-        )
-        append_arclink_audit(
-            conn,
-            action="stale_action_failed" if terminal else "stale_action_recovery",
-            actor_id="system:action_worker",
-            target_kind=row["target_kind"],
-            target_id=row["target_id"],
-            reason=(
-                f"stale running action failed after {attempt_count} attempt(s) and {int(elapsed)}s"
-                if terminal
-                else f"stale running action returned to queued after {int(elapsed)}s"
-            ),
-            metadata={"action_id": action_id, "attempt_count": attempt_count},
-            commit=False,
-        )
+            append_arclink_audit(
+                conn,
+                action="stale_action_failed" if terminal else "stale_action_recovery",
+                actor_id="system:action_worker",
+                target_kind=row["target_kind"],
+                target_id=row["target_id"],
+                reason=(
+                    f"stale running action failed after {attempt_count} attempt(s) and {int(elapsed)}s"
+                    if terminal
+                    else f"stale running action returned to queued after {int(elapsed)}s"
+                ),
+                metadata={"action_id": action_id, "attempt_count": attempt_count},
+                commit=False,
+            )
+            conn.commit()
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
         recovered.append({
             "action_id": action_id,
             "elapsed_seconds": int(elapsed),
             "attempt_count": attempt_count,
             "new_status": new_status,
         })
-    conn.commit()
     return recovered
 
 
@@ -2538,16 +3102,38 @@ def main(argv: list[str] | None = None) -> int:
     executor_cache: _ActionExecutorCache = {}
     with _db_connect(args.db) as conn:
         while True:
-            recovered = recover_stale_actions(conn)
-            results = process_arclink_action_batch(
-                conn,
-                executor=executor,
-                batch_size=max(1, args.batch_size),
-                worker_id=worker_id,
-                env=os.environ,
-                executor_cache=executor_cache,
-            )
-            migration_gc = run_pod_migration_gc(conn)
+            # conc-H8: a transient error in any phase (recovery / batch / GC) must
+            # not kill the supervisor. process_arclink_action_batch already
+            # isolates poison rows; this outer guard catches anything else (e.g. a
+            # DB lock during the recovery sweep) so a single bad iteration backs
+            # off instead of crash-looping the process.
+            try:
+                recovered = recover_stale_actions(conn)
+                results = process_arclink_action_batch(
+                    conn,
+                    executor=executor,
+                    batch_size=max(1, args.batch_size),
+                    worker_id=worker_id,
+                    env=os.environ,
+                    executor_cache=executor_cache,
+                )
+                migration_gc = run_pod_migration_gc(conn)
+            except Exception as exc:  # supervisor must survive transient errors
+                if conn.in_transaction:
+                    try:
+                        conn.rollback()
+                    except sqlite3.Error:
+                        pass
+                error_msg = _safe_error_message(exc)
+                payload = {"status": "loop_error", "error_code": _safe_error_code(exc), "error": error_msg}
+                if args.json:
+                    print(json.dumps(payload, sort_keys=True))
+                else:
+                    print(f"ArcLink action worker loop error (backing off): {error_msg}")
+                if args.once:
+                    return 1
+                time.sleep(max(1.0, _MAIN_LOOP_ERROR_BACKOFF_SECONDS))
+                continue
             payload = {"recovered": recovered, "processed": results}
             if migration_gc:
                 payload["migration_gc"] = migration_gc

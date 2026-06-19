@@ -2276,6 +2276,429 @@ def test_consume_academy_refresh_queue_markers_transitions_on_lane_evidence() ->
     print("PASS test_consume_academy_refresh_queue_markers_transitions_on_lane_evidence")
 
 
+def test_slow_but_alive_action_lease_renewal_blocks_reclaim() -> None:
+    # conc-H1: a claimed action whose lease heartbeat (claimed_at) is fresh must
+    # NOT be reclaimed by stale recovery, even if it has been 'running' a while.
+    control = load_module("arclink_control.py", "arclink_control_aw_lease")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_lease")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_lease")
+    conn = memory_db(control)
+    intent = _queue_action(dashboard, conn, action_type="restart")
+    action_id = intent["action_id"]
+    claim = worker._claim_next_queued_action(conn, worker_id="worker_alive")
+    expect(claim["action_id"] == action_id, str(claim))
+    expect(claim["status"] == "running", str(claim))
+
+    # Simulate a long-running action: push updated_at far into the past but keep
+    # the lease heartbeat (claimed_at) fresh via the renewal helper.
+    conn.execute(
+        "UPDATE arclink_action_intents SET updated_at = '2020-01-01T00:00:00+00:00' WHERE action_id = ?",
+        (action_id,),
+    )
+    conn.commit()
+    new_claimed, still_owned = worker._renew_action_lease(
+        conn, action_id=action_id, worker_id="worker_alive", claimed_at=str(claim["claimed_at"]),
+    )
+    expect(still_owned is True, "owning worker keeps its lease")
+    expect(bool(new_claimed) and new_claimed != "2020-01-01T00:00:00+00:00", str(new_claimed))
+
+    # Recovery with a tiny threshold must STILL skip it because the fresh lease
+    # heartbeat is younger than the threshold.
+    recovered = worker.recover_stale_actions(conn, stale_threshold_seconds=60)
+    expect(recovered == [], f"fresh-lease action must not be reclaimed: {recovered}")
+    row = conn.execute("SELECT status, worker_id FROM arclink_action_intents WHERE action_id = ?", (action_id,)).fetchone()
+    expect(row["status"] == "running" and row["worker_id"] == "worker_alive", str(dict(row)))
+
+    # A renewal attempt from a stale claimed_at value (i.e. the worker lost the
+    # lease) reports still_owned False without mutating the row.
+    _, lost = worker._renew_action_lease(
+        conn, action_id=action_id, worker_id="worker_alive", claimed_at="1999-01-01T00:00:00+00:00",
+    )
+    expect(lost is False, "stale-identity renewal must report lost ownership")
+
+    # Now age the lease itself; recovery reclaims it back to queued.
+    conn.execute(
+        "UPDATE arclink_action_intents SET claimed_at = '2020-01-01T00:00:00+00:00', updated_at = '2020-01-01T00:00:00+00:00' WHERE action_id = ?",
+        (action_id,),
+    )
+    conn.commit()
+    recovered = worker.recover_stale_actions(conn, stale_threshold_seconds=60)
+    expect(len(recovered) == 1 and recovered[0]["new_status"] == "queued", str(recovered))
+    row = conn.execute("SELECT status FROM arclink_action_intents WHERE action_id = ?", (action_id,)).fetchone()
+    expect(row["status"] == "queued", str(dict(row)))
+    print("PASS test_slow_but_alive_action_lease_renewal_blocks_reclaim")
+
+
+def test_two_recoveries_cannot_both_reclaim() -> None:
+    # conc-H1: two concurrent stale recoveries racing the same stale running row
+    # must net exactly one reclaim (CAS on the exact identity read).
+    control = load_module("arclink_control.py", "arclink_control_aw_double_recover")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_double_recover")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_double_recover")
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "actions.sqlite3"
+        setup = sqlite3.connect(db_path, timeout=15.0)
+        setup.row_factory = sqlite3.Row
+        control.ensure_schema(setup)
+        intent = _queue_action(dashboard, setup, action_type="restart", key="double_recover")
+        action_id = intent["action_id"]
+        setup.execute(
+            "UPDATE arclink_action_intents SET status = 'running', worker_id = 'dead_worker', "
+            "claimed_at = '2020-01-01T00:00:00+00:00', updated_at = '2020-01-01T00:00:00+00:00' WHERE action_id = ?",
+            (action_id,),
+        )
+        setup.commit()
+        setup.close()
+
+        barrier = threading.Barrier(2)
+        results: list[list] = []
+        errors: list[BaseException] = []
+        lock = threading.Lock()
+
+        def run_recovery() -> None:
+            conn = sqlite3.connect(db_path, timeout=15.0)
+            conn.row_factory = sqlite3.Row
+            try:
+                barrier.wait()
+                recovered = worker.recover_stale_actions(conn, stale_threshold_seconds=60)
+                with lock:
+                    results.append(recovered)
+            except BaseException as exc:
+                with lock:
+                    errors.append(exc)
+            finally:
+                conn.close()
+
+        threads = [threading.Thread(target=run_recovery) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        expect(not errors, f"recovery errors: {errors}")
+        total_reclaimed = sum(len(r) for r in results)
+        expect(total_reclaimed == 1, f"exactly one recovery should reclaim, got {results}")
+
+        verify = sqlite3.connect(db_path, timeout=15.0)
+        verify.row_factory = sqlite3.Row
+        row = verify.execute("SELECT status FROM arclink_action_intents WHERE action_id = ?", (action_id,)).fetchone()
+        events = verify.execute(
+            "SELECT COUNT(*) AS c FROM arclink_events WHERE event_type = 'action_stale_recovered'"
+        ).fetchone()
+        verify.close()
+        expect(row["status"] == "queued", str(dict(row)))
+        expect(int(events["c"]) == 1, f"exactly one recovery event, got {dict(events)}")
+    print("PASS test_two_recoveries_cannot_both_reclaim")
+
+
+def test_poison_row_does_not_crash_batch_loop() -> None:
+    # conc-H8: a poison row whose PRE-DISPATCH ledger write blows up (runs outside
+    # the dispatch except) must not kill the batch; the next action still runs.
+    control = load_module("arclink_control.py", "arclink_control_aw_poison")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_poison")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_poison")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_poison")
+    conn = memory_db(control)
+    poison = _queue_action(dashboard, conn, action_type="restart", target_id="dep_poison", key="poison_1")
+    healthy = _queue_action(dashboard, conn, action_type="restart", target_id="dep_ok", key="poison_2")
+
+    original_audit = worker.append_arclink_audit
+
+    def poison_audit(conn_arg, *args, **kwargs):
+        action_meta = kwargs.get("metadata") or {}
+        if str(action_meta.get("action_id") or "") == poison["action_id"] and str(kwargs.get("action", "")).startswith("action_worker_attempt_started"):
+            raise sqlite3.IntegrityError("simulated poison ledger write")
+        return original_audit(conn_arg, *args, **kwargs)
+
+    try:
+        worker.append_arclink_audit = poison_audit
+        results = worker.process_arclink_action_batch(
+            conn, executor=_fake_executor(executor_mod), batch_size=5, worker_id="worker_poison",
+        )
+    finally:
+        worker.append_arclink_audit = original_audit
+
+    statuses = {r["action_id"]: r["status"] for r in results}
+    expect(statuses.get(poison["action_id"]) == "failed", f"poison row should be dead-lettered: {results}")
+    expect(statuses.get(healthy["action_id"]) == "succeeded", f"healthy row should still process: {results}")
+
+    poison_row = conn.execute("SELECT status FROM arclink_action_intents WHERE action_id = ?", (poison["action_id"],)).fetchone()
+    healthy_row = conn.execute("SELECT status FROM arclink_action_intents WHERE action_id = ?", (healthy["action_id"],)).fetchone()
+    expect(poison_row["status"] == "failed", str(dict(poison_row)))
+    expect(healthy_row["status"] == "succeeded", str(dict(healthy_row)))
+    dead_letter = conn.execute(
+        "SELECT COUNT(*) AS c FROM arclink_events WHERE event_type = 'action_poison_dead_lettered'"
+    ).fetchone()
+    expect(int(dead_letter["c"]) == 1, f"poison row should emit a dead-letter event: {dict(dead_letter)}")
+    print("PASS test_poison_row_does_not_crash_batch_loop")
+
+
+def test_refund_downgrades_entitlement() -> None:
+    # billing-H4: a successful refund must close the entitlement gates locally
+    # (a refund emits no subscription.deleted webhook), moving the user off paid.
+    control = load_module("arclink_control.py", "arclink_control_aw_refund_downgrade")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_refund_downgrade")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_refund_downgrade")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_refund_downgrade")
+    conn = memory_db(control)
+    control.upsert_arclink_user(conn, user_id="user_refund_dg", stripe_customer_id="cus_refund_dg", entitlement_state="paid")
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_refund_dg",
+        user_id="user_refund_dg",
+        prefix="refund-dg",
+        base_domain="example.test",
+        status="provisioning_ready",
+    )
+    before = conn.execute("SELECT entitlement_state FROM arclink_users WHERE user_id = ?", ("user_refund_dg",)).fetchone()
+    expect(before["entitlement_state"] == "paid", str(dict(before)))
+
+    _queue_action(dashboard, conn, action_type="refund", target_id="dep_refund_dg")
+    result = worker.process_next_arclink_action(conn, executor=_fake_executor(executor_mod))
+    expect(result["status"] == "succeeded", str(result))
+    expect(result["result"].get("entitlement_downgraded") is True, str(result))
+    expect(result["result"].get("entitlement_state") == "cancelled", str(result))
+
+    after = conn.execute("SELECT entitlement_state FROM arclink_users WHERE user_id = ?", ("user_refund_dg",)).fetchone()
+    expect(after["entitlement_state"] == "cancelled", f"refund must downgrade entitlement: {dict(after)}")
+    can_provision = control.arclink_deployment_can_provision(conn, deployment_id="dep_refund_dg")
+    expect(can_provision is False, "refunded customer must lose the provisioning gate")
+    event = conn.execute(
+        "SELECT COUNT(*) AS c FROM arclink_events WHERE event_type = 'entitlement_downgraded_on_refund'"
+    ).fetchone()
+    expect(int(event["c"]) == 1, str(dict(event)))
+    print("PASS test_refund_downgrades_entitlement")
+
+
+def test_old_owner_cannot_overwrite_reclaimed_intent() -> None:
+    # conc-M5: a worker whose lease was lost (stale recovery re-queued the intent /
+    # a NEW owner re-claimed it) during a long dispatch must NOT stamp the intent
+    # terminal afterwards. The post-dispatch _update_intent_status CAS is guarded on
+    # (status='running' AND worker_id=<original>), so the late write is a no-op and
+    # the recovery/new owner's state survives.
+    control = load_module("arclink_control.py", "arclink_control_aw_m5")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_m5")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_m5")
+    conn = memory_db(control)
+    intent = _queue_action(dashboard, conn, action_type="restart")
+    action_id = intent["action_id"]
+    claim = worker._claim_next_queued_action(conn, worker_id="old_owner")
+    expect(claim["status"] == "running" and claim["worker_id"] == "old_owner", str(claim))
+
+    # Simulate stale recovery re-queuing + a NEW owner re-claiming the row while the
+    # old owner's dispatch was still in flight.
+    requeued = worker._update_intent_status(conn, action_id=action_id, status="queued")
+    expect(requeued is True, "recovery should re-queue the stale running intent")
+    conn.commit()
+    reclaim = worker._claim_next_queued_action(conn, worker_id="new_owner")
+    expect(reclaim is not None and reclaim["worker_id"] == "new_owner" and reclaim["status"] == "running", str(reclaim))
+    conn.commit()
+
+    # The OLD owner now tries to stamp the intent terminal. Guarded on its own
+    # worker_id, the write must be refused (rowcount 0) and NOT clobber new_owner.
+    wrote = worker._update_intent_status(conn, action_id=action_id, status="succeeded", worker_id="old_owner")
+    expect(wrote is False, "old owner must not overwrite a re-claimed intent")
+    row = conn.execute("SELECT status, worker_id FROM arclink_action_intents WHERE action_id = ?", (action_id,)).fetchone()
+    expect(row["status"] == "running" and row["worker_id"] == "new_owner", f"new owner must still govern the intent: {dict(row)}")
+
+    # The legitimate still-owning worker (new_owner) CAN complete it.
+    wrote2 = worker._update_intent_status(conn, action_id=action_id, status="succeeded", worker_id="new_owner")
+    expect(wrote2 is True, "still-owning worker must be able to complete the intent")
+    row2 = conn.execute("SELECT status FROM arclink_action_intents WHERE action_id = ?", (action_id,)).fetchone()
+    expect(row2["status"] == "succeeded", str(dict(row2)))
+    print("PASS test_old_owner_cannot_overwrite_reclaimed_intent")
+
+
+def test_refund_of_non_subscription_does_not_cancel_active_subscription() -> None:
+    # billing-H4: refunding an unrelated / one-off charge (a non-active subscription
+    # the action explicitly targets) must NOT cancel the user's still-ACTIVE
+    # subscription or downgrade their paid entitlement.
+    control = load_module("arclink_control.py", "arclink_control_aw_h4")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_h4")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_h4")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_h4")
+    conn = memory_db(control)
+    control.upsert_arclink_user(conn, user_id="user_h4", stripe_customer_id="cus_h4", entitlement_state="paid")
+    # The user's CURRENT, still-active subscription -- must survive the refund.
+    control.upsert_arclink_subscription_mirror(
+        conn,
+        subscription_id="sub_active_h4",
+        user_id="user_h4",
+        status="active",
+        stripe_customer_id="cus_h4",
+        stripe_subscription_id="stripe_sub_active_h4",
+    )
+    # A separate, already-canceled subscription standing in for the one-off / unrelated
+    # charge that is being refunded.
+    control.upsert_arclink_subscription_mirror(
+        conn,
+        subscription_id="sub_oneoff_h4",
+        user_id="user_h4",
+        status="cancelled",
+        stripe_customer_id="cus_h4",
+        stripe_subscription_id="stripe_sub_oneoff_h4",
+    )
+
+    _queue_action(
+        dashboard,
+        conn,
+        action_type="refund",
+        target_kind="subscription",
+        target_id="sub_oneoff_h4",
+        key="refund_oneoff_h4",
+    )
+    result = worker.process_next_arclink_action(conn, executor=_fake_executor(executor_mod))
+    expect(result["status"] == "succeeded", str(result))
+    expect(result["result"].get("entitlement_downgraded") is False, f"unrelated refund must not downgrade: {result}")
+    expect(result["result"].get("entitlement_downgrade_reason") == "named_subscription_not_active", str(result))
+
+    after = conn.execute("SELECT entitlement_state FROM arclink_users WHERE user_id = ?", ("user_h4",)).fetchone()
+    expect(after["entitlement_state"] == "paid", f"active subscriber must keep paid entitlement: {dict(after)}")
+    active = conn.execute("SELECT status FROM arclink_subscriptions WHERE subscription_id = 'sub_active_h4'").fetchone()
+    expect(active["status"] == "active", f"active subscription must survive an unrelated refund: {dict(active)}")
+    events = conn.execute(
+        "SELECT COUNT(*) AS c FROM arclink_events WHERE event_type = 'entitlement_downgraded_on_refund'"
+    ).fetchone()
+    expect(int(events["c"]) == 0, f"no downgrade event for an unrelated refund: {dict(events)}")
+
+    # Sanity: refunding the user's ACTUAL active subscription DOES downgrade, and a
+    # replay of that same refund is idempotent (no second event).
+    _queue_action(
+        dashboard,
+        conn,
+        action_type="refund",
+        target_kind="subscription",
+        target_id="sub_active_h4",
+        key="refund_active_h4_a",
+    )
+    res_active = worker.process_next_arclink_action(conn, executor=_fake_executor(executor_mod))
+    expect(res_active["status"] == "succeeded", str(res_active))
+    expect(res_active["result"].get("entitlement_downgraded") is True, str(res_active))
+    state_after = conn.execute("SELECT entitlement_state FROM arclink_users WHERE user_id = ?", ("user_h4",)).fetchone()
+    expect(state_after["entitlement_state"] == "cancelled", f"refunding the active sub must downgrade: {dict(state_after)}")
+
+    _queue_action(
+        dashboard,
+        conn,
+        action_type="refund",
+        target_kind="subscription",
+        target_id="sub_active_h4",
+        key="refund_active_h4_b",
+    )
+    res_replay = worker.process_next_arclink_action(conn, executor=_fake_executor(executor_mod))
+    expect(res_replay["status"] == "succeeded", str(res_replay))
+    expect(res_replay["result"].get("entitlement_downgraded") is True, str(res_replay))
+    downgrade_events = conn.execute(
+        "SELECT COUNT(*) AS c FROM arclink_events WHERE event_type = 'entitlement_downgraded_on_refund'"
+    ).fetchone()
+    expect(int(downgrade_events["c"]) == 1, f"downgrade event must be emitted exactly once (idempotent): {dict(downgrade_events)}")
+    print("PASS test_refund_of_non_subscription_does_not_cancel_active_subscription")
+
+
+def test_long_reprovision_not_reclaimed_while_migration_heartbeats() -> None:
+    # conc-H1: a `reprovision` action's dispatch IS a long migration that heartbeats
+    # its own arclink_pod_migrations.updated_at. Even if the action-level lease looks
+    # stale, recovery must NOT reclaim/double-dispatch the action while the migration
+    # row is still 'running' and beating.
+    control = load_module("arclink_control.py", "arclink_control_aw_h1_mig")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_h1_mig")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_h1_mig")
+    conn = memory_db(control)
+    control.upsert_arclink_user(conn, user_id="user_h1_mig", entitlement_state="paid")
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_h1_mig",
+        user_id="user_h1_mig",
+        prefix="h1-mig",
+        base_domain="example.test",
+        status="active",
+    )
+    intent = _queue_action(
+        dashboard,
+        conn,
+        action_type="reprovision",
+        target_id="dep_h1_mig",
+        target_kind="deployment",
+        key="reprovision_h1_mig",
+        metadata={"target_machine_id": "current"},
+    )
+    action_id = intent["action_id"]
+    claim = worker._claim_next_queued_action(conn, worker_id="worker_h1_mig")
+    expect(claim["status"] == "running", str(claim))
+
+    now = control.utc_now_iso()
+    # The action's own lease (claimed_at) is ancient -> looks stale at the action level.
+    conn.execute(
+        "UPDATE arclink_action_intents SET claimed_at = '2020-01-01T00:00:00+00:00', updated_at = '2020-01-01T00:00:00+00:00' WHERE action_id = ?",
+        (action_id,),
+    )
+    # ...but a 'running' migration for this deployment heartbeat just NOW.
+    conn.execute(
+        """
+        INSERT INTO arclink_pod_migrations (migration_id, deployment_id, status, created_at, updated_at)
+        VALUES ('mig_h1_live', 'dep_h1_mig', 'running', ?, ?)
+        """,
+        (now, now),
+    )
+    conn.commit()
+
+    recovered = worker.recover_stale_actions(conn, stale_threshold_seconds=60)
+    expect(recovered == [], f"live long reprovision must not be reclaimed: {recovered}")
+    row = conn.execute("SELECT status, worker_id FROM arclink_action_intents WHERE action_id = ?", (action_id,)).fetchone()
+    expect(row["status"] == "running" and row["worker_id"] == "worker_h1_mig", str(dict(row)))
+
+    # Once the migration's heartbeat goes stale (e.g. the worker truly died), the
+    # action is reclaimable again.
+    conn.execute(
+        "UPDATE arclink_pod_migrations SET updated_at = '2020-01-01T00:00:00+00:00' WHERE migration_id = 'mig_h1_live'",
+    )
+    conn.commit()
+    recovered2 = worker.recover_stale_actions(conn, stale_threshold_seconds=60)
+    expect(len(recovered2) == 1 and recovered2[0]["new_status"] == "queued", str(recovered2))
+    row2 = conn.execute("SELECT status FROM arclink_action_intents WHERE action_id = ?", (action_id,)).fetchone()
+    expect(row2["status"] == "queued", str(dict(row2)))
+    print("PASS test_long_reprovision_not_reclaimed_while_migration_heartbeats")
+
+
+def test_process_next_survives_poison_row() -> None:
+    # conc-H8: the direct process_next_arclink_action entrypoint must be poison-safe,
+    # not just the batch loop. A pre-dispatch ledger write that blows up must be
+    # rolled back + dead-lettered, returning a failure result instead of crashing.
+    control = load_module("arclink_control.py", "arclink_control_aw_pn_poison")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_pn_poison")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_pn_poison")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_pn_poison")
+    conn = memory_db(control)
+    poison = _queue_action(dashboard, conn, action_type="restart", target_id="dep_pn_poison", key="pn_poison_1")
+
+    original_audit = worker.append_arclink_audit
+
+    def poison_audit(conn_arg, *args, **kwargs):
+        meta = kwargs.get("metadata") or {}
+        if str(meta.get("action_id") or "") == poison["action_id"] and str(kwargs.get("action", "")).startswith("action_worker_attempt_started"):
+            raise sqlite3.IntegrityError("simulated poison ledger write")
+        return original_audit(conn_arg, *args, **kwargs)
+
+    try:
+        worker.append_arclink_audit = poison_audit
+        # Must NOT raise -- the entrypoint catches + dead-letters.
+        result = worker.process_next_arclink_action(
+            conn, executor=_fake_executor(executor_mod), worker_id="worker_pn_poison",
+        )
+    finally:
+        worker.append_arclink_audit = original_audit
+
+    expect(result is not None and result["status"] == "failed", f"poison row must be dead-lettered, not raised: {result}")
+    expect(result["action_id"] == poison["action_id"], str(result))
+    row = conn.execute("SELECT status FROM arclink_action_intents WHERE action_id = ?", (poison["action_id"],)).fetchone()
+    expect(row["status"] == "failed", str(dict(row)))
+    dead_letter = conn.execute(
+        "SELECT COUNT(*) AS c FROM arclink_events WHERE event_type = 'action_poison_dead_lettered'"
+    ).fetchone()
+    expect(int(dead_letter["c"]) == 1, f"direct entrypoint poison row should emit a dead-letter event: {dict(dead_letter)}")
+    print("PASS test_process_next_survives_poison_row")
+
+
 if __name__ == "__main__":
     test_restart_action_through_fake_executor()
     test_dns_repair_through_fake_executor()
@@ -2329,4 +2752,12 @@ if __name__ == "__main__":
     test_action_worker_ssh_executor_requires_machine_mode_and_allowlist()
     test_action_worker_local_docker_mode_requires_deployment_exec_broker()
     test_action_worker_main_reuses_single_db_connection_for_once_batch()
-    print(f"\nAll 49 action worker tests passed.")
+    test_slow_but_alive_action_lease_renewal_blocks_reclaim()
+    test_two_recoveries_cannot_both_reclaim()
+    test_poison_row_does_not_crash_batch_loop()
+    test_refund_downgrades_entitlement()
+    test_old_owner_cannot_overwrite_reclaimed_intent()
+    test_refund_of_non_subscription_does_not_cancel_active_subscription()
+    test_long_reprovision_not_reclaimed_while_migration_heartbeats()
+    test_process_next_survives_poison_row()
+    print(f"\nAll 57 action worker tests passed.")

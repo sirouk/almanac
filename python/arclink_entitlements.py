@@ -897,6 +897,13 @@ def process_stripe_webhook(
     event_type = str(event.get("type") or "").strip()
     if not event_id or not event_type:
         raise ArcLinkEntitlementError("Stripe webhook event id and type are required")
+    # billing-C2: authoritative event-ordering timestamp. Stripe delivers webhooks
+    # out of order, so the monotonic mirror/entitlement setters need the event's
+    # ordering key (``event.created`` unix epoch) to DROP stale events -- otherwise a
+    # late ``subscription.updated(active)`` could re-grant ``paid`` to a customer
+    # whose ``subscription.deleted`` already arrived. None => apply unconditionally.
+    event_created = event.get("created")
+    event_at = event_created if event_created not in (None, "") else None
     if conn.in_transaction:
         raise ArcLinkEntitlementError("Stripe webhook processing requires a connection without an active transaction")
 
@@ -1113,25 +1120,30 @@ def process_stripe_webhook(
                 status=mirror_status,
                 current_period_end=str(obj.get("current_period_end") or ""),
                 raw=obj,
+                event_at=event_at,
                 commit=False,
             )
         if stripe_customer_email:
+            # billing-C2: keep the email->identity association via upsert_arclink_user,
+            # but do NOT let it set the entitlement_state -- upsert_arclink_user has no
+            # monotonic guard (it bypasses entitlement_last_event_at), so a stale event
+            # would overwrite a newer state. Route the entitlement transition through
+            # the ordering-guarded setter so the email path is monotonic too.
             upsert_arclink_user(
                 conn,
                 user_id=user_id,
                 email=stripe_customer_email,
                 stripe_customer_id=stripe_customer_id,
-                entitlement_state=entitlement_state,
                 commit=False,
             )
-        else:
-            set_arclink_user_entitlement(
-                conn,
-                user_id=user_id,
-                entitlement_state=entitlement_state,
-                stripe_customer_id=stripe_customer_id,
-                commit=False,
-            )
+        set_arclink_user_entitlement(
+            conn,
+            user_id=user_id,
+            entitlement_state=entitlement_state,
+            stripe_customer_id=stripe_customer_id,
+            event_at=event_at,
+            commit=False,
+        )
         advanced = tuple(advance_arclink_entitlement_gates_for_user(conn, user_id=user_id, commit=False))
         onboarding_session_id = owner.onboarding_session_id
         if event_type == "checkout.session.completed" and onboarding_session_id:

@@ -1217,6 +1217,416 @@ def test_operator_action_secret_at_rest_is_rejected_and_hiccup_message_redacted(
     print("PASS test_operator_action_secret_at_rest_is_rejected_and_hiccup_message_redacted")
 
 
+def _indexes_on(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {
+        str(r["name"])
+        for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND name NOT LIKE 'sqlite_%'",
+            (table,),
+        ).fetchall()
+    }
+
+
+def _table_sql(conn: sqlite3.Connection, table: str) -> str:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+    ).fetchone()
+    return str(row["sql"] or "") if row is not None else ""
+
+
+def _scratch_tables(conn: sqlite3.Connection) -> list[str]:
+    return [
+        str(r["name"])
+        for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%\\_\\_new' ESCAPE '\\'"
+        ).fetchall()
+    ]
+
+
+def _seed_legacy_migration_db(conn: sqlite3.Connection) -> None:
+    # Build the FIVE legacy-shaped tables that the *__new rebuild migrations target,
+    # each PRE-POPULATED with rows + the live index that the DROP-rebuild tears down,
+    # so we can prove rows + indexes survive and the new schema lands.
+    conn.executescript(
+        """
+        -- arclink_fleet_enrollments: legacy CHECK without the 'pending'/'consumed' set.
+        CREATE TABLE arclink_fleet_enrollments (
+          enrollment_id TEXT PRIMARY KEY,
+          token_hash TEXT NOT NULL,
+          created_by_user_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          consumed_at TEXT NOT NULL DEFAULT '',
+          redeemed_by_inventory_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL,
+          audit_ref TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX idx_arclink_fleet_enrollments_status_expiry
+          ON arclink_fleet_enrollments (status, expires_at);
+        INSERT INTO arclink_fleet_enrollments
+          (enrollment_id, token_hash, created_by_user_id, created_at, expires_at, status)
+          VALUES ('flenr_1', 'h1', 'u1', '2026-01-01T00:00:00+00:00', '2026-02-01T00:00:00+00:00', 'minted'),
+                 ('flenr_2', 'h2', 'u1', '2026-01-02T00:00:00+00:00', '2026-02-02T00:00:00+00:00', 'used');
+
+        -- arclink_fleet_host_probes: legacy column shape (probe_kind/status, no 'kind'/'ok').
+        CREATE TABLE arclink_fleet_host_probes (
+          probe_id TEXT PRIMARY KEY,
+          host_id TEXT NOT NULL,
+          probed_at TEXT NOT NULL,
+          probe_kind TEXT NOT NULL,
+          status TEXT NOT NULL,
+          latency_ms INTEGER NOT NULL DEFAULT 0,
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          error TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX idx_arclink_fleet_host_probes_host_kind_time
+          ON arclink_fleet_host_probes (host_id, probe_kind, probed_at);
+        INSERT INTO arclink_fleet_host_probes
+          (probe_id, host_id, probed_at, probe_kind, status)
+          VALUES ('flprb_1', 'host_a', '2026-01-01T00:00:00+00:00', 'liveness', 'ok'),
+                 ('flprb_2', 'host_a', '2026-01-02T00:00:00+00:00', 'capacity', 'failed');
+
+        -- arclink_fleet_audit_chain: legacy 'event_type' column + placeholder hashes.
+        CREATE TABLE arclink_fleet_audit_chain (
+          chain_id TEXT PRIMARY KEY,
+          inventory_id TEXT NOT NULL,
+          event_type TEXT NOT NULL,
+          actor TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          previous_hash TEXT NOT NULL DEFAULT '',
+          metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX idx_arclink_fleet_audit_chain_inventory_time
+          ON arclink_fleet_audit_chain (inventory_id, created_at);
+        INSERT INTO arclink_fleet_audit_chain
+          (chain_id, inventory_id, event_type, actor, created_at)
+          VALUES ('fac_1', 'inv_a', 'enrolled', 'system', '2026-01-01T00:00:00+00:00'),
+                 ('fac_2', 'inv_a', 'verified', 'system', '2026-01-02T00:00:00+00:00');
+
+        -- arclink_rollouts: legacy 'running'/'succeeded' status values + CHECK.
+        CREATE TABLE arclink_rollouts (
+          rollout_id TEXT PRIMARY KEY,
+          deployment_id TEXT NOT NULL DEFAULT '',
+          version_tag TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'running', 'succeeded', 'failed', 'rolled_back')),
+          wave_count INTEGER NOT NULL DEFAULT 1,
+          current_wave INTEGER NOT NULL DEFAULT 0,
+          waves_json TEXT NOT NULL DEFAULT '[]',
+          rollback_plan_json TEXT NOT NULL DEFAULT '{}',
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_arclink_rollouts_deployment_status
+          ON arclink_rollouts (deployment_id, status);
+        INSERT INTO arclink_rollouts (rollout_id, deployment_id, status, created_at, updated_at)
+          VALUES ('rol_1', 'dep_1', 'running', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00'),
+                 ('rol_2', 'dep_2', 'succeeded', '2026-01-02T00:00:00+00:00', '2026-01-02T00:00:00+00:00');
+
+        -- notion_identity_claims: legacy 'verification_nonce' column present.
+        CREATE TABLE notion_identity_claims (
+          claim_id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL DEFAULT '',
+          agent_id TEXT NOT NULL,
+          unix_user TEXT NOT NULL,
+          claimed_notion_email TEXT NOT NULL,
+          notion_page_id TEXT NOT NULL DEFAULT '',
+          notion_page_url TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'pending',
+          failure_reason TEXT NOT NULL DEFAULT '',
+          verified_notion_user_id TEXT NOT NULL DEFAULT '',
+          verified_notion_email TEXT NOT NULL DEFAULT '',
+          verification_nonce TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          verified_at TEXT
+        );
+        CREATE INDEX idx_notion_identity_claims_status_expires
+          ON notion_identity_claims (status, expires_at);
+        INSERT INTO notion_identity_claims
+          (claim_id, agent_id, unix_user, claimed_notion_email, notion_page_id, verification_nonce, created_at, updated_at, expires_at)
+          VALUES ('claim_1', 'ag_1', 'svc_a', 'a@example.com', 'page_1', 'nonce_xyz', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', '2026-02-01T00:00:00+00:00');
+        """
+    )
+    conn.commit()
+
+
+def test_migration_rebuilds_are_atomic_idempotent_and_index_preserving_on_populated_db() -> None:
+    # conc/integrity (deploy-blocking): the FIVE *__new rebuild migrations must be
+    # atomic (a crash mid-rebuild rolls back to the original), index-preserving (the
+    # live index survives a SINGLE ensure_schema pass -- not deferred to a later one),
+    # row-preserving, and a clean no-op on the second pass with no __new scratch left.
+    mod = load_module(CONTROL_PY, "arclink_control_db_migration_atomic_test")
+    tmp = tempfile.TemporaryDirectory()
+    try:
+        db_path = str(Path(tmp.name) / "legacy_migrations.sqlite3")
+
+        # --- Crash-safety probe FIRST, on a fresh populated copy: simulate a worker
+        # crash mid-rebuild (after DROP old, before RENAME __new) and prove the
+        # original table + index + rows are intact (the BEGIN IMMEDIATE rolled back).
+        crash_conn = sqlite3.connect(db_path)
+        crash_conn.row_factory = sqlite3.Row
+        _seed_legacy_migration_db(crash_conn)
+        legacy_rollout_sql = _table_sql(crash_conn, "arclink_rollouts")
+        expect("'running'" in legacy_rollout_sql, "precondition: legacy rollouts CHECK has 'running'")
+
+        class _BoomAfterDrop:
+            def __init__(self, real: sqlite3.Connection) -> None:
+                self._real = real
+
+            def __getattr__(self, name: str):
+                return getattr(self._real, name)
+
+            @property
+            def in_transaction(self) -> bool:
+                return self._real.in_transaction
+
+            def execute(self, sql: str, *args):
+                cur = self._real.execute(sql, *args)
+                if sql.strip().upper().startswith("DROP TABLE ARCLINK_ROLLOUTS"):
+                    # Crash AFTER the old table is dropped but BEFORE the RENAME lands.
+                    raise RuntimeError("simulated worker crash mid-rebuild")
+                return cur
+
+        crashed = False
+        try:
+            mod._migrate_arclink_rollouts_status_schema(_BoomAfterDrop(crash_conn))
+        except RuntimeError as exc:
+            crashed = "simulated worker crash" in str(exc)
+        expect(crashed, "crash injection must propagate (rebuild must not swallow it)")
+        # The whole rebuild rolled back: original table + index + rows are intact.
+        expect(
+            _table_sql(crash_conn, "arclink_rollouts") == legacy_rollout_sql,
+            "a crash mid-rebuild must roll back to the ORIGINAL rollouts table",
+        )
+        expect(
+            "idx_arclink_rollouts_deployment_status" in _indexes_on(crash_conn, "arclink_rollouts"),
+            "original index must survive a rolled-back rebuild",
+        )
+        rows = crash_conn.execute("SELECT COUNT(*) AS c FROM arclink_rollouts").fetchone()["c"]
+        expect(int(rows) == 2, f"rows must survive a rolled-back rebuild, got {rows}")
+        expect(_scratch_tables(crash_conn) == [], "no __new scratch may survive a rolled-back rebuild")
+        crash_conn.close()
+
+        # Fresh populated DB for the full ensure_schema pass.
+        Path(db_path).unlink()
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        _seed_legacy_migration_db(conn)
+
+        # --- ONE ensure_schema pass migrates all five.
+        mod.ensure_schema(conn)
+
+        checks = [
+            ("arclink_fleet_enrollments", "idx_arclink_fleet_enrollments_status_expiry", "'consumed'", 2),
+            ("arclink_fleet_host_probes", "idx_arclink_fleet_host_probes_host_kind_time", "ok INTEGER", 2),
+            ("arclink_fleet_audit_chain", "idx_arclink_fleet_audit_chain_inventory_time", "event_at", 2),
+            ("arclink_rollouts", "idx_arclink_rollouts_deployment_status", "'in_progress'", 2),
+            ("notion_identity_claims", "idx_notion_identity_claims_status_expires", "claim_id", 1),
+        ]
+        for table, index_name, schema_marker, expected_rows in checks:
+            sql = _table_sql(conn, table)
+            expect(schema_marker in sql, f"{table} must have new schema marker {schema_marker!r} after one pass")
+            expect(
+                index_name in _indexes_on(conn, table),
+                f"{table} must retain index {index_name} after a SINGLE ensure_schema pass",
+            )
+            count = conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"]
+            expect(int(count) == expected_rows, f"{table} rows must be preserved: {count} != {expected_rows}")
+
+        # New status/kind CHECKs really hold (legacy values were normalized).
+        statuses = sorted(str(r["status"]) for r in conn.execute("SELECT status FROM arclink_fleet_enrollments").fetchall())
+        expect(statuses == ["consumed", "pending"], f"enrollment statuses normalized: {statuses}")
+        rollout_statuses = sorted(str(r["status"]) for r in conn.execute("SELECT status FROM arclink_rollouts").fetchall())
+        expect(rollout_statuses == ["completed", "in_progress"], f"rollout statuses normalized: {rollout_statuses}")
+        # verification_nonce removed.
+        notion_cols = {r[1] for r in conn.execute("PRAGMA table_info(notion_identity_claims)").fetchall()}
+        expect("verification_nonce" not in notion_cols, "notion legacy nonce column removed")
+        # No __new scratch left behind.
+        expect(_scratch_tables(conn) == [], f"no __new scratch after first pass: {_scratch_tables(conn)}")
+
+        # --- SECOND pass is a clean no-op (guards short-circuit; concurrency re-check).
+        before = {t: _table_sql(conn, t) for t, *_ in checks}
+        mod.ensure_schema(conn)
+        for table, *_ in checks:
+            expect(_table_sql(conn, table) == before[table], f"{table} schema must be unchanged on 2nd pass")
+        expect(_scratch_tables(conn) == [], "no __new scratch after idempotent 2nd pass")
+        conn.close()
+
+        # --- Durability + a SIMULATED concurrent pass: a fresh connection (a second
+        # worker) runs ensure_schema again -> still a no-op, schema committed.
+        conn2 = sqlite3.connect(db_path)
+        conn2.row_factory = sqlite3.Row
+        for table, index_name, schema_marker, expected_rows in checks:
+            expect(schema_marker in _table_sql(conn2, table), f"{table} schema durable after reopen")
+            expect(index_name in _indexes_on(conn2, table), f"{table} index durable after reopen")
+        mod.ensure_schema(conn2)
+        expect(_scratch_tables(conn2) == [], "second worker pass leaves no __new scratch")
+        conn2.close()
+    finally:
+        tmp.cleanup()
+    print("PASS test_migration_rebuilds_are_atomic_idempotent_and_index_preserving_on_populated_db")
+
+
+def test_transition_provisioning_job_cas_rejects_double_claim() -> None:
+    # conc-C2: two sovereign workers must not both move one 'queued' job to 'running'
+    # and double-execute. The guarded CAS lets exactly ONE claim win; the loser gets
+    # a False ("lost claim") return so the caller SKIPS.
+    mod = load_module(CONTROL_PY, "arclink_control_db_job_cas_test")
+    conn = memory_db(mod)
+    try:
+        mod.create_arclink_provisioning_job(
+            conn, job_id="job_cas", deployment_id="dep_1", job_kind="apply"
+        )
+
+        first = mod.transition_arclink_provisioning_job(conn, job_id="job_cas", status="running")
+        expect(first is True, "first queued->running claim must succeed")
+
+        # A second worker that still believes the job is 'queued' attempts the SAME
+        # transition. The CAS guard (status IN allowed-from) matches 0 rows because the
+        # row is already 'running' -> lost claim, returns False, does NOT re-run apply.
+        second = mod.transition_arclink_provisioning_job(conn, job_id="job_cas", status="running")
+        expect(second is False, "double queued->running claim must be reported lost (False)")
+
+        # attempt_count incremented exactly once (no double execution side effect).
+        attempts = conn.execute(
+            "SELECT attempt_count FROM arclink_provisioning_jobs WHERE job_id = ?", ("job_cas",)
+        ).fetchone()["attempt_count"]
+        expect(int(attempts) == 1, f"attempt_count must increment exactly once, got {attempts}")
+
+        # A genuine forward transition from the real current state still works.
+        done = mod.transition_arclink_provisioning_job(conn, job_id="job_cas", status="succeeded")
+        expect(done is True, "running->succeeded must succeed")
+        # A structurally invalid transition from the observed status still raises.
+        raised = False
+        try:
+            mod.transition_arclink_provisioning_job(conn, job_id="job_cas", status="running")
+        except ValueError:
+            raised = True
+        expect(raised, "succeeded->running is structurally invalid and must raise")
+        # Missing job still raises KeyError.
+        missing = False
+        try:
+            mod.transition_arclink_provisioning_job(conn, job_id="nope", status="running")
+        except KeyError:
+            missing = True
+        expect(missing, "unknown job_id must raise KeyError")
+    finally:
+        conn.close()
+    print("PASS test_transition_provisioning_job_cas_rejects_double_claim")
+
+
+def test_comp_subscription_double_comp_is_prevented() -> None:
+    # conc-M3: a partial UNIQUE index on arclink_audit_log(action, target_id) WHERE
+    # action='comp_subscription' makes a SECOND comp INSERT for the same target a hard
+    # IntegrityError; comp_arclink_subscription treats it as "already comped" -> never
+    # two comp audit rows for one user.
+    mod = load_module(CONTROL_PY, "arclink_control_db_double_comp_test")
+    conn = memory_db(mod)
+    try:
+        mod.upsert_arclink_user(conn, user_id="u_comp", entitlement_state="none")
+
+        first = mod.comp_arclink_subscription(
+            conn, user_id="u_comp", actor_id="admin", reason="goodwill"
+        )
+        expect(str(first.get("entitlement_state")) == "comp", "first comp must set entitlement to comp")
+
+        # A concurrent/duplicate comp call must be a safe no-op (already comped).
+        second = mod.comp_arclink_subscription(
+            conn, user_id="u_comp", actor_id="admin2", reason="goodwill again"
+        )
+        expect(second is not None, "duplicate comp must return the existing user, not crash")
+
+        comp_rows = conn.execute(
+            "SELECT COUNT(*) AS c FROM arclink_audit_log WHERE action = 'comp_subscription' AND target_id = ?",
+            ("u_comp",),
+        ).fetchone()["c"]
+        expect(int(comp_rows) == 1, f"exactly one comp audit row may exist, got {comp_rows}")
+
+        # The UNIQUE index itself rejects a raw second insert (the DB-level guarantee).
+        rejected = False
+        try:
+            mod.append_arclink_audit(
+                conn,
+                action="comp_subscription",
+                actor_id="rogue",
+                target_kind="user",
+                target_id="u_comp",
+                reason="dupe",
+            )
+        except sqlite3.IntegrityError:
+            rejected = True
+        conn.rollback()
+        expect(rejected, "the partial UNIQUE index must reject a second comp row at the DB layer")
+    finally:
+        conn.close()
+    print("PASS test_comp_subscription_double_comp_is_prevented")
+
+
+def test_stale_subscription_and_entitlement_events_do_not_overwrite_newer() -> None:
+    # billing-C2: out-of-order Stripe deliveries must apply MONOTONICALLY. A NEWER
+    # event lands; a later-delivered but OLDER event (smaller event.created) is dropped
+    # and must not revert status/entitlement.
+    mod = load_module(CONTROL_PY, "arclink_control_db_event_ordering_test")
+    conn = memory_db(mod)
+    try:
+        mod.upsert_arclink_user(conn, user_id="u_evt", entitlement_state="none")
+
+        # --- Subscription mirror monotonicity.
+        # Newer event (created=2000) applies 'active'.
+        mod.upsert_arclink_subscription_mirror(
+            conn, subscription_id="sub_1", user_id="u_evt", status="active", event_at=2000
+        )
+        # Stale event (created=1000) delivered LATER tries to set 'canceled' -> dropped.
+        mod.upsert_arclink_subscription_mirror(
+            conn, subscription_id="sub_1", user_id="u_evt", status="canceled", event_at=1000
+        )
+        sub_status = conn.execute(
+            "SELECT status FROM arclink_subscriptions WHERE subscription_id = ?", ("sub_1",)
+        ).fetchone()["status"]
+        expect(sub_status == "active", f"stale subscription event must not overwrite newer: {sub_status}")
+        # A genuinely newer event (created=3000) still applies.
+        mod.upsert_arclink_subscription_mirror(
+            conn, subscription_id="sub_1", user_id="u_evt", status="past_due", event_at=3000
+        )
+        sub_status2 = conn.execute(
+            "SELECT status FROM arclink_subscriptions WHERE subscription_id = ?", ("sub_1",)
+        ).fetchone()["status"]
+        expect(sub_status2 == "past_due", f"a newer subscription event must apply: {sub_status2}")
+
+        # --- Entitlement monotonicity (ISO-string ordering keys also supported).
+        mod.set_arclink_user_entitlement(
+            conn, user_id="u_evt", entitlement_state="paid", event_at="2026-02-01T00:00:00+00:00"
+        )
+        # Stale event (earlier ISO) tries to revert to 'none' -> dropped.
+        mod.set_arclink_user_entitlement(
+            conn, user_id="u_evt", entitlement_state="none", event_at="2026-01-01T00:00:00+00:00"
+        )
+        ent = conn.execute(
+            "SELECT entitlement_state FROM arclink_users WHERE user_id = ?", ("u_evt",)
+        ).fetchone()["entitlement_state"]
+        expect(ent == "paid", f"stale entitlement event must not revert newer paid state: {ent}")
+        # A newer event applies.
+        mod.set_arclink_user_entitlement(
+            conn, user_id="u_evt", entitlement_state="comp", event_at="2026-03-01T00:00:00+00:00"
+        )
+        ent2 = conn.execute(
+            "SELECT entitlement_state FROM arclink_users WHERE user_id = ?", ("u_evt",)
+        ).fetchone()["entitlement_state"]
+        expect(ent2 == "comp", f"a newer entitlement event must apply: {ent2}")
+
+        # Backward compatibility: with no event_at the write applies unconditionally.
+        mod.set_arclink_user_entitlement(conn, user_id="u_evt", entitlement_state="paid")
+        ent3 = conn.execute(
+            "SELECT entitlement_state FROM arclink_users WHERE user_id = ?", ("u_evt",)
+        ).fetchone()["entitlement_state"]
+        expect(ent3 == "paid", "an unordered (no event_at) write must apply unconditionally")
+    finally:
+        conn.close()
+    print("PASS test_stale_subscription_and_entitlement_events_do_not_overwrite_newer")
+
+
 if __name__ == "__main__":
     test_config_loader_preserves_multi_token_values_and_export_prefix()
     test_explicit_missing_config_file_fails_loudly_but_devnull_remains_sentinel()
@@ -1246,3 +1656,7 @@ if __name__ == "__main__":
     test_llm_budget_reservations_legacy_check_migrates_to_expired_with_heartbeat()
     test_llm_budget_reservations_rebuild_is_atomic_and_keeps_index_on_first_pass()
     test_operator_action_secret_at_rest_is_rejected_and_hiccup_message_redacted()
+    test_migration_rebuilds_are_atomic_idempotent_and_index_preserving_on_populated_db()
+    test_transition_provisioning_job_cas_rejects_double_claim()
+    test_comp_subscription_double_comp_is_prevented()
+    test_stale_subscription_and_entitlement_events_do_not_overwrite_newer()

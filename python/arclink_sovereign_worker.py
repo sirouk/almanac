@@ -80,6 +80,29 @@ class ArcLinkSovereignWorkerError(RuntimeError):
     pass
 
 
+def _begin_metadata_write_txn(conn: sqlite3.Connection) -> bool:
+    """conc-H2 (metadata_json whole-blob clobber): take the write lock up front.
+
+    The metadata_json read-modify-write sites each SELECT the whole blob, mutate it
+    in Python, then UPDATE the whole column back. With no lock, two concurrent
+    writers both read the SAME blob, each add their own key, and the second write
+    clobbers the first writer's key (last-writer-wins on the whole blob).
+
+    ``BEGIN IMMEDIATE`` acquires SQLite's RESERVED write lock before our SELECT, so a
+    concurrent writer's BEGIN IMMEDIATE blocks until we commit -- the read+modify+write
+    is one serialized critical section and neither writer can clobber the other.
+
+    Returns True when this call opened the txn (the caller owns commit/rollback) and
+    False when a txn was already open (the caller's enclosing txn already serializes
+    the write, so we must NOT commit/rollback under it). Mirrors the own_txn pattern in
+    control.transition_arclink_provisioning_job.
+    """
+    own_txn = not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
+    return own_txn
+
+
 SOLO_JOB_KIND = "sovereign_pod_apply"
 TEARDOWN_JOB_KIND = "sovereign_pod_teardown"
 TERMINAL_JOB_STATUSES = {"succeeded", "cancelled"}
@@ -90,6 +113,21 @@ TERMINAL_JOB_STATUSES = {"succeeded", "cancelled"}
 TERMINAL_APPLIED_JOB_STATUSES = {"succeeded"}
 TEARDOWN_REQUEST_STATUSES = {"teardown_requested", "teardown_failed", "cancelled"}
 TEARDOWN_TERMINAL_STATUSES = {"torn_down", "teardown_complete"}
+# regr-H2 (unverified partial teardown -> orphan): _best_effort_failed_placement_teardown
+# returns a status string. ONLY these statuses mean "there are no containers left to
+# orphan", so the placement may be safely released:
+#   * "completed"           -- the docker_compose_lifecycle teardown returned a CLEAN
+#                              completed result (the only value docker_compose_lifecycle
+#                              emits on success).
+#   * "no_active_placement" -- nothing was ever placed on a host, so there is nothing
+#                              to tear down (remove_placement is a no-op anyway).
+# Everything else -- "deployment_missing", "intent_error:*", "executor_error:*",
+# "skipped_no_executor", "teardown_error:*", or any non-"completed" lifecycle status
+# (e.g. a partial "issued") -- means the teardown did NOT verifiably complete. Releasing
+# the placement then drops the host link and the teardown batch never re-selects a
+# provisioning_failed deployment, so the containers/volumes orphan forever. We therefore
+# RETAIN the placement and page an operator to sweep instead.
+SAFE_TO_RELEASE_TEARDOWN_STATUSES = {"completed", "no_active_placement"}
 MISSING_CHUTES_CLIENT_ERROR = "ArcLink live Chutes key execution requires an injectable ChutesKeyClient"
 REQUIRED_HERMES_HOME_PLUGIN_SURFACES = {
     "drive": ("plugin", "module", "dashboard"),
@@ -692,22 +730,27 @@ def _record_tailnet_handoff_deferral(
     job_id: str,
     state: Mapping[str, Any],
 ) -> None:
-    row = conn.execute(
-        "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?",
-        (deployment_id,),
-    ).fetchone()
-    if row is None:
-        return
-    metadata = json_loads_safe(str(row["metadata_json"] or "{}"))
-    if str(metadata.get("tailnet_handoff_deferred_at") or "").strip():
-        return
     now = utc_now_iso()
-    metadata["tailnet_handoff_deferred_at"] = now
-    conn.execute(
-        "UPDATE arclink_deployments SET metadata_json = ?, updated_at = ? WHERE deployment_id = ?",
-        (json.dumps(metadata, sort_keys=True), now, deployment_id),
+    # conc-H2: merge-safe single-key write. ``json_set`` mutates ONLY
+    # ``$.tailnet_handoff_deferred_at`` server-side, so a concurrent writer's keys
+    # in the same blob are never clobbered. The WHERE guard makes the
+    # "defer only once" check atomic with the write -- only the first writer's
+    # UPDATE matches a row, so only it fires the event (no read-then-write TOCTOU).
+    cursor = conn.execute(
+        """
+        UPDATE arclink_deployments
+        SET metadata_json = json_set(COALESCE(metadata_json, '{}'), '$.tailnet_handoff_deferred_at', ?),
+            updated_at = ?
+        WHERE deployment_id = ?
+          AND COALESCE(NULLIF(TRIM(COALESCE(json_extract(metadata_json, '$.tailnet_handoff_deferred_at'), '')), ''), '') = ''
+        """,
+        (now, now, deployment_id),
     )
     conn.commit()
+    if cursor.rowcount <= 0:
+        # Either the deployment row is gone, or the deferral was already recorded
+        # (this or a concurrent writer won). Do not re-fire the event.
+        return
     append_arclink_event(
         conn,
         subject_kind="deployment",
@@ -817,7 +860,27 @@ def process_sovereign_deployment(
             return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "max_attempts_exhausted"}
         transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="queued")
 
-    transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="running")
+    # conc-C2 (sovereign double-execute): transition_arclink_provisioning_job is an
+    # atomic CAS. It returns False when this worker LOST the claim -- a concurrent
+    # sovereign worker already moved the job out of its source state (e.g. another
+    # worker already claimed queued->running). We MUST NOT proceed to
+    # _apply_deployment in that case: doing so would double-execute one job on two
+    # workers (the deploy-blocker). Skip the apply entirely and do NOT advance
+    # status; the worker that won the claim owns this job.
+    claimed = transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="running")
+    if not claimed:
+        append_arclink_event(
+            conn,
+            subject_kind="deployment",
+            subject_id=deployment_id,
+            event_type="sovereign_apply_claim_lost",
+            metadata={"job_id": str(job["job_id"])},
+        )
+        return {
+            "deployment_id": deployment_id,
+            "job_id": str(job["job_id"]),
+            "status": "claim_lost",
+        }
     _mark_deployment_status(conn, deployment_id=deployment_id, status="provisioning")
     append_arclink_event(
         conn,
@@ -1126,6 +1189,30 @@ def _release_failed_deployment_placement_if_exhausted(
         worker=worker,
         executor=executor,
     )
+    # regr-H2: only release the placement once the teardown VERIFIABLY completed
+    # (or there was nothing to tear down). A non-completed teardown -- a partial
+    # ``compose down``, ``skipped_no_executor``, an ``intent_error``/``executor_error``,
+    # or a ``teardown_error`` -- leaves containers/volumes on the placed host. If we
+    # drop the placement here the host link is gone and the teardown batch never
+    # re-selects a provisioning_failed deployment, so those containers orphan
+    # forever. Instead, RETAIN the placement (so a later worker pass can re-attempt
+    # the teardown while the host is still resolvable) and page an operator to sweep.
+    if teardown_status not in SAFE_TO_RELEASE_TEARDOWN_STATUSES:
+        append_arclink_event(
+            conn,
+            subject_kind="deployment",
+            subject_id=deployment_id,
+            event_type="placement_retained_teardown_unverified",
+            metadata={"job_id": job_id, "reason": reason, "orphan_teardown": teardown_status},
+        )
+        _report_unverified_teardown_operator_hiccup(
+            conn,
+            deployment_id=deployment_id,
+            job_id=job_id,
+            reason=reason,
+            teardown_status=teardown_status,
+        )
+        return None
     removed = remove_placement(conn, deployment_id=deployment_id)
     if removed is None:
         return None
@@ -1220,6 +1307,52 @@ def _report_provisioning_failed_operator_hiccup(
         return
 
 
+def _report_unverified_teardown_operator_hiccup(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    job_id: str,
+    reason: str,
+    teardown_status: str,
+) -> None:
+    """Page the Operator when a failed-placement teardown did NOT verifiably complete.
+
+    regr-H2: we kept the placement (the host link) so a later worker pass can re-attempt
+    the teardown, but the containers/volumes may still be running on the placed host. A
+    human needs to sweep. Best-effort and fail-closed -- any error queuing the notice is
+    swallowed so it can never break the worker's release path. The operator target is
+    resolved from Config inside report_operator_hiccup, never from raw os.environ.
+    """
+    try:
+        cfg = Config.from_env()
+        clean_status = str(teardown_status or "").strip()[:120]
+        message = (
+            "ArcLink failed-placement teardown did NOT complete for "
+            f"{deployment_id}. The placement was RETAINED (not released) so the "
+            "containers/volumes are not orphaned, but the compose project may still "
+            f"be running on the placed host (teardown result: {clean_status or 'unknown'}). "
+            "Operator attention is needed to sweep this deployment's host."
+        )
+        report_operator_hiccup(
+            conn,
+            cfg,
+            source="sovereign_provisioning",
+            # Per-deployment key, distinct from the released-failure key so an
+            # unverified teardown does not collide with a terminal release notice.
+            key=f"deployment_teardown_unverified:{deployment_id}",
+            message=message,
+            reason=f"failed-placement teardown unverified: {reason}",
+            extra={
+                "deployment_id": deployment_id,
+                "job_id": job_id,
+                "reason": reason,
+                "teardown_status": teardown_status,
+            },
+        )
+    except Exception:  # noqa: BLE001 - hiccup reporting must never break the worker.
+        return
+
+
 def _ensure_deployment_fleet_share_hub(conn: sqlite3.Connection, *, deployment: Mapping[str, Any]) -> dict[str, Any]:
     user_id = str(deployment.get("user_id") or "").strip()
     if not user_id:
@@ -1254,7 +1387,25 @@ def process_sovereign_teardown(
             return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "max_attempts_exhausted"}
         transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="queued")
 
-    transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="running")
+    # conc-C2 (sovereign double-execute): the CAS returns False when this worker
+    # LOST the teardown claim -- a concurrent worker already moved the job out of
+    # its source state. We MUST NOT proceed to _teardown_deployment in that case
+    # (double-executing one teardown on two workers). Skip and do NOT advance
+    # status; the worker that won the claim owns this teardown.
+    claimed = transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="running")
+    if not claimed:
+        append_arclink_event(
+            conn,
+            subject_kind="deployment",
+            subject_id=deployment_id,
+            event_type="sovereign_teardown_claim_lost",
+            metadata={"job_id": str(job["job_id"]), "previous_status": current_status},
+        )
+        return {
+            "deployment_id": deployment_id,
+            "job_id": str(job["job_id"]),
+            "status": "claim_lost",
+        }
     _mark_deployment_status(conn, deployment_id=deployment_id, status="teardown_running")
     append_arclink_event(
         conn,
@@ -1344,51 +1495,74 @@ def _ensure_tailnet_service_ports_for_host(
         return dict(deployment)
     roles = ("hermes",)
     deployment_id = str(deployment["deployment_id"])
-    metadata = json_loads_safe(str(deployment.get("metadata_json") or "{}"))
-    ports = _tailnet_ports_from_metadata(metadata)
     host_id = str(host.get("host_id") or "").strip()
     if not host_id:
         raise ArcLinkSovereignWorkerError("ArcLink tailnet service port allocation requires a fleet host")
 
-    used = _tailnet_service_ports_used_on_host(conn, host_id=host_id, exclude_deployment_id=deployment_id)
-    live_ports = _tailnet_live_published_ports(executor)
-    used.update(live_ports)
-    if set(roles) <= set(ports) and all(port not in used for port in ports.values()):
-        return dict(deployment)
-
+    # conc-H2: serialize the read+allocate+write in one BEGIN IMMEDIATE critical
+    # section. This both (a) prevents the metadata_json whole-blob clobber -- we
+    # re-read the CURRENT DB blob inside the lock and merge into it, so a concurrent
+    # writer's keys survive -- and (b) makes the port-uniqueness scan + allocation
+    # atomic, so two workers can't hand out the same tailnet port.
+    own_txn = _begin_metadata_write_txn(conn)
     try:
-        next_block = int(str(worker.env.get("ARCLINK_TAILNET_SERVICE_PORT_BASE") or "8443"))
-    except ValueError:
-        next_block = 8443
-    if next_block < 1 or next_block + len(roles) >= 65536:
-        next_block = 8443
-    previous_ports = dict(ports)
-    while True:
-        candidate = {role: next_block + offset for offset, role in enumerate(roles)}
-        if all(0 < port < 65536 and port not in used for port in candidate.values()):
-            ports = candidate
-            break
-        next_block += len(roles)
+        row = conn.execute(
+            "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?",
+            (deployment_id,),
+        ).fetchone()
+        # Merge against the freshest DB blob (not the possibly-stale passed-in
+        # deployment) so we never clobber keys written since this deployment dict
+        # was loaded. Fall back to the passed-in metadata only if the row vanished.
+        metadata = json_loads_safe(
+            str((row["metadata_json"] if row is not None else deployment.get("metadata_json")) or "{}")
+        )
+        ports = _tailnet_ports_from_metadata(metadata)
+        used = _tailnet_service_ports_used_on_host(conn, host_id=host_id, exclude_deployment_id=deployment_id)
+        live_ports = _tailnet_live_published_ports(executor)
+        used.update(live_ports)
+        if set(roles) <= set(ports) and all(port not in used for port in ports.values()):
+            if own_txn:
+                conn.commit()
+            return dict(deployment)
 
-    metadata.update(
-        {
-            "ingress_mode": "tailscale",
-            "tailscale_dns_name": worker.tailscale_dns_name or worker.base_domain,
-            "tailscale_host_strategy": "path",
-            "tailnet_service_ports": ports,
-            "tailnet_service_ports_checked_at": utc_now_iso(),
-            "tailnet_service_ports_host_id": host_id,
-            "tailnet_service_ports_live_checked": bool(live_ports),
-        }
-    )
-    if previous_ports and previous_ports != ports:
-        metadata["tailnet_service_ports_previous"] = previous_ports
-        metadata["tailnet_service_ports_reassigned_at"] = utc_now_iso()
-    conn.execute(
-        "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
-        (json.dumps(metadata, sort_keys=True), deployment_id),
-    )
-    conn.commit()
+        try:
+            next_block = int(str(worker.env.get("ARCLINK_TAILNET_SERVICE_PORT_BASE") or "8443"))
+        except ValueError:
+            next_block = 8443
+        if next_block < 1 or next_block + len(roles) >= 65536:
+            next_block = 8443
+        previous_ports = dict(ports)
+        while True:
+            candidate = {role: next_block + offset for offset, role in enumerate(roles)}
+            if all(0 < port < 65536 and port not in used for port in candidate.values()):
+                ports = candidate
+                break
+            next_block += len(roles)
+
+        metadata.update(
+            {
+                "ingress_mode": "tailscale",
+                "tailscale_dns_name": worker.tailscale_dns_name or worker.base_domain,
+                "tailscale_host_strategy": "path",
+                "tailnet_service_ports": ports,
+                "tailnet_service_ports_checked_at": utc_now_iso(),
+                "tailnet_service_ports_host_id": host_id,
+                "tailnet_service_ports_live_checked": bool(live_ports),
+            }
+        )
+        if previous_ports and previous_ports != ports:
+            metadata["tailnet_service_ports_previous"] = previous_ports
+            metadata["tailnet_service_ports_reassigned_at"] = utc_now_iso()
+        conn.execute(
+            "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
+            (json.dumps(metadata, sort_keys=True), deployment_id),
+        )
+    except BaseException:
+        if own_txn:
+            conn.rollback()
+        raise
+    if own_txn:
+        conn.commit()
     updated = dict(deployment)
     updated["metadata_json"] = json.dumps(metadata, sort_keys=True)
     return updated
@@ -1842,20 +2016,30 @@ def _teardown_failure_retryable_after_upgrade(job: Mapping[str, Any]) -> bool:
 
 
 def _release_tailnet_service_ports(conn: sqlite3.Connection, *, deployment_id: str) -> None:
-    row = conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?", (deployment_id,)).fetchone()
-    if row is None:
-        return
-    metadata = json_loads_safe(str(row["metadata_json"] or "{}"))
-    if not isinstance(metadata, dict):
-        metadata = {}
-    if metadata.get("tailnet_service_ports"):
-        metadata["tailnet_service_ports"] = {}
-        metadata["tailnet_service_ports_released_at"] = utc_now_iso()
-        conn.execute(
-            "UPDATE arclink_deployments SET metadata_json = ?, updated_at = ? WHERE deployment_id = ?",
-            (json.dumps(metadata, sort_keys=True), utc_now_iso(), deployment_id),
-        )
-        conn.commit()
+    # conc-H2: merge-safe write. ``json_set`` clears ONLY ``$.tailnet_service_ports``
+    # and stamps ``$.tailnet_service_ports_released_at`` server-side, so a concurrent
+    # writer's other keys in the same blob are never clobbered. The WHERE guard makes
+    # the "only release if ports are set" check atomic with the write.
+    now = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE arclink_deployments
+        SET metadata_json = json_set(
+                json_set(COALESCE(metadata_json, '{}'), '$.tailnet_service_ports', json('{}')),
+                '$.tailnet_service_ports_released_at', ?
+            ),
+            updated_at = ?
+        WHERE deployment_id = ?
+          AND json_extract(metadata_json, '$.tailnet_service_ports') IS NOT NULL
+          AND json_type(metadata_json, '$.tailnet_service_ports') = 'object'
+          AND EXISTS (
+            SELECT 1 FROM json_each(metadata_json, '$.tailnet_service_ports')
+          )
+        """,
+        (now, now, deployment_id),
+    )
+    conn.commit()
+    return
 
 
 def _reload_apply_ready_deployment(conn: sqlite3.Connection, *, deployment_id: str) -> dict[str, Any]:
@@ -1893,28 +2077,39 @@ def _persist_deployment_runtime_metadata(
     state_root_base: str,
     runtime_metadata: Mapping[str, Any] | None = None,
 ) -> None:
-    row = conn.execute(
-        "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?",
-        (deployment_id,),
-    ).fetchone()
-    if row is None:
-        raise ArcLinkSovereignWorkerError(f"ArcLink deployment not found: {deployment_id}")
-    metadata = json_loads_safe(str(row["metadata_json"] or "{}"))
-    metadata["access_urls"] = {str(role): str(url) for role, url in dict(urls).items() if str(url or "").strip()}
-    metadata["state_roots"] = {str(key): str(value) for key, value in dict(state_roots).items() if str(value or "").strip()}
-    metadata["state_root_base"] = str(state_root_base or "").strip()
-    for key, value in dict(runtime_metadata or {}).items():
-        if value is None:
-            continue
-        if isinstance(value, str):
-            metadata[str(key)] = value.strip()
-            continue
-        metadata[str(key)] = value
-    conn.execute(
-        "UPDATE arclink_deployments SET metadata_json = ?, updated_at = ? WHERE deployment_id = ?",
-        (json.dumps(metadata, sort_keys=True), utc_now_iso(), deployment_id),
-    )
-    conn.commit()
+    # conc-H2: serialize read+modify+write in one BEGIN IMMEDIATE critical section
+    # so a concurrent metadata writer cannot clobber the keys we merge here (and we
+    # cannot clobber theirs). The runtime keys are dynamic, so we re-read the CURRENT
+    # DB blob inside the lock and merge into it rather than rewriting a stale snapshot.
+    own_txn = _begin_metadata_write_txn(conn)
+    try:
+        row = conn.execute(
+            "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?",
+            (deployment_id,),
+        ).fetchone()
+        if row is None:
+            raise ArcLinkSovereignWorkerError(f"ArcLink deployment not found: {deployment_id}")
+        metadata = json_loads_safe(str(row["metadata_json"] or "{}"))
+        metadata["access_urls"] = {str(role): str(url) for role, url in dict(urls).items() if str(url or "").strip()}
+        metadata["state_roots"] = {str(key): str(value) for key, value in dict(state_roots).items() if str(value or "").strip()}
+        metadata["state_root_base"] = str(state_root_base or "").strip()
+        for key, value in dict(runtime_metadata or {}).items():
+            if value is None:
+                continue
+            if isinstance(value, str):
+                metadata[str(key)] = value.strip()
+                continue
+            metadata[str(key)] = value
+        conn.execute(
+            "UPDATE arclink_deployments SET metadata_json = ?, updated_at = ? WHERE deployment_id = ?",
+            (json.dumps(metadata, sort_keys=True), utc_now_iso(), deployment_id),
+        )
+    except BaseException:
+        if own_txn:
+            conn.rollback()
+        raise
+    if own_txn:
+        conn.commit()
 
 
 def _executor_for_host(
@@ -2724,22 +2919,38 @@ def _focus_public_bot_session_on_deployment(
     deployment_id = str(deployment.get("deployment_id") or "").strip()
     if not session_id or not deployment_id:
         return
-    metadata = json_loads_safe(str(session.get("metadata_json") or "{}"))
-    metadata["active_deployment_id"] = deployment_id
     label = str(deployment.get("agent_name") or "").strip()
     prefix = str(deployment.get("prefix") or "").strip()
+    if not label and prefix:
+        label = f"Hermes Agent #{prefix.rsplit('-', 1)[-1]}"
+    # conc-H2: merge-safe write against the CURRENT session blob in the DB. ``json_set``
+    # changes ONLY ``$.active_deployment_id`` (and ``$.active_agent_label`` when we have
+    # one), so a concurrent writer's other session keys are never clobbered. The
+    # passed-in ``session`` mapping may be stale; mutating it in Python and writing the
+    # whole blob back is exactly the clobber we are removing.
     if label:
-        metadata["active_agent_label"] = label
-    elif prefix:
-        metadata["active_agent_label"] = f"Hermes Agent #{prefix.rsplit('-', 1)[-1]}"
-    conn.execute(
-        """
-        UPDATE arclink_onboarding_sessions
-        SET metadata_json = ?, updated_at = ?
-        WHERE session_id = ?
-        """,
-        (json_dumps_safe(metadata), utc_now_iso(), session_id),
-    )
+        conn.execute(
+            """
+            UPDATE arclink_onboarding_sessions
+            SET metadata_json = json_set(
+                    json_set(COALESCE(metadata_json, '{}'), '$.active_deployment_id', ?),
+                    '$.active_agent_label', ?
+                ),
+                updated_at = ?
+            WHERE session_id = ?
+            """,
+            (deployment_id, label, utc_now_iso(), session_id),
+        )
+    else:
+        conn.execute(
+            """
+            UPDATE arclink_onboarding_sessions
+            SET metadata_json = json_set(COALESCE(metadata_json, '{}'), '$.active_deployment_id', ?),
+                updated_at = ?
+            WHERE session_id = ?
+            """,
+            (deployment_id, utc_now_iso(), session_id),
+        )
 
 
 def _queue_vessel_online_notifications(

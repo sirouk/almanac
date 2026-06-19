@@ -17,6 +17,8 @@ def stripe_payload(
     subscription_id: str = "sub_test",
     customer_id: str = "cus_test",
     status: str = "active",
+    created: int | None = None,
+    customer_email: str = "",
 ) -> str:
     obj: dict[str, object] = {
         "id": subscription_id,
@@ -24,6 +26,8 @@ def stripe_payload(
         "status": status,
         "metadata": {"arclink_user_id": user_id},
     }
+    if customer_email:
+        obj["customer_email"] = customer_email
     if event_type == "checkout.session.completed":
         obj = {
             "id": "cs_test",
@@ -50,7 +54,10 @@ def stripe_payload(
             "status": status,
             "metadata": {"arclink_user_id": user_id},
         }
-    return json.dumps({"id": event_id, "type": event_type, "data": {"object": obj}}, sort_keys=True)
+    envelope: dict[str, object] = {"id": event_id, "type": event_type, "data": {"object": obj}}
+    if created is not None:
+        envelope["created"] = created
+    return json.dumps(envelope, sort_keys=True)
 
 
 def sign(adapters, payload: str) -> str:
@@ -1814,6 +1821,152 @@ def test_subscription_deleted_cancels_entitlement_and_audits() -> None:
     print("PASS test_subscription_deleted_cancels_entitlement_and_audits")
 
 
+def test_stale_subscription_update_after_delete_does_not_regrant_paid() -> None:
+    """billing-C2 DEPLOY-BLOCKER: Stripe webhooks can be delivered out of order.
+    A subscription.deleted (cancelled) at event.created=2000 arrives, then a STALE
+    subscription.updated(active) with an OLDER event.created=1000 is delivered after
+    it. Threading event.created into the monotonic setters must DROP the stale event
+    so the customer stays cancelled rather than being silently re-granted paid.
+    """
+    control = load_module("arclink_control.py", "arclink_control_entitlement_stale_order_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_stale_order_test")
+    entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_stale_order_test")
+    conn = memory_db(control)
+    control.upsert_arclink_user(conn, user_id="user_1", stripe_customer_id="cus_test", entitlement_state="paid")
+
+    # Newer event: the cancellation (event.created = 2000).
+    delete_payload = stripe_payload(
+        event_id="evt_sub_deleted_2000",
+        event_type="customer.subscription.deleted",
+        status="canceled",
+        created=2000,
+    )
+    deleted = entitlements.process_stripe_webhook(
+        conn, payload=delete_payload, signature=sign(adapters, delete_payload), secret="whsec_test",
+    )
+    expect(deleted.entitlement_state == "cancelled", str(deleted))
+    user = conn.execute("SELECT entitlement_state FROM arclink_users WHERE user_id = 'user_1'").fetchone()
+    expect(user["entitlement_state"] == "cancelled", str(dict(user)))
+    sub = conn.execute("SELECT status FROM arclink_subscriptions WHERE stripe_subscription_id = 'sub_test'").fetchone()
+    expect(sub["status"] == "canceled", str(dict(sub)))
+
+    # STALE event arriving AFTER the delete: an older subscription.updated(active)
+    # (event.created = 1000). It must be dropped by the monotonic guard.
+    stale_payload = stripe_payload(
+        event_id="evt_sub_updated_stale_1000",
+        event_type="customer.subscription.updated",
+        status="active",
+        created=1000,
+    )
+    stale = entitlements.process_stripe_webhook(
+        conn, payload=stale_payload, signature=sign(adapters, stale_payload), secret="whsec_test",
+    )
+    # The webhook is still recorded processed (no error / no re-delivery storm)...
+    webhook = conn.execute(
+        "SELECT status FROM arclink_webhook_events WHERE event_id = 'evt_sub_updated_stale_1000'"
+    ).fetchone()
+    expect(webhook["status"] == "processed", str(dict(webhook)))
+    # ...but it must NOT re-grant paid: entitlement and mirror stay cancelled.
+    user_after = conn.execute("SELECT entitlement_state FROM arclink_users WHERE user_id = 'user_1'").fetchone()
+    expect(user_after["entitlement_state"] == "cancelled", str(dict(user_after)))
+    sub_after = conn.execute("SELECT status FROM arclink_subscriptions WHERE stripe_subscription_id = 'sub_test'").fetchone()
+    expect(sub_after["status"] == "canceled", str(dict(sub_after)))
+    print("PASS test_stale_subscription_update_after_delete_does_not_regrant_paid")
+
+
+def test_newer_subscription_update_after_delete_does_apply() -> None:
+    """The monotonic guard must not be a one-way ratchet: a genuinely NEWER
+    subscription.updated(active) (event.created strictly greater than the prior
+    cancellation) is a real re-subscribe and MUST apply, restoring paid."""
+    control = load_module("arclink_control.py", "arclink_control_entitlement_newer_order_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_newer_order_test")
+    entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_newer_order_test")
+    conn = memory_db(control)
+    control.upsert_arclink_user(conn, user_id="user_1", stripe_customer_id="cus_test", entitlement_state="paid")
+
+    delete_payload = stripe_payload(
+        event_id="evt_sub_deleted_1000",
+        event_type="customer.subscription.deleted",
+        status="canceled",
+        created=1000,
+    )
+    entitlements.process_stripe_webhook(
+        conn, payload=delete_payload, signature=sign(adapters, delete_payload), secret="whsec_test",
+    )
+    user = conn.execute("SELECT entitlement_state FROM arclink_users WHERE user_id = 'user_1'").fetchone()
+    expect(user["entitlement_state"] == "cancelled", str(dict(user)))
+
+    # Newer reactivation (event.created = 3000 > 1000) must apply.
+    newer_payload = stripe_payload(
+        event_id="evt_sub_updated_newer_3000",
+        event_type="customer.subscription.updated",
+        status="active",
+        created=3000,
+    )
+    newer = entitlements.process_stripe_webhook(
+        conn, payload=newer_payload, signature=sign(adapters, newer_payload), secret="whsec_test",
+    )
+    expect(newer.entitlement_state == "paid", str(newer))
+    user_after = conn.execute("SELECT entitlement_state FROM arclink_users WHERE user_id = 'user_1'").fetchone()
+    expect(user_after["entitlement_state"] == "paid", str(dict(user_after)))
+    sub_after = conn.execute("SELECT status FROM arclink_subscriptions WHERE stripe_subscription_id = 'sub_test'").fetchone()
+    expect(sub_after["status"] == "active", str(dict(sub_after)))
+    print("PASS test_newer_subscription_update_after_delete_does_apply")
+
+
+def test_email_path_entitlement_is_monotonic_guarded() -> None:
+    """billing-C2: the EMAIL branch previously moved entitlement_state via
+    upsert_arclink_user, which BYPASSES entitlement_last_event_at entirely (no
+    monotonic guard). With a customer_email present, a stale subscription.updated
+    (active) arriving after a newer cancellation must STILL be dropped -- i.e. the
+    email path must route the entitlement transition through the ordering-guarded
+    setter, not let upsert_arclink_user re-grant paid."""
+    control = load_module("arclink_control.py", "arclink_control_entitlement_email_monotonic_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_email_monotonic_test")
+    entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_email_monotonic_test")
+    conn = memory_db(control)
+    control.upsert_arclink_user(
+        conn,
+        user_id="user_1",
+        email="captain@example.test",
+        stripe_customer_id="cus_test",
+        entitlement_state="paid",
+    )
+
+    # Newer cancellation carrying the customer email (event.created = 2000).
+    delete_payload = stripe_payload(
+        event_id="evt_email_deleted_2000",
+        event_type="customer.subscription.deleted",
+        status="canceled",
+        created=2000,
+        customer_email="captain@example.test",
+    )
+    entitlements.process_stripe_webhook(
+        conn, payload=delete_payload, signature=sign(adapters, delete_payload), secret="whsec_test",
+    )
+    user = conn.execute("SELECT entitlement_state, email FROM arclink_users WHERE user_id = 'user_1'").fetchone()
+    expect(user["entitlement_state"] == "cancelled", str(dict(user)))
+    expect(user["email"] == "captain@example.test", str(dict(user)))
+
+    # STALE active update (event.created = 1000) carrying the same email. The email
+    # branch must NOT re-grant paid via upsert_arclink_user.
+    stale_payload = stripe_payload(
+        event_id="evt_email_updated_stale_1000",
+        event_type="customer.subscription.updated",
+        status="active",
+        created=1000,
+        customer_email="captain@example.test",
+    )
+    entitlements.process_stripe_webhook(
+        conn, payload=stale_payload, signature=sign(adapters, stale_payload), secret="whsec_test",
+    )
+    after = conn.execute("SELECT entitlement_state, email FROM arclink_users WHERE user_id = 'user_1'").fetchone()
+    expect(after["entitlement_state"] == "cancelled", str(dict(after)))
+    # The email association itself is preserved by the email branch.
+    expect(after["email"] == "captain@example.test", str(dict(after)))
+    print("PASS test_email_path_entitlement_is_monotonic_guarded")
+
+
 def test_stripe_webhook_merges_users_when_email_matches_existing_account() -> None:
     """A single human can show up under multiple user_ids: e.g. they started
     on Telegram earlier under one user_id (with their email captured), then
@@ -2082,10 +2235,13 @@ def main() -> int:
     test_subscription_created_sets_paid_and_mirrors_subscription()
     test_unknown_subscription_status_mirrors_as_incomplete_without_crashing()
     test_subscription_deleted_cancels_entitlement_and_audits()
+    test_stale_subscription_update_after_delete_does_not_regrant_paid()
+    test_newer_subscription_update_after_delete_does_apply()
+    test_email_path_entitlement_is_monotonic_guarded()
     test_reconciliation_drift_detects_subscription_without_deployment_and_vice_versa()
     test_stripe_webhook_merges_users_when_email_matches_existing_account()
     test_entitlement_webhook_rejects_customer_bound_to_another_account()
-    print("PASS all 40 ArcLink entitlement tests")
+    print("PASS all 43 ArcLink entitlement tests")
     return 0
 
 

@@ -608,7 +608,10 @@ def _executor_for_action_host(
         resolver = SovereignSecretResolver(
             env=env,
             secret_store_dir=secret_store_dir / secret_scope,
-            materialization_root=materialization_root,
+            # Scope the plaintext materialization root per deployment so two
+            # deployments cannot collide on a shared root / basename.
+            materialization_root=materialization_root / secret_scope,
+            deployment_id=secret_scope,
         )
         executor = executor_for_fleet_host(adapter=adapter, env=env, host=host, secret_resolver=resolver)
     cache[cache_key] = executor

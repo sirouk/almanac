@@ -543,6 +543,9 @@ def handle_discord_interaction(
         content = "ArcLink handled that request."
     data: dict[str, Any] = {
         "content": content,
+        # Echoed user text may contain @everyone/@here/<@&role>; never let an
+        # interaction reply ping a guild channel based on attacker-supplied input.
+        "allowed_mentions": {"parse": []},
     }
     if str(turn.action or "") == "credentials_revealed" and parsed.get("chat_type") != "dm":
         data["flags"] = 64
@@ -600,7 +603,11 @@ class LiveDiscordTransport:
         """Send a followup message for a deferred interaction."""
         import json
         url = f"{self.DISCORD_API_BASE}/webhooks/{self.config.app_id}/{interaction_token}"
-        raw = self._post_json(url, {"content": content}, label="discord_followup")
+        raw = self._post_json(
+            url,
+            {"content": content, "allowed_mentions": {"parse": []}},
+            label="discord_followup",
+        )
         return json.loads(raw)
 
 

@@ -44,6 +44,12 @@ from arclink_secrets_regex import redact_then_truncate
 
 OPERATION_KIND = "pod_migration"
 DEFAULT_GC_DAYS = 7
+# A live migration that has sat in 'running' longer than this lease has been
+# abandoned by a crashed worker (the row is non-terminal so re-runs are otherwise
+# refused). Recovery rolls it back to a terminal failed state and releases the
+# idempotency row so the deployment can be migrated again.
+MIGRATION_RUNNING_LEASE_SECONDS_ENV = "ARCLINK_POD_MIGRATION_RUNNING_LEASE_SECONDS"
+DEFAULT_MIGRATION_RUNNING_LEASE_SECONDS = 3600
 ROOT_CAPTURE_OPT_IN_ENV = "ARCLINK_ACTION_WORKER_ALLOW_ROOT_MIGRATION_CAPTURE"
 MIGRATION_CAPTURE_HELPER_URL_ENV = "ARCLINK_MIGRATION_CAPTURE_HELPER_URL"
 MIGRATION_CAPTURE_HELPER_TOKEN_ENV = "ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN"
@@ -253,6 +259,33 @@ def _active_live_migration(
         row = dict(raw)
         if str(row.get("migration_id") or "") == str(exclude_migration_id or ""):
             continue
+        if _row_is_dry_run(row):
+            continue
+        return row
+    return None
+
+
+def _stranded_running_migration(conn: sqlite3.Connection, *, deployment_id: str) -> dict[str, Any] | None:
+    """Return a non-dry-run migration of this deployment still stuck in 'running'.
+
+    Lease-expiry filtering is left to _recover_stale_running_migration; this only
+    surfaces the candidate row.
+    """
+    clean = str(deployment_id or "").strip()
+    if not clean:
+        return None
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM arclink_pod_migrations
+        WHERE deployment_id = ?
+          AND status = 'running'
+        ORDER BY updated_at ASC, migration_id ASC
+        """,
+        (clean,),
+    ).fetchall()
+    for raw in rows:
+        row = dict(raw)
         if _row_is_dry_run(row):
             continue
         return row
@@ -535,9 +568,50 @@ def _copy_capture(source_root: Path, capture_dir: Path) -> dict[str, Any]:
     return {"files": files, "file_count": len(files)}
 
 
-def _materialize_capture(capture_dir: Path, target_root: Path) -> None:
+def _materialize_capture(capture_dir: Path, target_root: Path, *, source_root: Path | None = None) -> None:
     staged_root = capture_dir / "source-root"
     target_root.parent.mkdir(parents=True, exist_ok=True)
+
+    # H4: when the migration target root IS the live source root (a "current"
+    # in-place migration), the data already lives at target_root. The old
+    # rmtree-then-copytree sequence DESTROYED the live data first and would lose
+    # everything if the copy then failed. The staged capture is a faithful copy
+    # of that same source, so re-materialize ATOMICALLY: build the new tree in a
+    # sibling temp dir and os.replace it into place. A crash mid-copy leaves the
+    # original target_root untouched.
+    same_root = source_root is not None and _same_path(source_root, target_root)
+    if same_root:
+        if not staged_root.exists():
+            # Nothing was captured and the live data is already in place -- a
+            # destructive rebuild would be pure data loss. Leave target_root as-is.
+            target_root.mkdir(parents=True, exist_ok=True)
+            return
+        tmp_root = target_root.parent / f".{target_root.name}.arclink-materialize-{os.getpid()}"
+        if tmp_root.is_symlink() or tmp_root.is_file():
+            tmp_root.unlink()
+        elif tmp_root.exists():
+            shutil.rmtree(tmp_root)
+        shutil.copytree(staged_root, tmp_root, symlinks=True)
+        backup_root = target_root.parent / f".{target_root.name}.arclink-prev-{os.getpid()}"
+        if backup_root.exists() or backup_root.is_symlink():
+            if backup_root.is_symlink() or backup_root.is_file():
+                backup_root.unlink()
+            else:
+                shutil.rmtree(backup_root)
+        target_existed = target_root.exists() or target_root.is_symlink()
+        if target_existed:
+            os.replace(target_root, backup_root)
+        try:
+            os.replace(tmp_root, target_root)
+        except Exception:
+            # Restore the original tree if the swap-in failed.
+            if target_existed and not (target_root.exists() or target_root.is_symlink()):
+                os.replace(backup_root, target_root)
+            raise
+        if target_existed:
+            shutil.rmtree(backup_root, ignore_errors=True)
+        return
+
     if target_root.is_symlink() or target_root.is_file():
         target_root.unlink()
     elif target_root.exists():
@@ -546,6 +620,13 @@ def _materialize_capture(capture_dir: Path, target_root: Path) -> None:
         shutil.copytree(staged_root, target_root, symlinks=True)
     else:
         target_root.mkdir(parents=True, exist_ok=True)
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve(strict=False) == right.resolve(strict=False)
+    except OSError:
+        return str(left) == str(right)
 
 
 def _migration_capture_helper_payload(conn: sqlite3.Connection, row: Mapping[str, Any]) -> dict[str, Any]:
@@ -634,7 +715,11 @@ def _materialize_files(
     if _migration_capture_helper_config(env, require_for_docker=True):
         _run_migration_capture_helper("materialize", conn=conn, row=row, env=env)
         return
-    _materialize_capture(Path(str(row["capture_dir"])), Path(target_root))
+    _materialize_capture(
+        Path(str(row["capture_dir"])),
+        Path(target_root),
+        source_root=Path(str(row["source_state_root"])) if str(row.get("source_state_root") or "").strip() else None,
+    )
 
 
 def _default_verifier(
@@ -886,10 +971,57 @@ def _mark_rollback(
             "UPDATE arclink_deployment_placements SET status = 'removed', removed_at = ? WHERE placement_id = ?",
             (now, str(row["target_placement_id"])),
         )
-    conn.execute(
-        "UPDATE arclink_deployment_placements SET status = 'active', removed_at = '' WHERE placement_id = ?",
-        (str(row["source_placement_id"]),),
+    # H3: only re-mark the source placement ACTIVE if the source was actually
+    # brought back healthy. The source was stopped before the target was verified;
+    # if the rollback restart of the source FAILED, the source is NOT serving and
+    # flipping its placement to active would advertise a dead pod as live. In that
+    # case leave the placement removed, flag the migration for manual recovery, and
+    # alert -- never silently claim the source is back.
+    source_restart = (lifecycle_metadata or {}).get("source_restart") if isinstance(lifecycle_metadata, Mapping) else None
+    source_restart_failed = bool(
+        isinstance(source_restart, Mapping)
+        and str(source_restart.get("status") or "").strip().lower() not in {"", "completed"}
     )
+    rollback_payload["source_restart_verified"] = not source_restart_failed
+    if source_restart_failed:
+        rollback_payload["manual_recovery_required"] = True
+        # H3 (round 2): in the LIVE flow the source placement is still 'active'
+        # (it is never flipped off until success), so a guard like
+        # "WHERE status != 'active'" would NO-OP and leave a dead source
+        # advertised active. Act on the ACTUAL active source row: mark it removed
+        # (not-serving) so nothing routes to a pod that is down. Re-activation only
+        # happens on a verified restart in the else branch below.
+        conn.execute(
+            "UPDATE arclink_deployment_placements SET status = 'removed', removed_at = ? WHERE placement_id = ?",
+            (now, str(row["source_placement_id"])),
+        )
+        append_arclink_event(
+            conn,
+            subject_kind="deployment",
+            subject_id=str(row["deployment_id"]),
+            event_type="pod_migration_rollback_source_restart_failed",
+            metadata={
+                "migration_id": str(row["migration_id"]),
+                "source_placement_id": str(row["source_placement_id"]),
+                "source_restart": dict(source_restart) if isinstance(source_restart, Mapping) else {},
+            },
+            commit=False,
+        )
+        append_arclink_audit(
+            conn,
+            action="pod_migration_rollback_source_restart_failed",
+            actor_id="system:pod_migration",
+            target_kind="deployment",
+            target_id=str(row["deployment_id"]),
+            reason="source restart did not verify healthy during rollback; manual recovery required",
+            metadata={"migration_id": str(row["migration_id"]), "source_placement_id": str(row["source_placement_id"])},
+            commit=False,
+        )
+    else:
+        conn.execute(
+            "UPDATE arclink_deployment_placements SET status = 'active', removed_at = '' WHERE placement_id = ?",
+            (str(row["source_placement_id"]),),
+        )
     conn.execute(
         """
         UPDATE arclink_pod_migrations
@@ -1169,6 +1301,109 @@ def _result_from_row(row: Mapping[str, Any], *, idempotent_replay: bool = False,
     return result
 
 
+def _migration_running_lease_seconds(env: Mapping[str, str] | None) -> int:
+    source = dict(env) if env is not None else dict(os.environ)
+    raw = str(source.get(MIGRATION_RUNNING_LEASE_SECONDS_ENV) or "").strip()
+    if not raw:
+        return DEFAULT_MIGRATION_RUNNING_LEASE_SECONDS
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_MIGRATION_RUNNING_LEASE_SECONDS
+    return max(60, value)
+
+
+def _recover_stale_running_migration(
+    conn: sqlite3.Connection,
+    *,
+    row: Mapping[str, Any],
+    operation_key: str,
+    intent: Mapping[str, Any],
+    executor: ArcLinkExecutor,
+    env: Mapping[str, str] | None,
+) -> dict[str, Any] | None:
+    """Recover a migration stranded in 'running' by a crashed worker.
+
+    Returns the recovered (terminal) migration row when recovery ran, else None.
+
+    Safety: the source was stopped before the target was verified, so a stranded
+    run may have left BOTH source stopped and target half-up. Recovery performs a
+    best-effort rollback (restart source, tear down target), marks the migration
+    rolled_back/failed (terminal), and FAILS the idempotency row so a fresh
+    migration of the same deployment is no longer refused as "already running".
+    """
+    if str(row.get("status") or "") != "running":
+        return None
+    last_seen = _parse_iso(str(row.get("updated_at") or row.get("created_at") or ""))
+    if last_seen is None:
+        return None
+    age_seconds = (_utc() - last_seen).total_seconds()
+    if age_seconds < _migration_running_lease_seconds(env):
+        return None
+    error = f"ArcLink Pod migration lease expired after {int(age_seconds)}s in 'running' (stale worker recovery)"
+    # H6 (round 2): a stranded run may have already brought the target partway up
+    # before crashing. _rollback_lifecycle only tears the target down when it is
+    # handed a target_intent, so reconstruct it here from the stranded row's
+    # recorded target host/state-root. For an in-place ("current") migration the
+    # target IS the source and _rollback_lifecycle skips teardown on its own, so a
+    # None intent there is harmless -- only reconstruct for a cross-host target.
+    target_intent: dict[str, Any] | None = None
+    if str(row.get("target_host_id") or "") != str(row.get("source_host_id") or ""):
+        try:
+            target_intent = _render_target_intent(
+                conn,
+                deployment_id=str(row["deployment_id"]),
+                target_host=_host(conn, str(row["target_host_id"])),
+                fallback_base=str(Path(str(row.get("target_state_root") or "")).parent),
+                env=env,
+            )
+        except Exception:
+            # Best-effort recovery: if the intent cannot be rebuilt (e.g. the
+            # target host is gone), proceed without target teardown rather than
+            # leaving the migration stranded in 'running' forever.
+            target_intent = None
+    # The stranded run had already stopped the source (that is the first live
+    # step), so attempt to restart it during rollback.
+    lifecycle_metadata = _rollback_lifecycle(
+        executor=executor,
+        row=row,
+        operation_key=operation_key,
+        target_intent=target_intent,
+        source_stopped=True,
+    )
+    _mark_rollback(
+        conn,
+        row=row,
+        verification={"healthy": False, "error": error, "recovered_from": "stale_running_lease"},
+        error=error,
+        lifecycle_metadata=lifecycle_metadata,
+    )
+    recovered = _migration_row(conn, str(row["migration_id"])) or dict(row)
+    try:
+        fail_arclink_operation_idempotency(
+            conn,
+            operation_kind=OPERATION_KIND,
+            idempotency_key=operation_key,
+            intent=intent,
+            error=error,
+            result=_result_from_row(recovered),
+        )
+    except (KeyError, ValueError):
+        # The idempotency row may be absent or already terminal -- the migration
+        # row is now terminal regardless, which is what unblocks future migrations.
+        pass
+    append_arclink_audit(
+        conn,
+        action="pod_migration_stale_lease_recovered",
+        actor_id="system:pod_migration",
+        target_kind="deployment",
+        target_id=str(row["deployment_id"]),
+        reason=error,
+        metadata={"migration_id": str(row["migration_id"]), "age_seconds": int(age_seconds)},
+    )
+    return recovered
+
+
 def migrate_pod(
     conn: sqlite3.Connection,
     *,
@@ -1185,6 +1420,31 @@ def migrate_pod(
     days: int | None = None
     if not dry_run:
         days = _retention_days_from_config(retention_days, env)
+        # H6: before doing anything, reclaim any migration of this deployment that
+        # a crashed worker stranded in 'running'. Otherwise the stale non-terminal
+        # row blocks every future migration (either as "already running" for the
+        # same id, or as the active-migration blocker for a fresh id) -- the
+        # deployment can never be migrated again until manual intervention.
+        stranded = _stranded_running_migration(conn, deployment_id=str(deployment_id or "").strip())
+        if stranded is not None:
+            recovered = _recover_stale_running_migration(
+                conn,
+                row=stranded,
+                operation_key=str(stranded["operation_idempotency_key"] or f"arclink:migration:{stranded['migration_id']}"),
+                intent=_operation_intent(stranded, dry_run=False),
+                executor=executor,
+                env=env,
+            )
+            # H6 NEW-BUG (round 2): recovery returns None when the running
+            # migration is NOT stale (its lease has not expired) -- i.e. another
+            # worker is actively migrating this deployment right now. We must NOT
+            # fall through into the migration body: re-entering would either trip
+            # "already running" (for the same id) or hit the generic exception
+            # path and ROLL BACK the fresh, healthy live migration. Bail out
+            # cleanly and do nothing destructive; only proceed once a stale row
+            # has actually been cleared to a terminal state.
+            if recovered is None:
+                return _result_from_row(stranded, idempotent_replay=True, dry_run=dry_run)
     existing = _migration_row(conn, str(migration_id or "").strip()) if str(migration_id or "").strip() else None
     if not dry_run and (
         existing is None

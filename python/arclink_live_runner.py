@@ -655,6 +655,7 @@ def run_live_proof(
     skip_ports: bool = True,
     docker_binary: str = "docker",
     compose_runner: Any | None = None,
+    daemon_runner: Any | None = None,
     journey: str = "hosted",
 ) -> LiveProofResult:
     """Execute live proof orchestration.
@@ -672,12 +673,18 @@ def run_live_proof(
     source = dict(env) if env is not None else dict(os.environ)
 
     # Phase 1: Host readiness
+    # The bounded docker-daemon liveness ping is only meaningful for an actual
+    # live proof (you cannot deploy without a running daemon). A dry-run plan must
+    # not be gated on the daemon being up, so skip the ping unless live execution
+    # was requested.
     readiness = run_readiness(
         state_root=str(source.get("ARCLINK_STATE_ROOT") or "").strip() or None,
         env=source,
         skip_ports=skip_ports,
         docker_binary=docker_binary,
         compose_runner=compose_runner,
+        daemon_runner=daemon_runner,
+        skip_docker_daemon=not bool(live),
     )
 
     # Phase 2: Provider diagnostics

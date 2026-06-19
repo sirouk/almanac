@@ -354,11 +354,21 @@ def list_fleet_hosts(conn: sqlite3.Connection, *, status: str = "") -> list[dict
             host["asu_consumed"] = float(active or inv["asu_consumed"] or 0)
             if host["control_plane_reserve"]:
                 host["asu_capacity"] = min(host["asu_capacity"], float(host["effective_capacity_slots"]))
-            host["asu_available"] = float(host["asu_capacity"]) - float(host["asu_consumed"])
+            # Capacity (standard units) and load (active placement COUNT) are
+            # separate truths: a host whose placement count exceeds its standard
+            # unit capacity is OVERCOMMITTED, not "negatively available". Clamp the
+            # schedulable surface at >= 0 so a negative number can never make a host
+            # look like it has phantom capacity (or corrupt metrics), and surface the
+            # overcommit as an explicit flag instead.
+            raw_available = float(host["asu_capacity"]) - float(host["asu_consumed"])
+            host["asu_available"] = max(0.0, raw_available)
+            host["asu_overcommitted"] = raw_available < 0
         else:
             host["asu_capacity"] = float(host["effective_capacity_slots"])
             host["asu_consumed"] = float(host["observed_load"])
-            host["asu_available"] = float(host["effective_capacity_slots"]) - float(host["observed_load"])
+            raw_available = float(host["effective_capacity_slots"]) - float(host["observed_load"])
+            host["asu_available"] = max(0.0, raw_available)
+            host["asu_overcommitted"] = raw_available < 0
         hosts.append(host)
     return hosts
 
@@ -398,7 +408,8 @@ def fleet_capacity_summary(conn: sqlite3.Connection) -> dict[str, Any]:
                 "control_plane_reserve": bool(h.get("control_plane_reserve")),
                 "asu_capacity": float(h.get("asu_capacity") or 0),
                 "asu_consumed": float(h.get("asu_consumed") or 0),
-                "asu_available": float(h.get("asu_available") or 0),
+                "asu_available": max(0.0, float(h.get("asu_available") or 0)),
+                "asu_overcommitted": bool(h.get("asu_overcommitted")),
             }
             for h in hosts
         ],
@@ -685,7 +696,10 @@ def _filter_placement_candidates(
     placement_strategy = strategy or _placement_strategy()
     result = []
     for h in hosts:
-        asu_available = float(h.get("asu_available") or (float(h.get("asu_capacity") or 0) - float(h.get("asu_consumed") or 0)))
+        # Clamp at >= 0: an overcommitted host (placement COUNT > standard unit
+        # capacity) must never present a negative "available" that could read as
+        # phantom schedulable capacity.
+        asu_available = max(0.0, float(h.get("asu_available") or (float(h.get("asu_capacity") or 0) - float(h.get("asu_consumed") or 0))))
         headroom = int(h.get("headroom") if h.get("headroom") is not None else _host_headroom(h))
         candidate = {**h, "headroom": headroom, "asu_available": asu_available}
         if not host_is_placement_eligible(candidate, strategy=placement_strategy):
@@ -726,7 +740,10 @@ def _placement_rejection_summary(
         if int(h.get("drain", 0)):
             reasons.add("draining")
             continue
-        asu_available = float(h.get("asu_available") or (float(h.get("asu_capacity") or 0) - float(h.get("asu_consumed") or 0)))
+        # Clamp at >= 0: an overcommitted host (placement COUNT > standard unit
+        # capacity) must never present a negative "available" that could read as
+        # phantom schedulable capacity.
+        asu_available = max(0.0, float(h.get("asu_available") or (float(h.get("asu_capacity") or 0) - float(h.get("asu_consumed") or 0))))
         headroom = int(h.get("headroom") if h.get("headroom") is not None else _host_headroom(h))
         if (strategy or _placement_strategy()) == "standard_unit":
             if asu_available < 1:

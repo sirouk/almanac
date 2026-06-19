@@ -15,6 +15,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python"))
 import arclink_live_runner as live_runner_mod
 from arclink_live_runner import LiveProofResult, run_live_proof, main, _collect_missing_env
 from arclink_live_journey import build_journey
+
+
+def _ok_daemon_runner(*args, **kwargs):
+    """Stand in for a reachable Docker daemon so live=True orchestration tests
+    (which have docker CLI but no running daemon) do not fail the bounded
+    `docker info` liveness ping."""
+    return SimpleNamespace(returncode=0, stdout="24.0.7\n", stderr="")
 # Minimal env that satisfies host readiness (not journey steps)
 _BASE_ENV: dict[str, str] = {
     "ARCLINK_PRODUCT_NAME": "test",
@@ -260,6 +267,7 @@ class TestWorkspaceProofJourney(unittest.TestCase):
                 runners=runners,
                 artifact_dir=tmpdir,
                 journey="workspace",
+                daemon_runner=_ok_daemon_runner,
             )
             self.assertEqual(result.status, "live_executed")
             self.assertEqual(result.exit_code, 0)
@@ -313,6 +321,7 @@ class TestWorkspaceProofJourney(unittest.TestCase):
                     live=True,
                     artifact_dir=tmpdir,
                     journey="workspace",
+                    daemon_runner=_ok_daemon_runner,
                 )
         finally:
             live_runner_mod.subprocess.run = original_run
@@ -492,6 +501,7 @@ class TestFakeRunners(unittest.TestCase):
             result = run_live_proof(
                 env=_FULL_ENV, skip_ports=True, live=True,
                 runners=runners, artifact_dir=tmpdir,
+                daemon_runner=_ok_daemon_runner,
             )
             self.assertEqual(result.status, "live_executed")
             self.assertEqual(result.exit_code, 0)

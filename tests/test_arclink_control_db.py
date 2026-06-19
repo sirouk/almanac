@@ -716,6 +716,110 @@ def test_wave4_fresh_schema_rejects_invalid_high_value_status() -> None:
     print("PASS test_wave4_fresh_schema_rejects_invalid_high_value_status")
 
 
+def test_mark_notification_error_does_not_clobber_delivered_row() -> None:
+    # C2: a late/duplicate error must NOT overwrite a delivered row's clean state.
+    mod = load_module(CONTROL_PY, "arclink_control_db_c2_delivered_guard_test")
+    conn = memory_db(mod)
+    nid = mod.queue_notification(
+        conn,
+        target_kind="public-agent-turn",
+        target_id="tg:1",
+        channel_kind="telegram",
+        message="hi",
+    )
+    mod.mark_notification_delivered(conn, nid)
+    delivered = conn.execute(
+        "SELECT delivered_at, delivery_error, attempt_count FROM notification_outbox WHERE id = ?",
+        (nid,),
+    ).fetchone()
+    expect(str(delivered["delivered_at"] or "").strip() != "", dict(delivered))
+    expect(delivered["delivery_error"] is None, dict(delivered))
+    delivered_at_before = delivered["delivered_at"]
+
+    # A late error (e.g. a recycled worker) must be a no-op on the delivered row.
+    mod.mark_notification_error(conn, nid, "late duplicate failure")
+    after_error = conn.execute(
+        "SELECT delivered_at, delivery_error, attempt_count, next_attempt_at FROM notification_outbox WHERE id = ?",
+        (nid,),
+    ).fetchone()
+    expect(after_error["delivered_at"] == delivered_at_before, dict(after_error))
+    expect(after_error["delivery_error"] is None, dict(after_error))
+    expect(int(after_error["attempt_count"] or 0) == 0, dict(after_error))
+
+    # A second delivered-mark must not re-stamp delivered_at (idempotent).
+    mod.mark_notification_delivered(conn, nid)
+    after_redeliver = conn.execute(
+        "SELECT delivered_at FROM notification_outbox WHERE id = ?", (nid,)
+    ).fetchone()
+    expect(after_redeliver["delivered_at"] == delivered_at_before, dict(after_redeliver))
+
+    # A non-delivered row still records the error normally (guard does not over-block).
+    nid2 = mod.queue_notification(
+        conn, target_kind="operator", target_id="operator", channel_kind="tui-only", message="x"
+    )
+    mod.mark_notification_error(conn, nid2, "real failure")
+    err_row = conn.execute(
+        "SELECT delivery_error, attempt_count FROM notification_outbox WHERE id = ?", (nid2,)
+    ).fetchone()
+    expect(err_row["delivery_error"] == "real failure", dict(err_row))
+    expect(int(err_row["attempt_count"] or 0) == 1, dict(err_row))
+    print("PASS test_mark_notification_error_does_not_clobber_delivered_row")
+
+
+def test_operator_hiccup_arm_resolve_is_atomic_and_single_outcome() -> None:
+    # H1: interleaved resolve/report on one key resolves to a single deterministic
+    # outcome, and the arm-check + audit-insert run in one BEGIN IMMEDIATE txn.
+    mod = load_module(CONTROL_PY, "arclink_control_db_h1_operator_hiccup_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        cfg = config_for_root(mod, root)
+        conn = mod.connect_db(cfg)
+        try:
+            key = "h1-test-key"
+            # First report arms the alert + queues one operator notice.
+            first = mod.report_operator_hiccup(
+                conn, cfg, source="unit", key=key, message="down"
+            )
+            expect(int(first) > 0, str(first))
+            # A second report on the SAME key while still armed is deduped (no notice).
+            second = mod.report_operator_hiccup(
+                conn, cfg, source="unit", key=key, message="down again"
+            )
+            expect(int(second) == 0, str(second))
+            armed = conn.execute(
+                "SELECT COUNT(*) AS c FROM arclink_audit_log WHERE action = ?",
+                (f"{mod.OPERATOR_HICCUP_AUDIT_PREFIX}{key}",),
+            ).fetchone()
+            expect(int(armed["c"]) == 1, dict(armed))
+
+            # Resolve re-arms; a second resolve is a no-op.
+            expect(mod.resolve_operator_hiccup(conn, cfg, source="unit", key=key) is True, "first resolve must apply")
+            expect(
+                mod.resolve_operator_hiccup(conn, cfg, source="unit", key=key) is False,
+                "second resolve on a not-armed key must be a no-op",
+            )
+
+            # After resolve, a fresh report pages again (re-arm worked).
+            third = mod.report_operator_hiccup(conn, cfg, source="unit", key=key, message="down 3")
+            expect(int(third) > 0, str(third))
+
+            # Same-second resolve-then-report ordering must be deterministic: the
+            # audit query orders by rowid DESC so the latest action wins even when
+            # created_at collides at whole-second resolution.
+            mod.resolve_operator_hiccup(conn, cfg, source="unit", key=key)
+            mod.report_operator_hiccup(conn, cfg, source="unit", key=key, message="down 4")
+            expect(
+                mod._operator_hiccup_already_armed(conn, key=key) is True,
+                "after resolve->report the key must read as armed (rowid tiebreak)",
+            )
+            # And a still-armed report dedups.
+            dup = mod.report_operator_hiccup(conn, cfg, source="unit", key=key, message="dup")
+            expect(int(dup) == 0, str(dup))
+        finally:
+            conn.close()
+    print("PASS test_operator_hiccup_arm_resolve_is_atomic_and_single_outcome")
+
+
 if __name__ == "__main__":
     test_config_loader_preserves_multi_token_values_and_export_prefix()
     test_explicit_missing_config_file_fails_loudly_but_devnull_remains_sentinel()
@@ -737,3 +841,5 @@ if __name__ == "__main__":
     test_wave4_schema_indexes_exist_and_totp_active_factor_is_unique()
     test_wave4_status_checks_and_relationship_drift_are_reported()
     test_wave4_fresh_schema_rejects_invalid_high_value_status()
+    test_mark_notification_error_does_not_clobber_delivered_row()
+    test_operator_hiccup_arm_resolve_is_atomic_and_single_outcome()

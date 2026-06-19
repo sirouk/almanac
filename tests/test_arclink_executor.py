@@ -140,17 +140,32 @@ def test_secret_resolvers_validate_refs_and_hide_material() -> None:
         raise AssertionError("expected missing secret ref to fail")
 
     with tempfile.TemporaryDirectory() as tmp:
-        file_resolver = mod.FileMaterializingSecretResolver(lambda ref: f"value-for-{ref}", Path(tmp))
+        file_resolver = mod.FileMaterializingSecretResolver(
+            lambda ref: f"value-for-{ref}", Path(tmp), deployment_id="arcdep_demo"
+        )
         file_resolved = file_resolver.materialize(secret_ref, "/run/secrets/nextcloud_db_password")
         expect(file_resolved.target_path == "/run/secrets/nextcloud_db_password", str(file_resolved))
-        expect((Path(tmp) / "nextcloud_db_password").read_text(encoding="utf-8") == f"value-for-{secret_ref}", tmp)
-        parent_mode = stat.S_IMODE(Path(tmp).stat().st_mode)
-        file_mode = stat.S_IMODE((Path(tmp) / "nextcloud_db_password").stat().st_mode)
-        expect(parent_mode == 0o700, oct(parent_mode))
+        # The plaintext source copy is scoped to a per-run subdir of the
+        # materialization root (C4): it is NOT written directly at
+        # root/<basename>, where two deployments would collide.
+        source = Path(file_resolved.source_path)
+        expect(source.read_text(encoding="utf-8") == f"value-for-{secret_ref}", str(source))
+        expect(source.parent.parent == Path(tmp), str(source))
+        expect(source.parent != Path(tmp), str(source))
+        # The deployment id is encoded in the filename so cross-deployment copies
+        # are distinguishable.
+        expect(source.name == "arcdep_demo-nextcloud_db_password", source.name)
+        expect(not (Path(tmp) / "nextcloud_db_password").exists(), "secret must not land unscoped at root/<basename>")
+        run_dir_mode = stat.S_IMODE(source.parent.stat().st_mode)
+        file_mode = stat.S_IMODE(source.stat().st_mode)
         expect(file_mode == 0o600, oct(file_mode))
+        expect(run_dir_mode & 0o077 == 0, oct(run_dir_mode))
         expect(
-            not any(path.name.startswith(".nextcloud_db_password.") and not path.name.endswith(".lock") for path in Path(tmp).iterdir()),
-            tmp,
+            not any(
+                path.name.startswith(".nextcloud_db_password.") and not path.name.endswith(".lock")
+                for path in source.parent.iterdir()
+            ),
+            str(source.parent),
         )
     print("PASS test_secret_resolvers_validate_refs_and_hide_material")
 
@@ -1699,12 +1714,17 @@ def test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_resta
         result = executor.docker_compose_apply(
             mod.DockerComposeApplyRequest(deployment_id="dep_1", intent=intent, idempotency_key="cleanup-1")
         )
-        secret_copy = root / "materialized" / "nextcloud_db_password"
+        materialized_root = root / "materialized"
         compose_secret_copy = Path(result.compose_file).parent / "secrets" / "nextcloud_db_password"
         compose_doc = json.loads(Path(result.compose_file).read_text(encoding="utf-8"))
         remote_prepare = json.loads((Path(result.compose_file).parent / "remote-prepare.json").read_text(encoding="utf-8"))
         expect(result.status == "applied", str(result))
-        expect(secret_copy.is_file(), f"compose secret source must remain for docker restart: {secret_copy}")
+        # C4: the intermediate plaintext SOURCE copy in the materialization root
+        # must be cleaned up on SUCCESS (not leaked). The running container
+        # references the compose-visible copy under config/secrets, which must
+        # remain for a docker restart.
+        leaked = [p for p in materialized_root.rglob("*") if p.is_file()] if materialized_root.exists() else []
+        expect(not leaked, f"materialized source secret copies must not leak on success: {leaked}")
         expect(compose_secret_copy.is_file(), f"compose-visible secret copy must remain for docker restart: {compose_secret_copy}")
         expect(compose_doc["secrets"]["nextcloud_db_password"]["file"] == str(compose_secret_copy), str(compose_doc))
         expect(
@@ -1716,7 +1736,6 @@ def test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_resta
             in remote_prepare["paths"],
             str(remote_prepare),
         )
-        expect(secret_copy.stat().st_mode & 0o777 == 0o600, oct(secret_copy.stat().st_mode & 0o777))
         expect(compose_secret_copy.stat().st_mode & 0o777 == 0o600, oct(compose_secret_copy.stat().st_mode & 0o777))
     print("PASS test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_restart")
 

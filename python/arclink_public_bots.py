@@ -2147,13 +2147,15 @@ def _agent_identity_update_reply(
     updated = result["deployment"]
     label = str(updated.get("agent_name") or _agent_label(updated)).strip()
     title = str(updated.get("agent_title") or "").strip()
-    title_line = f", {title}" if title else ""
+    safe_label = _safe_agent_name(label)
+    safe_title = _safe_agent_name(title)
+    title_line = f", {safe_title}" if safe_title else ""
     return _turn(
         channel=channel,
         channel_identity=channel_identity,
         action="agent_identity_updated",
         reply=(
-            f"Agent identity updated: {label}{title_line}.\n\n"
+            f"Agent identity updated: {safe_label}{title_line}.\n\n"
             "Raven recorded the change; managed context will carry the new identity on the next refresh."
         ),
         session=session,
@@ -3121,13 +3123,16 @@ def _retire_agent_start_reply(
             buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
         )
     item, label = match
+    # Display-only escape of the user-controlled agent name; the raw ``label`` is
+    # still used for slug/copy/typed-confirmation matching below.
+    safe_label = _safe_agent_name(label)
     status = str(item.get("status") or "")
     if status in ARCLINK_PUBLIC_BOT_DEPLOYMENT_RETIRING_STATUSES:
         return _turn(
             channel=channel,
             channel_identity=channel_identity,
             action="retire_agent_already_running",
-            reply=f"`{label}` is already retiring. Chat routing is closed for that Agent, and the pod teardown worker will preserve its state for restore.",
+            reply=f"`{safe_label}` is already retiring. Chat routing is closed for that Agent, and the pod teardown worker will preserve its state for restore.",
             session=session,
             deployment=item,
             buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
@@ -3137,7 +3142,7 @@ def _retire_agent_start_reply(
             channel=channel,
             channel_identity=channel_identity,
             action="retire_agent_already_retired",
-            reply=f"`{label}` is already retired. Its preserved state remains on the retention rail until an operator or restore flow removes it permanently.",
+            reply=f"`{safe_label}` is already retired. Its preserved state remains on the retention rail until an operator or restore flow removes it permanently.",
             session=session,
             deployment=item,
             buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
@@ -3147,16 +3152,17 @@ def _retire_agent_start_reply(
             channel=channel,
             channel_identity=channel_identity,
             action="retire_agent_not_ready",
-            reply=f"`{label}` is `{status.replace('_', ' ')}` right now. Raven will only retire live Agents from chat; use `/raven status` or operator rails for provisioning failures.",
+            reply=f"`{safe_label}` is `{status.replace('_', ' ')}` right now. Raven will only retire live Agents from chat; use `/raven status` or operator rails for provisioning failures.",
             session=session,
             deployment=item,
             buttons=(_button("Check Status", command="/status", style="secondary"),),
         )
+    agent_slug = _agent_slug(label)
     data = {
         "deployment_id": str(item.get("deployment_id") or ""),
         "user_id": user_id,
         "agent_label": label,
-        "agent_slug": _agent_slug(label),
+        "agent_slug": agent_slug,
         "prefix": str(item.get("prefix") or ""),
         "requested_at": utc_now_iso(),
         "renewal_policy": "cancel_agent_renewal_at_period_end",
@@ -3178,10 +3184,10 @@ def _retire_agent_start_reply(
         channel_identity=channel_identity,
         action="retire_agent_confirm_name",
         reply=(
-            f"Retiring `{label}` will stop Raven chat routing and new model spend immediately. "
+            f"Retiring `{safe_label}` will stop Raven chat routing and new model spend immediately. "
             "The pod state is preserved for restore; renewal is recorded to stop at the period end with no automatic proration. "
             "Consumed token use stays final, and unused purchased fuel stays preserved or transferable before any permanent delete.\n\n"
-            f"Type `{label}` to continue."
+            f"To continue, tap Copy Agent Name and send it back, or type the selector `{agent_slug}`."
         ),
         session=updated,
         deployment=item,
@@ -3207,6 +3213,14 @@ def _handle_retire_agent_workflow(
         return None
     data = _retire_agent_workflow_data(session)
     label = str(data.get("agent_label") or "this Agent")
+    # Display-only escape of the user-controlled agent name for reply text; the
+    # raw ``label`` is still used for typed-confirmation matching.
+    safe_label = _safe_agent_name(label)
+    # The selector slug is ASCII-safe (no markdown metacharacters) so it is both
+    # injection-inert and exactly typeable -- it is what we instruct the user to
+    # type, and ``_retire_agent_typed_name_matches`` accepts it (alongside the
+    # raw name from the Copy button).
+    agent_slug = str(data.get("agent_slug") or _agent_slug(label))
     if command in ARCLINK_PUBLIC_BOT_CANCEL_COMMANDS or command in ARCLINK_PUBLIC_BOT_RETIRE_CANCEL_COMMANDS:
         updated = _update_session_metadata(
             conn,
@@ -3218,7 +3232,7 @@ def _handle_retire_agent_workflow(
             channel=channel,
             channel_identity=channel_identity,
             action="retire_agent_cancelled",
-            reply=f"`{label}` stays active. No routing, billing, or pod state changed.",
+            reply=f"`{safe_label}` stays active. No routing, billing, or pod state changed.",
             session=updated,
             deployment=deployment,
             buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
@@ -3231,10 +3245,13 @@ def _handle_retire_agent_workflow(
                 channel=channel,
                 channel_identity=channel_identity,
                 action="retire_agent_name_mismatch",
-                reply=f"Type `{label}` exactly to continue, or send `cancel` to keep the Agent active.",
+                reply=f"That did not match `{safe_label}`. Tap Copy Agent Name and send it back, or type the selector `{agent_slug}`, or send `cancel` to keep the Agent active.",
                 session=session,
                 deployment=deployment,
-                buttons=(_button("Cancel", command="/cancel-retire-agent", style="secondary"),),
+                buttons=(
+                    _button("Copy Agent Name", copy_text=label),
+                    _button("Cancel", command="/cancel-retire-agent", style="secondary"),
+                ),
             )
         updated_data = dict(data)
         updated_data["typed_confirmation_at"] = utc_now_iso()
@@ -3252,7 +3269,7 @@ def _handle_retire_agent_workflow(
             channel_identity=channel_identity,
             action="retire_agent_final_confirm",
             reply=(
-                f"Final check: retire `{label}` now?\n\n"
+                f"Final check: retire `{safe_label}` now?\n\n"
                 "Raven will close chat routing, cancel undelivered queued turns, suspend new model spend, queue state-preserving teardown, and record renewal/no-proration policy for billing rails."
             ),
             session=updated,
@@ -3268,7 +3285,7 @@ def _handle_retire_agent_workflow(
                 channel=channel,
                 channel_identity=channel_identity,
                 action="retire_agent_waiting_final_confirm",
-                reply=f"Use `Yes, Retire Agent` to retire `{label}`, or `No, Cancel` to keep it active.",
+                reply=f"Use `Yes, Retire Agent` to retire `{safe_label}`, or `No, Cancel` to keep it active.",
                 session=session,
                 deployment=deployment,
                 buttons=(
@@ -3301,7 +3318,7 @@ def _handle_retire_agent_workflow(
                 buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
             )
         next_line = (
-            f"\n\nFocus moved to `{_agent_label(next_deployment, conn=conn)}`."
+            f"\n\nFocus moved to `{_safe_agent_name(_agent_label(next_deployment, conn=conn))}`."
             if next_deployment is not None
             else "\n\nNo other live Agent is at the helm. Add or restore an Agent when you are ready."
         )
@@ -3311,7 +3328,7 @@ def _handle_retire_agent_workflow(
             channel_identity=channel_identity,
             action="retire_agent_requested",
             reply=(
-                f"`{label}` is retired from active chat. New routing and model spend are stopped, and state-preserving teardown is queued."
+                f"`{safe_label}` is retired from active chat. New routing and model spend are stopped, and state-preserving teardown is queued."
                 f"{pending_line}\n\n"
                 "Billing policy recorded: stop this Agent's renewal at period end, no automatic proration, consumed tokens final, unused purchased fuel preserved or transferable before permanent delete."
                 f"{next_line}"
@@ -4116,6 +4133,7 @@ def _aboard_freeform_reply(
     so Telegram/Discord webhook handlers do not block on model runtime.
     """
     label = _agent_label(deployment, index=0, conn=conn)
+    safe_label = _safe_agent_name(label)
     raven = bot_display_name or ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME
     access = _deployment_access(deployment)
     helm = _hermes_dashboard_url(access)
@@ -4135,7 +4153,7 @@ def _aboard_freeform_reply(
     if include_bridge_intro:
         lines.extend(
             [
-                f"From now on, your normal messages in this channel will be routed to your active Hermes Agent, **{label}**.",
+                f"From now on, your normal messages in this channel will be routed to your active Hermes Agent, **{safe_label}**.",
                 "Use `/raven` any time for ArcLink controls and Hermes Agent selection. Bare slash commands belong to the Hermes Agent at the helm.",
                 "",
             ]
@@ -5200,30 +5218,25 @@ def _share_create_reply(
             note="I need a folder inside `vault/` (Drive) or `workspace/` (Code), not the root itself.",
         )
     resource_kind, resource_root = kind_root
+    # Account-enumeration hardening: never let the reply distinguish an unknown
+    # recipient from a registered one (or from the owner's own account). For any
+    # recipient that does not resolve to a *different* existing Captain, return a
+    # single generic "if that Captain exists, it is staged for your approval"
+    # response without creating a grant. The real existence/authorization check
+    # is deferred to approval time, where it is already enforced.
     try:
         recipient_user = _resolve_share_recipient_user_id(conn, recipient_identity=clean_recipient)
     except (KeyError, ArcLinkApiAuthError):
+        recipient_user = ""
+    if not recipient_user or recipient_user == owner_user:
         return _turn(
             channel=channel,
             channel_identity=channel_identity,
-            action="share_create_recipient_unknown",
+            action="share_create_staged",
             reply=(
-                "I could not find an ArcLink Captain for that address. "
-                "Check the email or account ID and run `/share-create` again."
-            ),
-            session=session,
-            deployment=deployment,
-            buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
-        )
-    if recipient_user == owner_user:
-        return _turn(
-            channel=channel,
-            channel_identity=channel_identity,
-            action="share_create_same_account",
-            reply=(
-                "That address is your own account. Your whole Crew already shares the "
-                "**Fleet** folder in Drive and Code — drop the material there and every "
-                "Agent in your fleet converges on it automatically."
+                "If that Captain exists, the share is staged for your approval. "
+                "Nothing leaves your Pod until you approve it, and they can never reshare it.\n\n"
+                "Approve or deny it from your staged shares when you are ready."
             ),
             session=session,
             deployment=deployment,
@@ -5256,16 +5269,20 @@ def _share_create_reply(
         )
     grant = dict((result.payload or {}).get("grant") or {})
     grant_id = str(grant.get("grant_id") or "")
-    label = str(grant.get("display_name") or grant.get("resource_path") or share_path)
-    access_label = "read/write" if str(grant.get("access_mode") or "") == "read_write" else "read-only"
+    # Account-enumeration hardening: the LEAD text must be byte-for-byte identical
+    # to the unknown/self case above -- no resource label, no access mode, no
+    # grant id, no recipient confirmation -- so an attacker cannot tell from the
+    # reply whether the recipient exists. The Approve/Deny buttons carry the grant
+    # id (an unavoidable structural element for a real staged grant); the visible
+    # sentence stays generic.
     return _turn(
         channel=channel,
         channel_identity=channel_identity,
         action="share_create_staged",
         reply=(
-            f"Staged. `{label}` is ready to open to that Captain as a {access_label} Linked resource. "
+            "If that Captain exists, the share is staged for your approval. "
             "Nothing leaves your Pod until you approve it, and they can never reshare it.\n\n"
-            f"Release it with `/share-approve {grant_id}` or close it with `/share-deny {grant_id}`. In an active Agent chat, `/raven share_approve {grant_id}` and `/raven share_deny {grant_id}` route through Raven explicitly."
+            "Approve or deny it from your staged shares when you are ready."
         ),
         session=session,
         deployment=deployment,
@@ -5478,7 +5495,9 @@ def _crew_training_review_reply(
     if isinstance(crew_agents, list):
         for item in crew_agents[:6]:
             if isinstance(item, Mapping):
-                agent_lines.append(f"- {item.get('agent_name', '')} - {item.get('agent_title', '')}")
+                agent_lines.append(
+                    f"- {_safe_agent_name(str(item.get('agent_name', '')))} - {_safe_agent_name(str(item.get('agent_title', '')))}"
+                )
     agents_block = "\n\nCrew shape:\n" + "\n".join(agent_lines) if agent_lines else ""
     return _turn(
         channel=channel,
@@ -6109,8 +6128,8 @@ def _academy_status_lines(status: Mapping[str, Any]) -> list[str]:
     for item in agents[:8]:
         if not isinstance(item, Mapping):
             continue
-        name = str(item.get("agent_name") or item.get("deployment_id") or "Agent")
-        title = str(item.get("agent_title") or "").strip()
+        name = _safe_agent_name(str(item.get("agent_name") or item.get("deployment_id") or "Agent"))
+        title = _safe_agent_name(str(item.get("agent_title") or "").strip())
         status_label = str(item.get("status") or "not_started")
         source_count = int(item.get("source_count") or 0)
         suffix = f" — {title}" if title else ""

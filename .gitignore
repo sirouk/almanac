@@ -49,3 +49,5 @@ research/canon/phase1/*.prompt.txt
 research/canon/**/driver.log
 # stray sqlite in-memory artifact (bug: sqlite3.connect(":memory:") wrote a file)
 :memory:
+research/canon/phase1/*.diff
+research/canon/phase1/*.out

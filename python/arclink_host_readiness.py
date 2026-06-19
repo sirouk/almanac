@@ -71,6 +71,41 @@ def check_docker(*, docker_binary: str = "docker") -> ReadinessCheck:
     return ReadinessCheck(name="docker", ok=True, detail=path)
 
 
+DaemonRunner = Callable[..., "subprocess.CompletedProcess[str]"]
+
+
+def check_docker_daemon(*, docker_binary: str = "docker", runner: "DaemonRunner | None" = None) -> ReadinessCheck:
+    """Verify the Docker daemon actually answers, not just that the CLI exists.
+
+    ``shutil.which`` only proves the client binary is installed; a host whose
+    daemon is dead/unreachable would still pass that check and then fail every
+    real deploy. Ping the daemon with a bounded ``docker info`` and fail on a
+    nonzero exit or a timeout.
+    """
+    path = shutil.which(docker_binary)
+    if path is None:
+        return ReadinessCheck(name="docker_daemon", ok=False, detail=f"{docker_binary} not found in PATH")
+    run = runner or subprocess.run
+    try:
+        result = run(
+            [docker_binary, "info", "--format", "{{.ServerVersion}}"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return ReadinessCheck(name="docker_daemon", ok=False, detail="docker daemon did not respond within 10s")
+    except (OSError, subprocess.SubprocessError) as exc:
+        return ReadinessCheck(name="docker_daemon", ok=False, detail=f"docker daemon unavailable: {exc}")
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "docker info failed").strip()
+        return ReadinessCheck(name="docker_daemon", ok=False, detail=detail[:240] or "docker daemon not reachable")
+    detail = (result.stdout or "docker daemon reachable").strip()
+    return ReadinessCheck(name="docker_daemon", ok=True, detail=detail[:240])
+
+
 ComposeRunner = Callable[..., subprocess.CompletedProcess[str]]
 
 
@@ -98,7 +133,23 @@ def check_docker_compose(*, compose_binary: str = "docker", runner: ComposeRunne
     return ReadinessCheck(name="docker_compose", ok=True, detail=detail[:240])
 
 
+def _port_is_serving(port: int) -> bool:
+    """True when something is already accepting connections on the port."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            return s.connect_ex(("127.0.0.1", port)) == 0
+    except OSError:
+        return False
+
+
 def check_port_available(port: int) -> ReadinessCheck:
+    """Strict bind check: is the port FREE for a fresh bring-up?
+
+    Only use this when provisioning a brand-new host. On an already-live ingress
+    host the ports are legitimately in use (the host is serving), and that must
+    NOT read as "not ready" -- use ``check_port_serving_or_free`` there.
+    """
     if port < 0 or port > 65535:
         return ReadinessCheck(name=f"port_{port}", ok=False, detail=f"invalid port: {port}")
     try:
@@ -108,6 +159,25 @@ def check_port_available(port: int) -> ReadinessCheck:
         return ReadinessCheck(name=f"port_{port}", ok=True, detail=f"port {port} available")
     except OSError as exc:
         return ReadinessCheck(name=f"port_{port}", ok=False, detail=f"port {port} unavailable: {exc}")
+
+
+def check_port_serving_or_free(port: int) -> ReadinessCheck:
+    """Liveness-aware port check.
+
+    A port is acceptable when it is EITHER free to bind (a fresh host that can
+    still bring ingress up) OR already serving connections (a live ingress host).
+    Only an in-use-but-not-serving port (held by an unrelated/broken process)
+    fails. This prevents a healthy serving host from being marked not-ready
+    simply because port 80/443/8080 is bound by its own ingress.
+    """
+    if port < 0 or port > 65535:
+        return ReadinessCheck(name=f"port_{port}", ok=False, detail=f"invalid port: {port}")
+    if _port_is_serving(port):
+        return ReadinessCheck(name=f"port_{port}", ok=True, detail=f"port {port} serving")
+    bind_check = check_port_available(port)
+    if bind_check.ok:
+        return ReadinessCheck(name=f"port_{port}", ok=True, detail=f"port {port} available")
+    return ReadinessCheck(name=f"port_{port}", ok=False, detail=f"port {port} in use but not serving")
 
 
 def check_state_root(state_root: str | None = None) -> ReadinessCheck:
@@ -168,18 +238,27 @@ def run_readiness(
     env: Mapping[str, str] | None = None,
     docker_binary: str = "docker",
     compose_runner: ComposeRunner | None = None,
+    daemon_runner: "DaemonRunner | None" = None,
     skip_ports: bool = False,
+    skip_docker_daemon: bool = False,
+    fresh_bringup: bool = False,
 ) -> ReadinessResult:
     checks: list[ReadinessCheck] = []
     checks.append(check_docker(docker_binary=docker_binary))
     checks.append(check_docker_compose(compose_binary=docker_binary, runner=compose_runner))
+    if not skip_docker_daemon:
+        checks.append(check_docker_daemon(docker_binary=docker_binary, runner=daemon_runner))
     checks.append(check_state_root(state_root))
     checks.extend(check_env_vars(env))
     checks.extend(check_secret_env_presence(env))
     checks.append(check_ingress_strategy(env))
     if not skip_ports:
+        # fresh_bringup: provisioning a brand-new host, so the ingress ports must
+        # be genuinely FREE to bind. Otherwise we are (re)checking a possibly-live
+        # host, where a serving port is healthy and must not read as not-ready.
+        port_check = check_port_available if fresh_bringup else check_port_serving_or_free
         for port in (ports or _DEFAULT_PORTS):
-            checks.append(check_port_available(port))
+            checks.append(port_check(port))
     ready = all(c.ok for c in checks if not c.name.startswith("secret_"))
     return ReadinessResult(ready=ready, checks=checks)
 
@@ -191,7 +270,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--state-root", default=None, help="ArcLink state root to check, defaults to ARCLINK_STATE_ROOT or /arcdata")
     parser.add_argument("--docker-binary", default="docker", help="Docker binary name or path")
     parser.add_argument("--skip-ports", action="store_true", help="Skip local bind checks for ingress ports")
-    parser.add_argument("--ports", default="80,443,8080", help="Comma-separated ports to bind-check")
+    parser.add_argument("--skip-docker-daemon", action="store_true", help="Skip the bounded docker daemon ping")
+    parser.add_argument(
+        "--fresh-bringup",
+        action="store_true",
+        help="Require ingress ports to be FREE to bind (provisioning a new host) instead of allowing already-serving ports",
+    )
+    parser.add_argument("--ports", default="80,443,8080", help="Comma-separated ports to check")
     args = parser.parse_args(argv)
 
     try:
@@ -205,6 +290,8 @@ def main(argv: list[str] | None = None) -> int:
         ports=ports,
         docker_binary=args.docker_binary,
         skip_ports=args.skip_ports,
+        skip_docker_daemon=args.skip_docker_daemon,
+        fresh_bringup=args.fresh_bringup,
     )
     print(result.to_json())
     return 0 if result.ready else 1

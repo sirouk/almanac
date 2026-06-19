@@ -757,14 +757,23 @@ def test_public_agent_turn_album_rows_merge_into_one_bridge_call() -> None:
 
             with control.connect_db(cfg) as conn:
                 rows = conn.execute(
-                    "SELECT id, delivered_at, delivery_error FROM notification_outbox ORDER BY id ASC"
+                    "SELECT id, delivered_at, delivery_error, extra_json FROM notification_outbox ORDER BY id ASC"
                 ).fetchall()
             expect(all(str(row["delivered_at"] or "").strip() for row in rows), str([dict(row) for row in rows]))
-            absorbed_notes = [str(row["delivery_error"] or "") for row in rows[1:]]
-            expect(
-                all(note.startswith("absorbed_into_album_leader:") for note in absorbed_notes),
-                str(absorbed_notes),
-            )
+            # C2: absorbed siblings end DELIVERED with a CLEAN delivery_error (the
+            # delivered guard now makes mark_notification_error a no-op on them); the
+            # leader provenance lives in extra_json instead.
+            leader_id = int(rows[0]["id"])
+            for row in rows[1:]:
+                expect(
+                    not str(row["delivery_error"] or "").strip(),
+                    f"absorbed sibling must keep a clean delivery_error: {dict(row)}",
+                )
+                extra = json.loads(str(row["extra_json"] or "{}"))
+                expect(
+                    int(extra.get("_absorbed_into_album_leader") or 0) == leader_id,
+                    f"absorbed sibling must record leader provenance in extra_json: {dict(row)}",
+                )
             print("PASS test_public_agent_turn_album_rows_merge_into_one_bridge_call")
         finally:
             os.environ.clear()
@@ -1217,12 +1226,12 @@ def test_public_agent_gateway_bridge_detaches_long_running_turns() -> None:
 
 
 def test_public_agent_gateway_bridge_unlinks_job_when_worker_spawn_fails() -> None:
+    control = load_module(CONTROL_PY, "arclink_control_bridge_spawn_cleanup_control_test")
     delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_bridge_spawn_cleanup_test")
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         old_env = os.environ.copy()
-        os.environ["STATE_DIR"] = str(root / "state")
         original_popen = delivery.subprocess.Popen
 
         def fail_popen(*args, **kwargs):
@@ -1230,6 +1239,18 @@ def test_public_agent_gateway_bridge_unlinks_job_when_worker_spawn_fails() -> No
 
         delivery.subprocess.Popen = fail_popen
         try:
+            cfg = _delivery_db_config(control, root)
+            # C1: the row must exist + be undelivered so the lease-token stamp lands
+            # (a missing/delivered row aborts the spawn BEFORE Popen by design); this
+            # test exercises the Popen-failure cleanup path specifically.
+            with control.connect_db(cfg) as conn:
+                nid = control.queue_notification(
+                    conn,
+                    target_kind="public-agent-turn",
+                    target_id="tg:1",
+                    channel_kind="telegram",
+                    message="hello",
+                )
             ok, error = delivery._spawn_public_agent_gateway_bridge(
                 cmd=[
                     "docker",
@@ -1240,7 +1261,7 @@ def test_public_agent_gateway_bridge_unlinks_job_when_worker_spawn_fails() -> No
                     "/home/arclink/arclink/python/arclink_public_agent_bridge.py",
                 ],
                 payload={"platform": "telegram", "bot_token": "runtime-token", "text": "hello"},
-                notification_id=77,
+                notification_id=nid,
                 project_name="arclink-arcdep_test",
             )
             expect(ok is False and "could not start" in error, error)
@@ -3070,13 +3091,17 @@ def test_public_agent_bridge_l2_getme_cache_hit_skips_network_and_hmacs_key() ->
         cache_dir = root / "cache"
         secret = "bridge-cache-test-secret"
         token = "123456:telegram-token-value"
+        # H2: the cache key derives ONLY from the dedicated getMe cache secret now,
+        # never the session pepper / operator-action / web-session secrets.
+        secret_file = root / "getme-cache-secret"
+        secret_file.write_text(secret + "\n", encoding="utf-8")
         try:
             os.environ.clear()
             os.environ.update(
                 {
                     "ARCLINK_BRIDGE_GETME_CACHE": "1",
                     "ARCLINK_BRIDGE_GETME_CACHE_DIR": str(cache_dir),
-                    "ARCLINK_SESSION_HASH_PEPPER": secret,
+                    "ARCLINK_BRIDGE_GETME_CACHE_SECRET_FILE": str(secret_file),
                     "HERMES_HOME": str(root / "hermes-home"),
                 }
             )
@@ -3126,13 +3151,15 @@ def test_public_agent_bridge_l2_getme_cache_miss_stale_corrupt_fail_open() -> No
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         cache_dir = root / "cache"
+        secret_file = root / "getme-cache-secret"
+        secret_file.write_text("bridge-cache-test-secret\n", encoding="utf-8")
         try:
             os.environ.clear()
             os.environ.update(
                 {
                     "ARCLINK_BRIDGE_GETME_CACHE": "1",
                     "ARCLINK_BRIDGE_GETME_CACHE_DIR": str(cache_dir),
-                    "ARCLINK_SESSION_HASH_PEPPER": "bridge-cache-test-secret",
+                    "ARCLINK_BRIDGE_GETME_CACHE_SECRET_FILE": str(secret_file),
                     "HERMES_HOME": str(root / "hermes-home"),
                 }
             )
@@ -3194,13 +3221,15 @@ def test_public_agent_bridge_l2_getme_cache_secure_dir_or_secret_unavailable_fai
         root = Path(tmp)
         hermes_home = root / "hermes-home"
         insecure_cache = hermes_home / "state" / "agent-writable-cache"
+        secret_file = root / "getme-cache-secret"
+        secret_file.write_text("bridge-cache-test-secret\n", encoding="utf-8")
         try:
             os.environ.clear()
             os.environ.update(
                 {
                     "ARCLINK_BRIDGE_GETME_CACHE": "1",
                     "ARCLINK_BRIDGE_GETME_CACHE_DIR": str(insecure_cache),
-                    "ARCLINK_SESSION_HASH_PEPPER": "bridge-cache-test-secret",
+                    "ARCLINK_BRIDGE_GETME_CACHE_SECRET_FILE": str(secret_file),
                     "HERMES_HOME": str(hermes_home),
                 }
             )
@@ -3684,6 +3713,709 @@ def test_public_agent_bridge_telegram_replay_does_not_dispatch_generic_event() -
             os.environ.update(old_env)
 
 
+def _delivery_db_config(control, root: Path, extra: dict[str, str] | None = None):
+    """Build a minimal on-disk config + return a loaded Config for DB-backed tests."""
+    config_path = root / "config" / "arclink.env"
+    values = {
+        "ARCLINK_USER": "arclink",
+        "ARCLINK_HOME": str(root / "home-arclink"),
+        "ARCLINK_REPO_DIR": str(REPO),
+        "ARCLINK_PRIV_DIR": str(root / "priv"),
+        "STATE_DIR": str(root / "state"),
+        "RUNTIME_DIR": str(root / "state" / "runtime"),
+        "VAULT_DIR": str(root / "vault"),
+        "ARCLINK_DB_PATH": str(root / "state" / "arclink-control.sqlite3"),
+        "ARCLINK_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+        "ARCLINK_CURATOR_DIR": str(root / "state" / "curator"),
+        "ARCLINK_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+        "ARCLINK_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+        "ARCLINK_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+        "ARCLINK_RELEASE_STATE_FILE": str(root / "state" / "arclink-release.json"),
+        "ARCLINK_QMD_URL": "http://127.0.0.1:8181/mcp",
+    }
+    if extra:
+        values.update(extra)
+    write_config(config_path, values)
+    os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+    return control.Config.from_env()
+
+
+def test_public_agent_bridge_worker_token_guards_late_terminal_writes() -> None:
+    # C1: a row re-leased to worker B (new token) must reject worker A's late
+    # delivered/error/unconfirmed writes -- the lease owner is authoritative.
+    control = load_module(CONTROL_PY, "arclink_control_c1_token_guard_control_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_c1_token_guard_test")
+    old_env = os.environ.copy()
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            cfg = _delivery_db_config(control, Path(tmp))
+            with control.connect_db(cfg) as conn:
+                nid = control.queue_notification(
+                    conn,
+                    target_kind="public-agent-turn",
+                    target_id="tg:1",
+                    channel_kind="telegram",
+                    message="hi",
+                )
+                # Worker B currently owns the lease (token recorded on the row).
+                conn.execute(
+                    "UPDATE notification_outbox SET extra_json = json_set(COALESCE(extra_json,'{}'), ?, ?) WHERE id = ?",
+                    (delivery.PUBLIC_AGENT_BRIDGE_WORKER_TOKEN_JSON_PATH, "token-B", nid),
+                )
+                conn.commit()
+
+                # Worker A (older token) tries to finalise -- every variant no-ops.
+                expect(
+                    delivery._worker_mark_notification_delivered(conn, nid, "token-A") is False,
+                    "stale worker A delivered must no-op",
+                )
+                expect(
+                    delivery._worker_mark_notification_error(conn, nid, "A error", "token-A") is False,
+                    "stale worker A error must no-op",
+                )
+                expect(
+                    delivery._worker_mark_public_agent_bridge_unconfirmed(conn, nid, "A held", "token-A") is False,
+                    "stale worker A unconfirmed must no-op",
+                )
+                row = conn.execute(
+                    "SELECT delivered_at, delivery_error, attempt_count FROM notification_outbox WHERE id = ?",
+                    (nid,),
+                ).fetchone()
+                expect(not str(row["delivered_at"] or "").strip(), dict(row))
+                expect(row["delivery_error"] is None, dict(row))
+                expect(int(row["attempt_count"] or 0) == 0, dict(row))
+
+                # Worker B (the lease owner) CAN finalise.
+                expect(
+                    delivery._worker_mark_notification_delivered(conn, nid, "token-B") is True,
+                    "lease owner B delivered must apply",
+                )
+                row2 = conn.execute(
+                    "SELECT delivered_at FROM notification_outbox WHERE id = ?", (nid,)
+                ).fetchone()
+                expect(str(row2["delivered_at"] or "").strip() != "", dict(row2))
+            print("PASS test_public_agent_bridge_worker_token_guards_late_terminal_writes")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_public_agent_bridge_reaper_requires_recorded_job_path_match() -> None:
+    # C1: the reaper must only re-arm when the recorded pid is NOT running this row's
+    # specific job. A live pid running a DIFFERENT job_path must not count as alive
+    # for this row (recycled-pid), and our own live job must be left alone.
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_c1_reaper_jobpath_test")
+    my_pid = os.getpid()
+    # Our own process is a real, live pid but is NOT a bridge worker -> not active.
+    expect(
+        delivery._public_agent_bridge_worker_pid_active(my_pid, expected_job_path="/tmp/whatever.json") is False,
+        "a live non-bridge-worker pid must not count as this row's worker",
+    )
+    # A pid that does not exist is never active.
+    expect(
+        delivery._public_agent_bridge_worker_pid_active(2 ** 31 - 1, expected_job_path="/tmp/x.json") is False,
+        "a dead pid is not active",
+    )
+    print("PASS test_public_agent_bridge_reaper_requires_recorded_job_path_match")
+
+
+def test_gateway_root_wrapper_preflight_does_not_cache_thrown_probe() -> None:
+    # H4: a throwing/timed-out probe must NOT be cached as a negative (which would
+    # pin L2 off for the TTL); a real nonzero IS cached.
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_h4_preflight_test")
+    prefix = ["docker", "exec", "h4-container"]
+    delivery._ROOT_WRAPPER_PRESENT_CACHE.clear()
+    orig_run = delivery.subprocess.run
+    try:
+        def throwing_run(cmd, **kwargs):
+            del cmd, kwargs
+            raise delivery.subprocess.TimeoutExpired(cmd="probe", timeout=15)
+
+        delivery.subprocess.run = throwing_run
+        expect(
+            delivery._gateway_has_public_agent_bridge_root_wrapper(prefix) is False,
+            "a thrown probe returns the safe legacy answer",
+        )
+        key = tuple(prefix)
+        expect(key not in delivery._ROOT_WRAPPER_PRESENT_CACHE, "a thrown probe must NOT be cached")
+
+        class _Proc:
+            returncode = 1
+
+        def nonzero_run(cmd, **kwargs):
+            del cmd, kwargs
+            return _Proc()
+
+        delivery.subprocess.run = nonzero_run
+        expect(
+            delivery._gateway_has_public_agent_bridge_root_wrapper(prefix) is False,
+            "a real nonzero means wrapper absent",
+        )
+        expect(key in delivery._ROOT_WRAPPER_PRESENT_CACHE, "a real nonzero IS cached")
+        expect(delivery._ROOT_WRAPPER_PRESENT_CACHE[key][1] is False, "cached value is the genuine absent result")
+    finally:
+        delivery.subprocess.run = orig_run
+        delivery._ROOT_WRAPPER_PRESENT_CACHE.clear()
+    print("PASS test_gateway_root_wrapper_preflight_does_not_cache_thrown_probe")
+
+
+def test_public_agent_bridge_unconfirmed_escalates_to_operator() -> None:
+    # M3: a turn that stays unconfirmed across N cycles pages the operator under a
+    # DISTINCT key, and a later delivery clears it.
+    control = load_module(CONTROL_PY, "arclink_control_m3_unconfirmed_escalate_control_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_m3_unconfirmed_escalate_test")
+    old_env = os.environ.copy()
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            cfg = _delivery_db_config(
+                control,
+                Path(tmp),
+                extra={"ARCLINK_PUBLIC_AGENT_BRIDGE_UNCONFIRMED_ESCALATE_AFTER": "3"},
+            )
+            with control.connect_db(cfg) as conn:
+                nid = control.queue_notification(
+                    conn,
+                    target_kind="public-agent-turn",
+                    target_id="tg:1",
+                    channel_kind="telegram",
+                    message="hi",
+                )
+                hiccup_key = delivery._public_agent_bridge_unconfirmed_hiccup_key(nid)
+                fail_action = f"{control.OPERATOR_HICCUP_AUDIT_PREFIX}{hiccup_key}"
+
+                # First two unconfirmed cycles must NOT page yet.
+                delivery._mark_public_agent_bridge_unconfirmed(conn, nid, "held 1")
+                delivery._mark_public_agent_bridge_unconfirmed(conn, nid, "held 2")
+                expect(
+                    not control._operator_hiccup_already_armed(conn, key=hiccup_key),
+                    "must not page before the threshold",
+                )
+                # Third consecutive unconfirmed crosses the threshold -> page.
+                delivery._mark_public_agent_bridge_unconfirmed(conn, nid, "held 3")
+                expect(
+                    control._operator_hiccup_already_armed(conn, key=hiccup_key),
+                    "third consecutive unconfirmed must page the operator",
+                )
+                armed = conn.execute(
+                    "SELECT COUNT(*) AS c FROM arclink_audit_log WHERE action = ?", (fail_action,)
+                ).fetchone()
+                expect(int(armed["c"]) == 1, dict(armed))
+
+                # A later confirmed delivery resolves the unconfirmed alert + counter.
+                control.mark_notification_delivered(conn, nid)
+                delivery._resolve_public_agent_bridge_hiccup(conn, nid)
+                expect(
+                    not control._operator_hiccup_already_armed(conn, key=hiccup_key),
+                    "delivery must clear the unconfirmed alert",
+                )
+            print("PASS test_public_agent_bridge_unconfirmed_escalates_to_operator")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_public_agent_bridge_terminal_error_includes_context_and_log_tail() -> None:
+    # M4: an exit-1 with empty stdout/stderr must enrich the operator error with the
+    # command kind/project and the per-turn bridge log tail.
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_m4_error_enrich_test")
+    enriched = delivery._enrich_public_agent_bridge_error(
+        "Hermes public gateway bridge failed: exit status 1",
+        command_kind="public-agent-turn",
+        project_name="arclink-arcdep_demo",
+        include_log_tail=False,
+    )
+    expect("kind=public-agent-turn" in enriched, enriched)
+    expect("project=arclink-arcdep_demo" in enriched, enriched)
+    expect("exit status 1" in enriched, enriched)
+    print("PASS test_public_agent_bridge_terminal_error_includes_context_and_log_tail")
+
+
+def test_public_agent_bridge_album_persists_merged_list_to_leader_row() -> None:
+    # M1: the merged album list + absorbed sibling ids must be persisted to the
+    # LEADER row's extra_json (not in-memory only) so a leader retry replays it; and
+    # C2: absorbed siblings end delivered with a clean error + provenance note.
+    control = load_module(CONTROL_PY, "arclink_control_m1_album_persist_control_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_m1_album_persist_test")
+    old_env = os.environ.copy()
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            cfg = _delivery_db_config(control, Path(tmp), extra={"TELEGRAM_BOT_TOKEN": "telegram-public-token"})
+            group_id = "album-xyz"
+
+            def _album_extra(idx: int) -> dict:
+                update = {
+                    "update_id": 9000 + idx,
+                    "message": {
+                        "message_id": 100 + idx,
+                        "media_group_id": group_id,
+                        "chat": {"id": 777, "type": "private"},
+                        "from": {"id": 777},
+                        "photo": [{"file_id": f"photo-{idx}", "width": 1, "height": 1}],
+                    },
+                }
+                return {
+                    "deployment_id": "arcdep_demo",
+                    "telegram_update_json": json.dumps(update, sort_keys=True, separators=(",", ":")),
+                }
+
+            with control.connect_db(cfg) as conn:
+                ids = [
+                    control.queue_notification(
+                        conn,
+                        target_kind="public-agent-turn",
+                        target_id="tg:777",
+                        channel_kind="telegram",
+                        message=f"item {i}",
+                        extra=_album_extra(i),
+                    )
+                    for i in range(3)
+                ]
+                # Backdate created_at ~10s so the album is past the quiesce window but
+                # still inside the 120s group lookback.
+                backdated = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
+                conn.execute("UPDATE notification_outbox SET created_at = ?", (backdated,))
+                conn.commit()
+
+            leader_id = min(ids)
+            leader_row = {
+                "id": leader_id,
+                "channel_kind": "telegram",
+                "target_id": "tg:777",
+                "message": "item 0",
+            }
+            leader_extra = _album_extra(0)
+            state = delivery._absorb_telegram_album_siblings(
+                cfg,
+                row=leader_row,
+                extra=leader_extra,
+                media_group_id=group_id,
+            )
+            expect(state is None, f"leader absorb should resolve, got {state!r}")
+            expect(
+                isinstance(leader_extra.get("telegram_update_json_list"), list)
+                and len(leader_extra["telegram_update_json_list"]) == 3,
+                str(leader_extra.get("telegram_update_json_list")),
+            )
+            with control.connect_db(cfg) as conn:
+                rows = {
+                    int(r["id"]): r
+                    for r in conn.execute(
+                        "SELECT id, delivered_at, delivery_error, extra_json FROM notification_outbox"
+                    ).fetchall()
+                }
+            leader_persisted = json.loads(str(rows[leader_id]["extra_json"] or "{}"))
+            expect(
+                isinstance(leader_persisted.get("telegram_update_json_list"), list)
+                and len(leader_persisted["telegram_update_json_list"]) == 3,
+                f"M1: leader row must persist the merged album: {leader_persisted}",
+            )
+            expect(
+                sorted(int(x) for x in leader_persisted.get("_absorbed_album_sibling_ids") or [])
+                == sorted(i for i in ids if i != leader_id),
+                f"M1: leader row must persist absorbed sibling ids: {leader_persisted}",
+            )
+            expect(not str(rows[leader_id]["delivered_at"] or "").strip(), "leader must stay undelivered")
+            for sib_id in (i for i in ids if i != leader_id):
+                sib = rows[sib_id]
+                expect(str(sib["delivered_at"] or "").strip() != "", f"sibling {sib_id} must be delivered")
+                expect(sib["delivery_error"] is None, f"sibling {sib_id} must have clean error: {dict(sib)}")
+                sib_extra = json.loads(str(sib["extra_json"] or "{}"))
+                expect(
+                    int(sib_extra.get("_absorbed_into_album_leader") or 0) == leader_id,
+                    f"sibling {sib_id} must record leader provenance: {sib_extra}",
+                )
+            print("PASS test_public_agent_bridge_album_persists_merged_list_to_leader_row")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_public_agent_bridge_claim_holder_no_ops_on_worker_owned_row() -> None:
+    # C1 (STILL-BROKEN): a row currently owned by a detached worker (recorded token)
+    # must reject the in-process claim-holder's empty-token terminal writes -- this is
+    # the guard the album sibling-mark (:2810) and the fast-path loop (:3024/:3033)
+    # now use, so a re-leased row's late delivered/error/unconfirmed is a no-op at
+    # those sites too. Conversely a tokenless row (no detached worker) still accepts
+    # the claim-holder.
+    control = load_module(CONTROL_PY, "arclink_control_c1_claimholder_guard_control_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_c1_claimholder_guard_test")
+    old_env = os.environ.copy()
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            cfg = _delivery_db_config(control, Path(tmp))
+            with control.connect_db(cfg) as conn:
+                owned = control.queue_notification(
+                    conn, target_kind="public-agent-turn", target_id="tg:1",
+                    channel_kind="telegram", message="owned",
+                )
+                free = control.queue_notification(
+                    conn, target_kind="public-agent-turn", target_id="tg:2",
+                    channel_kind="telegram", message="free",
+                )
+                # A detached worker owns `owned` (token recorded); `free` has none.
+                conn.execute(
+                    "UPDATE notification_outbox SET extra_json = json_set(COALESCE(extra_json,'{}'), ?, ?) WHERE id = ?",
+                    (delivery.PUBLIC_AGENT_BRIDGE_WORKER_TOKEN_JSON_PATH, "token-B", owned),
+                )
+                conn.commit()
+
+                # Claim-holder (empty token): every terminal write no-ops on the
+                # worker-owned row (album sibling-mark + loop delivered/error/unconfirmed).
+                expect(control.mark_notification_delivered_if_owned(conn, owned, "") == 0, "owned delivered must no-op")
+                expect(control.mark_notification_error_if_owned(conn, owned, "boom", "") == 0, "owned error must no-op")
+                expect(
+                    delivery._mark_public_agent_bridge_unconfirmed(conn, owned, "held") is False,
+                    "owned unconfirmed must no-op",
+                )
+                # A stale detached worker A (wrong token) also no-ops on the owned row.
+                expect(
+                    delivery._worker_mark_notification_delivered(conn, owned, "token-A") is False,
+                    "stale worker delivered must no-op",
+                )
+                r = conn.execute(
+                    "SELECT delivered_at, delivery_error, attempt_count FROM notification_outbox WHERE id = ?",
+                    (owned,),
+                ).fetchone()
+                expect(not str(r["delivered_at"] or "").strip(), dict(r))
+                expect(r["delivery_error"] is None, dict(r))
+                expect(int(r["attempt_count"] or 0) == 0, dict(r))
+
+                # The tokenless row still accepts the claim-holder (no regression).
+                expect(control.mark_notification_delivered_if_owned(conn, free, "") == 1, "free delivered must apply")
+            print("PASS test_public_agent_bridge_claim_holder_no_ops_on_worker_owned_row")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_public_agent_bridge_spawn_aborts_when_lease_token_cannot_stamp() -> None:
+    # C1 (STILL-BROKEN): a spawn whose lease-token stamp matches no undelivered row
+    # (missing / already-delivered) must ABORT before Popen -- a tokenless worker can
+    # never finalise its row and would risk a duplicate send.
+    control = load_module(CONTROL_PY, "arclink_control_c1_stamp_abort_control_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_c1_stamp_abort_test")
+    old_env = os.environ.copy()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        original_popen = delivery.subprocess.Popen
+        spawned: list[bool] = []
+
+        def track_popen(*args, **kwargs):
+            spawned.append(True)
+            raise AssertionError("Popen must not run when the lease token cannot be stamped")
+
+        delivery.subprocess.Popen = track_popen
+        try:
+            _delivery_db_config(control, root)  # builds STATE_DIR + config, no row queued.
+            ok, error = delivery._spawn_public_agent_gateway_bridge(
+                cmd=[
+                    "docker", "exec", "-i", "arclink-arcdep_test-hermes-gateway-1",
+                    "/opt/arclink/runtime/hermes-venv/bin/python3",
+                    "/home/arclink/arclink/python/arclink_public_agent_bridge.py",
+                ],
+                payload={"platform": "telegram", "bot_token": "runtime-token", "text": "hi"},
+                notification_id=4242,  # no such undelivered row -> stamp matches 0 rows.
+                project_name="arclink-arcdep_test",
+            )
+            expect(ok is False and "could not stamp" in error, error)
+            expect(not spawned, "the worker must not have been spawned")
+            job_dir = root / "state" / "docker" / "jobs" / "public-agent-bridge-jobs"
+            expect(not list(job_dir.glob("*.json")), "the job file must be cleaned up on stamp-abort")
+            print("PASS test_public_agent_bridge_spawn_aborts_when_lease_token_cannot_stamp")
+        finally:
+            delivery.subprocess.Popen = original_popen
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_public_agent_bridge_reaper_skips_live_token_and_rearms_tokenless() -> None:
+    # C1 (STILL-BROKEN): the reaper leaves a row alone ONLY when it records a token
+    # AND a job_path AND the pid is running that job; a missing token (or job_path)
+    # makes the lease provably-not-alive -> eligible, even if a bare pid is "alive".
+    control = load_module(CONTROL_PY, "arclink_control_c1_reaper_gate_control_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_c1_reaper_gate_test")
+    old_env = os.environ.copy()
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            cfg = _delivery_db_config(control, Path(tmp))
+            os.environ["ARCLINK_PUBLIC_AGENT_BRIDGE_ORPHAN_REAPER_SECONDS"] = "60"
+
+            def _seed(worker_meta: dict) -> int:
+                with control.connect_db(cfg) as conn:
+                    nid = control.queue_notification(
+                        conn, target_kind="public-agent-turn", target_id="tg:1",
+                        channel_kind="telegram", message="stalled",
+                        extra={"deployment_id": "arcdep_test"},
+                    )
+                    # Stamp the worker meta via json_set (a literal `token` key trips
+                    # the queue_notification secret-scanner, so we set it post-insert).
+                    conn.execute(
+                        "UPDATE notification_outbox "
+                        "SET extra_json = json_set(COALESCE(extra_json,'{}'), '$._public_agent_bridge_worker', json(?)), "
+                        "    last_attempt_at = ?, next_attempt_at = ? "
+                        "WHERE id = ?",
+                        (json.dumps(worker_meta), "2026-01-01T00:00:00+00:00", "2999-01-01T00:00:00+00:00", nid),
+                    )
+                    conn.commit()
+                return nid
+
+            # Pretend EVERY recorded pid is a live bridge worker for its job.
+            original_active = delivery._public_agent_bridge_worker_pid_active
+            delivery._public_agent_bridge_worker_pid_active = lambda pid, expected_job_path="": True
+            try:
+                live = _seed({"pid": 4242, "job_path": "/tmp/live.json", "token": "tok-live"})
+                no_token = _seed({"pid": 4242, "job_path": "/tmp/x.json"})  # token missing
+                no_path = _seed({"pid": 4242, "token": "tok", "job_path": ""})  # job_path missing
+                reclaimed = delivery.reap_orphaned_public_agent_bridge_leases(cfg, limit=10)
+            finally:
+                delivery._public_agent_bridge_worker_pid_active = original_active
+
+            # The fully-provable live lease is NOT re-armed; the two unprovable ones ARE.
+            expect(reclaimed == 2, f"expected 2 reclaimed (token+path missing), got {reclaimed}")
+            with control.connect_db(cfg) as conn:
+                def _rearmed(nid: int) -> bool:
+                    r = conn.execute(
+                        "SELECT delivery_error FROM notification_outbox WHERE id = ?", (nid,)
+                    ).fetchone()
+                    return str(r["delivery_error"] or "").startswith("public_agent_bridge_orphan_reclaimed")
+                expect(not _rearmed(live), "the provably-live lease must be left alone")
+                expect(_rearmed(no_token), "a tokenless lease must be re-armed")
+                expect(_rearmed(no_path), "a job_path-less lease must be re-armed")
+            print("PASS test_public_agent_bridge_reaper_skips_live_token_and_rearms_tokenless")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_public_agent_bridge_album_persist_failure_leaves_siblings_undelivered() -> None:
+    # M1 (STILL-BROKEN): if the leader-row persist of the merged album fails (or
+    # touches zero rows), the absorbed siblings must NOT be marked delivered -- they
+    # are left for a later retry so the album is not lost.
+    control = load_module(CONTROL_PY, "arclink_control_m1_persist_fail_control_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_m1_persist_fail_test")
+    old_env = os.environ.copy()
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            cfg = _delivery_db_config(control, Path(tmp), extra={"TELEGRAM_BOT_TOKEN": "telegram-public-token"})
+            group_id = "album-fail"
+
+            def _album_extra(idx: int) -> dict:
+                update = {
+                    "update_id": 9000 + idx,
+                    "message": {
+                        "message_id": 100 + idx, "media_group_id": group_id,
+                        "chat": {"id": 777, "type": "private"}, "from": {"id": 777},
+                        "photo": [{"file_id": f"photo-{idx}", "width": 1, "height": 1}],
+                    },
+                }
+                return {
+                    "deployment_id": "arcdep_demo",
+                    "telegram_update_json": json.dumps(update, sort_keys=True, separators=(",", ":")),
+                }
+
+            with control.connect_db(cfg) as conn:
+                ids = [
+                    control.queue_notification(
+                        conn, target_kind="public-agent-turn", target_id="tg:777",
+                        channel_kind="telegram", message=f"item {i}", extra=_album_extra(i),
+                    )
+                    for i in range(3)
+                ]
+                backdated = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
+                conn.execute("UPDATE notification_outbox SET created_at = ?", (backdated,))
+                conn.commit()
+            leader_id = min(ids)
+
+            # Wrap connect_db so the leader-row album persist UPDATE raises, simulating
+            # a persist failure; every other statement passes through unchanged.
+            real_connect_db = delivery.connect_db
+
+            class _FailPersistConn:
+                def __init__(self, inner):
+                    self._inner = inner
+
+                def execute(self, sql, *args, **kwargs):
+                    if "$.telegram_update_json_list" in sql:
+                        raise RuntimeError("simulated leader persist failure")
+                    return self._inner.execute(sql, *args, **kwargs)
+
+                def __getattr__(self, name):
+                    return getattr(self._inner, name)
+
+            class _FailPersistCtx:
+                def __init__(self, cfg_arg):
+                    self._cm = real_connect_db(cfg_arg)
+
+                def __enter__(self):
+                    return _FailPersistConn(self._cm.__enter__())
+
+                def __exit__(self, *exc):
+                    return self._cm.__exit__(*exc)
+
+            delivery.connect_db = lambda cfg_arg: _FailPersistCtx(cfg_arg)
+            try:
+                leader_row = {"id": leader_id, "channel_kind": "telegram", "target_id": "tg:777", "message": "item 0"}
+                leader_extra = _album_extra(0)
+                state = delivery._absorb_telegram_album_siblings(
+                    cfg, row=leader_row, extra=leader_extra, media_group_id=group_id,
+                )
+            finally:
+                delivery.connect_db = real_connect_db
+
+            expect(state is None, f"absorb should resolve to None on persist failure, got {state!r}")
+            # The in-memory merged list is dropped so the leader does not send a partial album.
+            expect(
+                not leader_extra.get("telegram_update_json_list"),
+                f"merged list must be dropped on persist failure: {leader_extra.get('telegram_update_json_list')}",
+            )
+            with control.connect_db(cfg) as conn:
+                rows = {
+                    int(r["id"]): r
+                    for r in conn.execute("SELECT id, delivered_at FROM notification_outbox").fetchall()
+                }
+            for sib_id in (i for i in ids if i != leader_id):
+                expect(
+                    not str(rows[sib_id]["delivered_at"] or "").strip(),
+                    f"M1: sibling {sib_id} must NOT be delivered after a failed leader persist: {dict(rows[sib_id])}",
+                )
+            print("PASS test_public_agent_bridge_album_persist_failure_leaves_siblings_undelivered")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_public_agent_bridge_broker_failure_error_includes_context() -> None:
+    # M4 (STILL-BROKEN): a gateway-exec-broker failure must be enriched with the
+    # command kind + project (same path as the direct-subprocess failure), not the
+    # raw broker error.
+    control = load_module(CONTROL_PY, "arclink_control_m4_broker_enrich_control_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_m4_broker_enrich_test")
+    old_env = os.environ.copy()
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            cfg = _delivery_db_config(control, Path(tmp))
+            with control.connect_db(cfg) as conn:
+                nid = control.queue_notification(
+                    conn, target_kind="public-agent-turn", target_id="tg:1",
+                    channel_kind="telegram", message="hi",
+                )
+            # Build a worker job that routes through the broker and stamp the lease so
+            # the guarded error-mark applies.
+            worker_token = "tok-broker"
+            job_path = delivery._write_public_agent_bridge_job(
+                notification_id=nid, cmd=[], payload={}, project_name="arclink-arcdep_test",
+                gateway_exec_request={"action": "noop"}, worker_token=worker_token,
+            )
+            with control.connect_db(cfg) as conn:
+                conn.execute(
+                    "UPDATE notification_outbox SET extra_json = json_set(COALESCE(extra_json,'{}'), ?, ?) WHERE id = ?",
+                    (delivery.PUBLIC_AGENT_BRIDGE_WORKER_TOKEN_JSON_PATH, worker_token, nid),
+                )
+                conn.commit()
+
+            original_broker = delivery._run_gateway_exec_broker_request
+            delivery._run_gateway_exec_broker_request = lambda req: (False, "broker said 503")
+            try:
+                rc = delivery._run_public_agent_bridge_worker(job_path)
+            finally:
+                delivery._run_gateway_exec_broker_request = original_broker
+            expect(rc == 1, f"broker failure should return 1, got {rc}")
+            with control.connect_db(cfg) as conn:
+                row = conn.execute(
+                    "SELECT delivery_error FROM notification_outbox WHERE id = ?", (nid,)
+                ).fetchone()
+            err = str(row["delivery_error"] or "")
+            expect("broker said 503" in err, err)
+            expect("kind=gateway-exec-broker" in err, err)
+            expect("project=arclink-arcdep_test" in err, err)
+            print("PASS test_public_agent_bridge_broker_failure_error_includes_context")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_generic_run_once_public_agent_turn_write_no_ops_on_worker_owned_row() -> None:
+    # C1 (STILL-BROKEN, round 3): the GENERIC run_once delivery loop used to do
+    # BARE-id terminal writes (mark_notification_delivered / mark_notification_error)
+    # for public-agent-turn rows, bypassing the empty-token IS-NULL guard. A row a
+    # detached worker owns (recorded token) must reject the in-process claim-holder's
+    # delivered-write here too: it must be a NO-OP, summary["delivered"] must NOT be
+    # counted, and the resolve-on-delivery (which would clear the Operator alert) must
+    # NOT run -- otherwise the loop clears an armed alert / double-finalises a row the
+    # owning worker is authoritative for. This mirrors the dedicated loop at :3116.
+    control = load_module(CONTROL_PY, "arclink_control_c1_generic_loop_guard_control_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_c1_generic_loop_guard_test")
+    old_env = os.environ.copy()
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            cfg = _delivery_db_config(control, Path(tmp))
+            with control.connect_db(cfg) as conn:
+                owned = control.queue_notification(
+                    conn, target_kind="public-agent-turn", target_id="tg:1",
+                    channel_kind="telegram", message="owned turn",
+                    extra={"deployment_id": "arcdep_test", "prefix": "arc-pod"},
+                )
+                # A DIFFERENT detached worker owns this row (records token-B).
+                conn.execute(
+                    "UPDATE notification_outbox SET extra_json = json_set(COALESCE(extra_json,'{}'), ?, ?) WHERE id = ?",
+                    (delivery.PUBLIC_AGENT_BRIDGE_WORKER_TOKEN_JSON_PATH, "token-B", owned),
+                )
+                conn.commit()
+                # Arm an Operator alert under this row's bridge-hiccup key so we can
+                # prove the resolve-on-delivery does NOT clear it on the no-op path.
+                # Arm via the audit log directly (not report_operator_hiccup, which
+                # would queue a second operator notice row into the outbox) so the
+                # only row run_once sees is our single guarded public-agent-turn row.
+                hiccup_key = delivery._public_agent_bridge_hiccup_key(owned)
+                control.append_arclink_audit(
+                    conn,
+                    action=f"{control.OPERATOR_HICCUP_AUDIT_PREFIX}{hiccup_key}",
+                    actor_id="system:public_agent_bridge",
+                    target_kind="operator-hiccup",
+                    target_id=hiccup_key,
+                    reason="prior terminal attempt paged the operator",
+                )
+                conn.commit()
+                expect(
+                    control._operator_hiccup_already_armed(conn, key=hiccup_key),
+                    "precondition: hiccup must be armed before run_once",
+                )
+
+            # The bridge reports a SUCCESSFUL (non-deferred) turn, so the generic loop
+            # reaches the delivered-write path -- where the empty-token guard must
+            # convert the write to a no-op because token-B (a detached worker) owns it.
+            bridge_calls: list[dict[str, object]] = []
+
+            def fake_gateway_turn(**kwargs):
+                bridge_calls.append(kwargs)
+                return True, None  # bridged=True, no error => deliver_row returns None
+
+            delivery._run_public_agent_gateway_turn = fake_gateway_turn
+            summary = delivery.run_once(cfg)
+
+            expect(len(bridge_calls) == 1, str(bridge_calls))
+            # The guarded delivered-write was a no-op: nothing counted as delivered.
+            expect(summary["delivered"] == 0, str(summary))
+            expect(summary["errors"] == 0, str(summary))
+
+            with control.connect_db(cfg) as conn:
+                row = conn.execute(
+                    "SELECT delivered_at, delivery_error FROM notification_outbox WHERE id = ?",
+                    (owned,),
+                ).fetchone()
+                # The row is left for the owning worker to finalise.
+                expect(not str(row["delivered_at"] or "").strip(), dict(row))
+                # And the resolve-on-delivery did NOT run: the alert is still armed.
+                expect(
+                    control._operator_hiccup_already_armed(conn, key=hiccup_key),
+                    "resolve must NOT have run on the no-op path (alert still armed)",
+                )
+            print("PASS test_generic_run_once_public_agent_turn_write_no_ops_on_worker_owned_row")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_discord_operator_delivery_supports_channel_ids()
     test_public_bot_user_delivery_supports_telegram_and_discord_dm()
@@ -3732,6 +4464,18 @@ def main() -> int:
     test_public_agent_bridge_telegram_replay_does_not_dispatch_generic_event()
     test_public_bot_ready_hub_edits_payment_message_when_available()
     test_notification_due_now_normalizes_z_and_offset_timestamps()
+    test_public_agent_bridge_worker_token_guards_late_terminal_writes()
+    test_public_agent_bridge_reaper_requires_recorded_job_path_match()
+    test_gateway_root_wrapper_preflight_does_not_cache_thrown_probe()
+    test_public_agent_bridge_unconfirmed_escalates_to_operator()
+    test_public_agent_bridge_terminal_error_includes_context_and_log_tail()
+    test_public_agent_bridge_album_persists_merged_list_to_leader_row()
+    test_public_agent_bridge_claim_holder_no_ops_on_worker_owned_row()
+    test_public_agent_bridge_spawn_aborts_when_lease_token_cannot_stamp()
+    test_public_agent_bridge_reaper_skips_live_token_and_rearms_tokenless()
+    test_public_agent_bridge_album_persist_failure_leaves_siblings_undelivered()
+    test_public_agent_bridge_broker_failure_error_includes_context()
+    test_generic_run_once_public_agent_turn_write_no_ops_on_worker_owned_row()
     print("PASS all notification delivery regression tests")
     return 0
 

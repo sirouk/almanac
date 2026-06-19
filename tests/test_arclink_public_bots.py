@@ -1295,13 +1295,20 @@ def test_public_bot_retire_agent_confirmation_label_does_not_switch_helm() -> No
         text="/raven retire_agent Agent #t587",
     )
     expect(start.action == "retire_agent_confirm_name", str(start))
-    expect("Type `Agent #t587`" in start.reply, start.reply)
+    # The prompt instructs an ACTUALLY typeable token: the ASCII-safe selector
+    # slug (no markdown look-alikes) plus the Copy Agent Name button. It must not
+    # tell the user to type an escaped form they cannot reproduce.
+    expect("type the selector `agent-t587`" in start.reply, start.reply)
+    copy_buttons = [b for b in (start.buttons or ()) if getattr(b, "copy_text", "") == "Agent #t587"]
+    expect(len(copy_buttons) == 1, str(start.buttons))
 
+    # Typing the instructed selector slug completes the confirmation -- the user
+    # can always reproduce the token the prompt told them to type.
     typed = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
         channel_identity="tg:retire-label",
-        text="Agent #t587",
+        text="agent-t587",
     )
     expect(typed.action == "retire_agent_final_confirm", str(typed))
     expect(typed.deployment_id == seeded["deployment_id"], str(typed))
@@ -1326,6 +1333,56 @@ def test_public_bot_retire_agent_confirmation_label_does_not_switch_helm() -> No
     session_meta = json.loads(session["metadata_json"])
     expect("retire_agent" not in session_meta and "public_bot_workflow" not in session_meta, str(session_meta))
     print("PASS test_public_bot_retire_agent_confirmation_label_does_not_switch_helm")
+
+
+def test_public_bot_retire_agent_metachar_name_is_typeable() -> None:
+    # NEW-BUG regression: a name containing markdown metacharacters (``_``/``*``)
+    # is escaped for safe DISPLAY, but the prompt must still instruct a token the
+    # user can actually reproduce -- the ASCII-safe selector slug -- and typing
+    # that token must match.
+    control = load_module("arclink_control.py", "arclink_control_public_bot_retire_metachar_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_retire_metachar_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:retire-metachar",
+        prefix="arc-prime-retire-metachar",
+    )
+    name = "Recon_Bravo*9"
+    conn.execute(
+        "UPDATE arclink_deployments SET agent_name = ? WHERE deployment_id = ?",
+        (name, seeded["deployment_id"]),
+    )
+    conn.commit()
+
+    start = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:retire-metachar",
+        text=f"/raven retire_agent {name}",
+    )
+    expect(start.action == "retire_agent_confirm_name", str(start))
+    # The raw metachar name must NOT be the literal instructed type token (the
+    # escaped form would be un-typeable); the slug is what is instructed.
+    safe_name = bots._safe_agent_name(name)
+    slug = bots._agent_slug(name)
+    expect(f"type the selector `{slug}`" in start.reply, start.reply)
+    expect(f"Type `{safe_name}`" not in start.reply, start.reply)
+    # A Copy button carrying the raw name is offered as the alternative.
+    copy_buttons = [b for b in (start.buttons or ()) if getattr(b, "copy_text", "") == name]
+    expect(len(copy_buttons) == 1, str(start.buttons))
+
+    # Typing the instructed slug matches and advances the workflow.
+    typed = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:retire-metachar",
+        text=slug,
+    )
+    expect(typed.action == "retire_agent_final_confirm", str(typed))
+    print("PASS test_public_bot_retire_agent_metachar_name_is_typeable")
 
 
 def test_public_bot_agent_switch_matches_live_roster_labels_and_blocks_passthrough() -> None:
@@ -1730,23 +1787,30 @@ def test_public_bot_share_create_originates_owner_staged_grant() -> None:
     )
     expect(root_only.action == "share_create_usage", str(root_only))
 
+    # Account-enumeration hardening: an unknown recipient must NOT be
+    # distinguishable from a registered one. It returns the same generic
+    # "if that Captain exists" staged action/text and stages no grant.
     unknown = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
         channel_identity="tg:share-creator",
         text="/share-create vault/Projects/Briefs nobody@example.test",
     )
-    expect(unknown.action == "share_create_recipient_unknown", str(unknown))
+    expect(unknown.action == "share_create_staged", str(unknown))
+    expect("If that Captain exists" in unknown.reply, unknown.reply)
     expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_share_grants").fetchone()["n"] == 0, "no grant for unknown recipient")
 
+    # The owner's own account also returns the generic staged response (no
+    # distinguishable same-account oracle) and stages no grant.
     self_share = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
         channel_identity="tg:share-creator",
         text="/share-create vault/Projects/Briefs arc-share-creator@example.test",
     )
-    expect(self_share.action == "share_create_same_account", str(self_share))
-    expect("Fleet" in self_share.reply, self_share.reply)
+    expect(self_share.action == "share_create_staged", str(self_share))
+    expect("If that Captain exists" in self_share.reply, self_share.reply)
+    expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_share_grants").fetchone()["n"] == 0, "no grant for same-account recipient")
 
     protected = bots.handle_arclink_public_bot_turn(
         conn,
@@ -1774,6 +1838,17 @@ def test_public_bot_share_create_originates_owner_staged_grant() -> None:
     expect(grant["status"] == "pending_owner_approval", str(grant))
     expect(grant["access_mode"] == "read_write", str(grant))
     grant_id = str(grant["grant_id"])
+    # Account-enumeration hardening (STILL-BROKEN fix): the registered-recipient
+    # LEAD reply text must be byte-for-byte IDENTICAL to the unknown/self reply --
+    # no resource label, no access mode, no grant id, no recipient confirmation in
+    # the text -- so a probing owner cannot enumerate accounts from the reply.
+    expect(staged.reply == unknown.reply, f"registered vs unknown reply differ:\n{staged.reply!r}\n{unknown.reply!r}")
+    expect(staged.reply == self_share.reply, "registered vs self reply differ")
+    expect(grant_id not in staged.reply, f"grant id leaked into reply text: {staged.reply!r}")
+    expect("Projects/Briefs" not in staged.reply and "Briefs" not in staged.reply, f"resource label leaked into reply text: {staged.reply!r}")
+    expect("read/write" not in staged.reply and "read-only" not in staged.reply, f"access mode leaked into reply text: {staged.reply!r}")
+    # The approve/deny BUTTONS carry the grant id -- that structural element is
+    # unavoidable for a real staged grant and is the acceptable signal.
     button_commands = {button.command for button in staged.buttons}
     expect(f"/share-approve {grant_id}" in button_commands, str(button_commands))
     expect(f"/share-deny {grant_id}" in button_commands, str(button_commands))
@@ -2917,6 +2992,7 @@ def main() -> int:
     test_public_bot_agents_roster_add_agent_and_switch_are_account_aware()
     test_public_bot_retire_agent_preserves_state_and_stops_routing()
     test_public_bot_retire_agent_confirmation_label_does_not_switch_helm()
+    test_public_bot_retire_agent_metachar_name_is_typeable()
     test_public_bot_agent_switch_matches_live_roster_labels_and_blocks_passthrough()
     test_public_bot_pair_channel_links_account_across_telegram_and_discord()
     test_public_bot_pair_channel_refuses_existing_other_account()

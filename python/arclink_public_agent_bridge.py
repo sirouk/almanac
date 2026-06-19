@@ -369,12 +369,33 @@ def _read_first_line(path_value: str) -> str:
     return lines[0].strip() if lines else ""
 
 
+_BRIDGE_GETME_CACHE_SECRET_MISSING_LOGGED = False
+
+
 def _bridge_getme_cache_secret() -> bytes:
+    """Resolve the DEDICATED getMe L2 cache secret -- and ONLY that secret.
+
+    H2 fix: the cache key is HMAC(secret, bot_token). The writer is the root
+    wrapper (arclink_public_agent_bridge_root) and the reader is this bridge child;
+    they MUST derive the same key or every turn silently L2-misses. The previous
+    chain mixed the session pepper, the operator-action-auth secret, and the web
+    session/SSO secrets and fell back across them, so writer and reader could pick
+    DIFFERENT secrets across reboots (whichever happened to be present first),
+    causing permanent silent cache drift -- and it over-broadened the
+    operator-action secret into a second, unrelated use.
+
+    We now read ONLY the purpose-built secret, from purpose-built locations:
+      * ARCLINK_BRIDGE_GETME_CACHE_SECRET_FILE (explicit override), then
+      * <ARCLINK_OPERATOR_SECRET_DIR>/public-agent-bridge-getme-cache-secret, then
+      * <ARCLINK_PRIV_DIR>/state/operator/secrets/public-agent-bridge-getme-cache-secret
+    All three resolve to the same dedicated secret material, so writer and reader
+    are stable. If none is present, L2 is disabled (callers get path None) and we
+    log ONCE rather than silently falling back to a drift-prone shared secret.
+    """
     candidates: list[str] = []
     explicit_file = str(os.environ.get("ARCLINK_BRIDGE_GETME_CACHE_SECRET_FILE") or "").strip()
     if explicit_file:
         candidates.append(_read_first_line(explicit_file))
-    candidates.append(str(os.environ.get("ARCLINK_SESSION_HASH_PEPPER") or "").strip())
 
     operator_secret_dir = str(os.environ.get("ARCLINK_OPERATOR_SECRET_DIR") or "").strip()
     if operator_secret_dir:
@@ -383,18 +404,25 @@ def _bridge_getme_cache_secret() -> bytes:
     priv_dir = str(os.environ.get("ARCLINK_PRIV_DIR") or "").strip()
     if priv_dir:
         priv_path = Path(priv_dir)
-        candidates.append(_read_first_line(str(priv_path / "state" / "operator-secrets" / "operator-action-auth-secret")))
-        candidates.append(_read_first_line(str(priv_path / "state" / "operator" / "secrets" / "public-agent-bridge-getme-cache-secret")))
-
-    hermes_home = str(os.environ.get("HERMES_HOME") or "").strip()
-    if hermes_home:
-        access = _json_read(Path(hermes_home) / "state" / "arclink-web-access.json")
-        candidates.append(str(access.get("session_secret") or "").strip())
-        candidates.append(str(access.get("sso_session_secret") or "").strip())
+        candidates.append(
+            _read_first_line(str(priv_path / "state" / "operator" / "secrets" / "public-agent-bridge-getme-cache-secret"))
+        )
 
     for candidate in candidates:
         if candidate and candidate not in {"change-me", "changeme"}:
             return candidate.encode("utf-8")
+
+    global _BRIDGE_GETME_CACHE_SECRET_MISSING_LOGGED
+    if not _BRIDGE_GETME_CACHE_SECRET_MISSING_LOGGED:
+        _BRIDGE_GETME_CACHE_SECRET_MISSING_LOGGED = True
+        try:
+            sys.stderr.write(
+                "arclink-public-agent-bridge: dedicated getMe L2 cache secret not found "
+                "(ARCLINK_BRIDGE_GETME_CACHE_SECRET_FILE / operator/secrets/"
+                "public-agent-bridge-getme-cache-secret); L2 getMe cache disabled.\n"
+            )
+        except Exception:  # noqa: BLE001 - logging must never break the bridge.
+            pass
     return b""
 
 

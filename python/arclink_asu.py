@@ -54,10 +54,19 @@ def compute_asu(hardware_summary: Mapping[str, Any], env: Mapping[str, str] | No
     ram = _number(hardware_summary, ("ram_gib", "memory_gib", "memory_total_gib"), label="RAM GiB")
     disk = _number(hardware_summary, ("disk_gib", "disk_total_gib", "root_disk_gib"), label="disk GiB")
 
+    # A genuine machine always reports a nonzero value for every probed
+    # dimension. A zero (or negative) value for vCPU/RAM/disk means the probe
+    # could not measure that dimension -- it is "unknown", NOT "this machine has
+    # zero capacity". Compute fails closed (raises) so callers preserve the prior
+    # known capacity instead of persisting a 0 capacity from a partial probe. A
+    # genuinely tiny-but-present disk (e.g. 20 GiB) is still a valid measurement
+    # and simply floors to 0 standard units below.
     if vcpu <= 0:
         raise ArcLinkASUError("vCPU count must be greater than zero")
-    if ram < 0 or disk < 0:
-        raise ArcLinkASUError("RAM and disk cannot be negative")
+    if ram <= 0:
+        raise ArcLinkASUError("RAM GiB must be greater than zero")
+    if disk <= 0:
+        raise ArcLinkASUError("disk GiB must be greater than zero")
     return max(0, int(min(math.floor(vcpu / vcpu_per_pod), math.floor(ram / ram_per_pod), math.floor(disk / disk_per_pod))))
 
 

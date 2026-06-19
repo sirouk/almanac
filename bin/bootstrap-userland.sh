@@ -28,7 +28,10 @@ seed_private_repo_layout() {
   reconcile_vault_layout
 
   if [[ ! -f "$ARCLINK_PRIV_CONFIG_DIR/arclink.env" ]]; then
-    cp "$BOOTSTRAP_DIR/config/arclink.env.example" "$ARCLINK_PRIV_CONFIG_DIR/arclink.env"
+    # Seed with mode 0600. The example template is 0644, but this file holds
+    # provider credentials and tokens once populated, so it must never be
+    # world-readable. install -m 600 sets the mode atomically on creation.
+    install -m 600 "$BOOTSTRAP_DIR/config/arclink.env.example" "$ARCLINK_PRIV_CONFIG_DIR/arclink.env"
   fi
 }
 

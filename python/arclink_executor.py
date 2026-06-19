@@ -50,6 +50,39 @@ def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
+# Bounded subprocess timeouts (seconds). Short ops (mkdir/ps/cleanup/read/write)
+# must never hang a worker; long ops (compose up/down/run, rsync) get a generous
+# but still finite ceiling so a wedged Docker/SSH cannot stall a deploy forever.
+_SUBPROCESS_SHORT_TIMEOUT = 60
+_SUBPROCESS_LONG_TIMEOUT = 1800
+
+
+def _run_subprocess(
+    cmd: tuple[str, ...] | list[str],
+    *,
+    timeout: int,
+    operation: str,
+    input: str | None = None,
+) -> "subprocess.CompletedProcess[str]":
+    """Run a live subprocess with a hard timeout.
+
+    Converts ``subprocess.TimeoutExpired`` into an ``ArcLinkExecutorError`` so a
+    wedged command surfaces as a clean executor failure (and the caller's
+    materialized-secret cleanup still runs) instead of hanging the worker.
+    """
+    try:
+        return subprocess.run(
+            tuple(cmd),
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=max(1, int(timeout)),
+            input=input,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ArcLinkExecutorError(f"{operation} timed out after {max(1, int(timeout))}s") from exc
+
+
 def _csv_values(value: str) -> list[str]:
     normalized = str(value or "").replace("\\,", ",")
     return [item.strip() for item in normalized.split(",") if item.strip()]
@@ -135,7 +168,15 @@ def executor_for_fleet_host(
         allowed_hosts = _csv_values(str(env.get("ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST") or env.get("ARCLINK_ACTION_WORKER_SSH_HOST_ALLOWLIST") or ""))
         if not allowed_hosts:
             raise ArcLinkExecutorError("ArcLink SSH executor mode requires ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST")
-        ssh_options = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"]
+        ssh_options = [
+            "-o", "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=accept-new",
+            # Bound connect + keep-alive so a dead/half-open worker host cannot
+            # hang an SSH-mode action indefinitely.
+            "-o", "ConnectTimeout=15",
+            "-o", "ServerAliveInterval=15",
+            "-o", "ServerAliveCountMax=3",
+        ]
         key_path = str(env.get("ARCLINK_FLEET_SSH_KEY_PATH") or "").strip()
         known_hosts = str(env.get("ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE") or "").strip()
         if key_path:
@@ -219,6 +260,7 @@ class FakeSecretResolver:
 class FileMaterializingSecretResolver:
     value_provider: Callable[[str], str]
     materialization_root: Path
+    deployment_id: str = ""
 
     def materialize(self, secret_ref: str, target_path: str) -> ResolvedSecretFile:
         clean_ref = _require_secret_ref(secret_ref)
@@ -226,7 +268,20 @@ class FileMaterializingSecretResolver:
         value = self.value_provider(clean_ref)
         if not str(value):
             raise ArcLinkSecretResolutionError(f"empty ArcLink secret material: {clean_ref}")
-        output = self.materialization_root / Path(clean_target).name
+        # Scope the plaintext copy per-run so two deployments that share a
+        # materialization_root and resolve a secret with the same basename
+        # (e.g. /run/secrets/api_key) can never collide on or clobber each
+        # other's plaintext. A unique per-call subdirectory + a deployment-id
+        # prefixed filename guarantees isolation; the copy is cleaned up by the
+        # caller (now in a finally, so on success too).
+        self.materialization_root.mkdir(parents=True, exist_ok=True)
+        with contextlib.suppress(OSError):
+            self.materialization_root.chmod(0o700)
+        run_dir = Path(tempfile.mkdtemp(prefix=".arclink-secret-", dir=str(self.materialization_root)))
+        prefix = _safe_filename_segment(self.deployment_id)
+        basename = Path(clean_target).name
+        filename = f"{prefix}-{basename}" if prefix else basename
+        output = run_dir / filename
         _write_private_file_atomic(output, str(value), trailing_newline=False)
         return ResolvedSecretFile(secret_ref=clean_ref, target_path=clean_target, source_path=str(output))
 
@@ -521,17 +576,16 @@ class SubprocessDockerComposeRunner:
             compose_file,
             *args,
         )
-        proc = subprocess.run(cmd, check=False, text=True, capture_output=True)
+        proc = _run_subprocess(cmd, timeout=_SUBPROCESS_LONG_TIMEOUT, operation="docker compose")
         if proc.returncode != 0:
             raise ArcLinkExecutorError(_safe_command_error("docker compose", proc.stderr or proc.stdout))
         return {"status": "ok", "returncode": proc.returncode, "stdout": _runner_stdout(args, proc.stdout)}
 
     def list_published_host_ports(self) -> set[int]:
-        proc = subprocess.run(
+        proc = _run_subprocess(
             (self.docker_binary, "ps", "--format", "{{.Ports}}"),
-            check=False,
-            text=True,
-            capture_output=True,
+            timeout=_SUBPROCESS_SHORT_TIMEOUT,
+            operation="docker ps",
         )
         if proc.returncode != 0:
             raise ArcLinkExecutorError(_safe_command_error("docker ps", proc.stderr or proc.stdout))
@@ -547,7 +601,13 @@ class SshDockerComposeRunner:
     ssh_binary: str = "ssh"
     rsync_binary: str = "rsync"
     docker_binary: str = "docker"
-    ssh_options: tuple[str, ...] = ("-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new")
+    ssh_options: tuple[str, ...] = (
+        "-o", "BatchMode=yes",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "ConnectTimeout=15",
+        "-o", "ServerAliveInterval=15",
+        "-o", "ServerAliveCountMax=3",
+    )
     allowed_hosts: tuple[str, ...] = ()
 
     def _target(self) -> str:
@@ -572,63 +632,62 @@ class SshDockerComposeRunner:
         config_root = str(Path(compose_file).resolve().parent)
         cleanup_required = bool(args and args[0] in {"up", "down", "run"})
         secrets_root = str((Path(compose_file).parent / "secrets").resolve())
-        mkdir = subprocess.run(
-            (self.ssh_binary, *self.ssh_options, target, "mkdir", "-p", config_root),
-            check=False,
-            text=True,
-            capture_output=True,
-        )
-        if mkdir.returncode != 0:
-            raise ArcLinkExecutorError(_safe_command_error("ssh mkdir", mkdir.stderr or mkdir.stdout))
-        rsync_ssh = " ".join(_shell_quote(part) for part in (self.ssh_binary, *self.ssh_options))
-        sync = subprocess.run(
-            (self.rsync_binary, "-a", "--delete", "-e", rsync_ssh, f"{config_root}/", f"{target}:{config_root}/"),
-            check=False,
-            text=True,
-            capture_output=True,
-        )
-        if sync.returncode != 0:
+        # Wrap the whole remote sequence so that even a TIMEOUT (which now raises
+        # ArcLinkExecutorError out of _run_subprocess) still triggers the remote
+        # secret cleanup for an up/down/run -- a wedged step must never leave
+        # plaintext secret copies behind on the worker host.
+        try:
+            mkdir = _run_subprocess(
+                (self.ssh_binary, *self.ssh_options, target, "mkdir", "-p", config_root),
+                timeout=_SUBPROCESS_SHORT_TIMEOUT,
+                operation="ssh mkdir",
+            )
+            if mkdir.returncode != 0:
+                raise ArcLinkExecutorError(_safe_command_error("ssh mkdir", mkdir.stderr or mkdir.stdout))
+            rsync_ssh = " ".join(_shell_quote(part) for part in (self.ssh_binary, *self.ssh_options))
+            sync = _run_subprocess(
+                (self.rsync_binary, "-a", "--delete", "-e", rsync_ssh, f"{config_root}/", f"{target}:{config_root}/"),
+                timeout=_SUBPROCESS_LONG_TIMEOUT,
+                operation="rsync deployment root",
+            )
+            if sync.returncode != 0:
+                raise ArcLinkExecutorError(_safe_command_error("rsync deployment root", sync.stderr or sync.stdout))
+            if args and args[0] in {"up", "run"}:
+                prepare_error = self._prepare_remote_app_binds(
+                    target=target,
+                    env_file=env_file,
+                    compose_file=compose_file,
+                )
+                if prepare_error:
+                    raise ArcLinkExecutorError(prepare_error)
+            remote_cmd = " ".join(
+                _shell_quote(part)
+                for part in (
+                    self.docker_binary,
+                    "compose",
+                    "--project-name",
+                    project_name,
+                    "--env-file",
+                    env_file,
+                    "-f",
+                    compose_file,
+                    *args,
+                )
+            )
+            run = _run_subprocess(
+                (self.ssh_binary, *self.ssh_options, target, remote_cmd),
+                timeout=_SUBPROCESS_LONG_TIMEOUT,
+                operation="ssh docker compose",
+            )
+        except ArcLinkExecutorError as exc:
             cleanup_error = (
                 self._cleanup_remote_secrets(target=target, secrets_root=secrets_root)
                 if cleanup_required
                 else ""
             )
-            message = _safe_command_error("rsync deployment root", sync.stderr or sync.stdout)
             if cleanup_error:
-                message = f"{message}; {cleanup_error}"
-            raise ArcLinkExecutorError(message)
-        if args and args[0] in {"up", "run"}:
-            prepare_error = self._prepare_remote_app_binds(
-                target=target,
-                env_file=env_file,
-                compose_file=compose_file,
-            )
-            if prepare_error:
-                cleanup_error = self._cleanup_remote_secrets(target=target, secrets_root=secrets_root)
-                message = prepare_error
-                if cleanup_error:
-                    message = f"{message}; {cleanup_error}"
-                raise ArcLinkExecutorError(message)
-        remote_cmd = " ".join(
-            _shell_quote(part)
-            for part in (
-                self.docker_binary,
-                "compose",
-                "--project-name",
-                project_name,
-                "--env-file",
-                env_file,
-                "-f",
-                compose_file,
-                *args,
-            )
-        )
-        run = subprocess.run(
-            (self.ssh_binary, *self.ssh_options, target, remote_cmd),
-            check=False,
-            text=True,
-            capture_output=True,
-        )
+                raise ArcLinkExecutorError(f"{exc}; {cleanup_error}") from exc
+            raise
         cleanup_error = self._cleanup_remote_secrets(target=target, secrets_root=secrets_root) if cleanup_required else ""
         if run.returncode != 0:
             message = _safe_command_error("ssh docker compose", run.stderr or run.stdout)
@@ -645,23 +704,24 @@ class SshDockerComposeRunner:
             _shell_quote(part)
             for part in (self.docker_binary, "ps", "--format", "{{.Ports}}")
         )
-        proc = subprocess.run(
+        proc = _run_subprocess(
             (self.ssh_binary, *self.ssh_options, target, remote_cmd),
-            check=False,
-            text=True,
-            capture_output=True,
+            timeout=_SUBPROCESS_SHORT_TIMEOUT,
+            operation="ssh docker ps",
         )
         if proc.returncode != 0:
             raise ArcLinkExecutorError(_safe_command_error("ssh docker ps", proc.stderr or proc.stdout))
         return _published_host_ports_from_docker_ps(proc.stdout)
 
     def _cleanup_remote_secrets(self, *, target: str, secrets_root: str) -> str:
-        cleanup = subprocess.run(
-            (self.ssh_binary, *self.ssh_options, target, f"rm -rf -- {_shell_quote(secrets_root)}"),
-            check=False,
-            text=True,
-            capture_output=True,
-        )
+        try:
+            cleanup = _run_subprocess(
+                (self.ssh_binary, *self.ssh_options, target, f"rm -rf -- {_shell_quote(secrets_root)}"),
+                timeout=_SUBPROCESS_SHORT_TIMEOUT,
+                operation="ssh cleanup compose secrets",
+            )
+        except ArcLinkExecutorError as exc:
+            return str(exc)
         if cleanup.returncode != 0:
             return _safe_command_error("ssh cleanup compose secrets", cleanup.stderr or cleanup.stdout)
         return ""
@@ -671,11 +731,10 @@ class SshDockerComposeRunner:
         if not entries:
             return ""
         for command in _remote_prepare_commands(docker_binary=self.docker_binary, entries=entries):
-            prepare = subprocess.run(
+            prepare = _run_subprocess(
                 (self.ssh_binary, *self.ssh_options, target, command),
-                check=False,
-                text=True,
-                capture_output=True,
+                timeout=_SUBPROCESS_LONG_TIMEOUT,
+                operation="ssh prepare app bind mounts",
             )
             if prepare.returncode != 0:
                 return _safe_command_error("ssh prepare app bind mounts", prepare.stderr or prepare.stdout)
@@ -692,15 +751,14 @@ class SshDockerComposeRunner:
             raise ArcLinkExecutorError("ArcLink SSH file read path is outside the allowed root")
         target = self._target()
         command = f"cat -- {_shell_quote(clean_path)}"
-        read = subprocess.run(
+        read = _run_subprocess(
             (self.ssh_binary, *self.ssh_options, target, command),
-            check=False,
-            text=True,
-            capture_output=True,
+            timeout=_SUBPROCESS_SHORT_TIMEOUT,
+            operation="ssh read file",
         )
         if read.returncode == 0:
             return read.stdout
-        fallback = subprocess.run(
+        fallback = _run_subprocess(
             (
                 self.ssh_binary,
                 *self.ssh_options,
@@ -712,9 +770,8 @@ class SshDockerComposeRunner:
                     allowed_root=clean_allowed_root,
                 ),
             ),
-            check=False,
-            text=True,
-            capture_output=True,
+            timeout=_SUBPROCESS_SHORT_TIMEOUT,
+            operation="ssh read file",
         )
         if fallback.returncode == 0:
             return fallback.stdout
@@ -749,12 +806,11 @@ class SshDockerComposeRunner:
             f"python3 -c {_shell_quote(script)} "
             f"{_shell_quote(clean_path)} {_shell_quote(clean_mode)}"
         )
-        write = subprocess.run(
+        write = _run_subprocess(
             (self.ssh_binary, *self.ssh_options, target, command),
             input=str(content or ""),
-            check=False,
-            text=True,
-            capture_output=True,
+            timeout=_SUBPROCESS_SHORT_TIMEOUT,
+            operation="ssh write file",
         )
         if write.returncode != 0:
             raise ArcLinkExecutorError(_safe_command_error("ssh write file", write.stderr or write.stdout))
@@ -946,9 +1002,21 @@ class ArcLinkExecutor:
                 compose_file=str(plan["compose_file"]),
             )
         except Exception:
+            # On failure also tear down the deployment-local secrets dir: nothing
+            # is serving, so the copies the compose file would reference are dead
+            # weight (and a plaintext leak).
             _cleanup_materialized_secret_root(Path(str(plan["compose_file"])).parent / "secrets")
-            _cleanup_materialized_secret_files(resolved.values())
             raise
+        finally:
+            # ALWAYS clean the intermediate plaintext SOURCE copies (the ones in
+            # the per-run materialization root). They were copied into the
+            # deployment secrets dir already, so the running stack does not
+            # reference them -- leaving them behind on the success path is exactly
+            # the plaintext leak this fix closes. The deployment-local secrets dir
+            # itself is intentionally NOT removed here: a successful apply leaves
+            # the compose-referenced secret files in place and they are removed at
+            # teardown.
+            _cleanup_materialized_secret_files(resolved.values())
         return DockerComposeApplyResult(
             deployment_id=request.deployment_id,
             project_name=str(plan["project_name"]),
@@ -2225,6 +2293,12 @@ def _env_quote(value: str) -> str:
 
 def _shell_quote(value: str) -> str:
     return shlex.quote(str(value))
+
+
+def _safe_filename_segment(value: str) -> str:
+    """Reduce an identifier to a filesystem-safe, path-traversal-free segment."""
+    clean = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "")).strip("-.")
+    return clean[:96]
 
 
 def _normalized_remote_prepare_path(value: str) -> str:

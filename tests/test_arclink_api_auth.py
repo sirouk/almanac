@@ -1198,6 +1198,99 @@ def test_proof_token_hashes_use_hmac_and_accept_legacy() -> None:
     print("PASS test_proof_token_hashes_use_hmac_and_accept_legacy")
 
 
+def test_share_notifications_escape_cross_tenant_markdown_and_links() -> None:
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_share_label_escape_test")
+
+    # An owner-supplied display name carrying a markdown link, a code span, and a
+    # mention must be neutralized so it cannot render cross-tenant into the
+    # recipient's (or owner's) notification reply.
+    hostile = "[click me](https://evil.example) `code` @everyone <@&role>"
+    safe = api._safe_share_label(hostile)
+    for metachar in ("[", "]", "(", ")", "`", "@", "<", ">"):
+        expect(metachar not in safe, f"{metachar!r} still present in {safe!r}")
+    expect("click me" in safe and "code" in safe, safe)
+
+    # The recipient notification builder must emit the escaped label/path, never
+    # the raw metacharacters, so a markdown link cannot be smuggled cross-tenant.
+    grant = {
+        "recipient_user_id": "arcusr_recipient",
+        "grant_id": "share_test_grant",
+        "owner_user_id": "arcusr_owner",
+        "display_name": "[steal](https://evil.example)",
+        "resource_kind": "drive",
+        "resource_root": "vault",
+        "resource_path": "/Projects/<@&everyone>",
+    }
+    captured: dict[str, object] = {}
+
+    def fake_channel(conn, user_id):
+        return {"available": True, "channel": "telegram", "target_id": "tg:recipient"}
+
+    def fake_queue_notification(conn, **kwargs):
+        captured["message"] = kwargs.get("message")
+        return "notif_test"
+
+    def fake_event(conn, **kwargs):
+        return None
+
+    old_channel = api._share_public_channel_for_user
+    old_queue = api.queue_notification
+    old_event = api.append_arclink_event
+    api._share_public_channel_for_user = fake_channel
+    api.queue_notification = fake_queue_notification
+    api.append_arclink_event = fake_event
+    try:
+        result = api.queue_share_grant_recipient_notification(None, grant=grant)
+    finally:
+        api._share_public_channel_for_user = old_channel
+        api.queue_notification = old_queue
+        api.append_arclink_event = old_event
+
+    expect(result.get("queued") is True, str(result))
+    message = str(captured.get("message") or "")
+    expect("[steal]" not in message and "(https://evil.example)" not in message, message)
+    expect("<@&everyone>" not in message, message)
+    print("PASS test_share_notifications_escape_cross_tenant_markdown_and_links")
+
+
+def test_clean_share_path_rejects_markdown_metacharacters() -> None:
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_clean_share_path_test")
+
+    # Benign paths still resolve -- including normal path characters such as the
+    # underscore, which is NOT a markdown injection vector and must keep working
+    # so legitimate paths (e.g. ``Q1_notes``) and the grants they materialize do
+    # not break.
+    expect(api._clean_share_path("Projects/Briefs") == "/Projects/Briefs", "benign path should pass")
+    expect(api._clean_share_path("Projects/Q1_notes") == "/Projects/Q1_notes", "underscore path should pass")
+    expect(api._clean_share_path("Projects/under_score") == "/Projects/under_score", "underscore path should pass")
+
+    # Each TRUE markdown/mention metacharacter in a path segment is rejected so a
+    # malicious resource_path cannot inject markup into share notifications.
+    for hostile in (
+        "Projects/[link](evil)",
+        "Projects/`code`",
+        "Projects/@everyone",
+        "Projects/<@&role>",
+        "Projects/bold*name",
+        "Projects/tilde~name",
+        "Projects/pipe|name",
+    ):
+        try:
+            api._clean_share_path(hostile)
+        except api.ArcLinkApiAuthError:
+            continue
+        raise AssertionError(f"expected rejection for {hostile!r}")
+
+    # Traversal and secret guards remain intact.
+    for blocked in ("../etc", "vault/.ssh", "x/.env"):
+        try:
+            api._clean_share_path(blocked)
+        except api.ArcLinkApiAuthError:
+            continue
+        raise AssertionError(f"expected rejection for {blocked!r}")
+    print("PASS test_clean_share_path_rejects_markdown_metacharacters")
+
+
 def main() -> int:
     test_sessions_store_hashes_and_user_api_is_scoped_to_principal()
     test_user_agent_identity_update_requires_session_and_csrf()
@@ -1226,7 +1319,9 @@ def main() -> int:
     test_staged_revoke_requires_explicit_transaction()
     test_single_operator_policy_rejects_second_active_owner()
     test_proof_token_hashes_use_hmac_and_accept_legacy()
-    print("PASS all 27 ArcLink API/auth tests")
+    test_share_notifications_escape_cross_tenant_markdown_and_links()
+    test_clean_share_path_rejects_markdown_metacharacters()
+    print("PASS all 29 ArcLink API/auth tests")
     return 0
 
 

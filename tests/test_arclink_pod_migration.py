@@ -697,21 +697,24 @@ def test_running_migration_id_cannot_be_reentered() -> None:
         conn.execute("UPDATE arclink_pod_migrations SET status = 'running' WHERE migration_id = ?", (row["migration_id"],))
         conn.commit()
         executor = fake_executor(executor_mod)
-        try:
-            migration.migrate_pod(
-                conn,
-                executor=executor,
-                deployment_id="dep_1",
-                target_machine_id="host_target",
-                migration_id=row["migration_id"],
-                verifier=lambda _conn, _row, _intent: {"healthy": True},
-                env=ROOT_CAPTURE_ENV,
-            )
-        except migration.ArcLinkPodMigrationError as exc:
-            expect("already running" in str(exc), str(exc))
-        else:
-            raise AssertionError("expected running migration reentry to fail before host mutation")
+        # A fresh (non-stale) running migration must NOT be rolled back or disturbed
+        # on re-entry. The caller bails out cleanly with an already-in-progress
+        # result and performs NO host mutation -- it must never touch a healthy
+        # live migration (H6 NEW-BUG, round 2).
+        result = migration.migrate_pod(
+            conn,
+            executor=executor,
+            deployment_id="dep_1",
+            target_machine_id="host_target",
+            migration_id=row["migration_id"],
+            verifier=lambda _conn, _row, _intent: {"healthy": True},
+            env=ROOT_CAPTURE_ENV,
+        )
+        expect(result["idempotent_replay"] is True and result["status"] == "running", str(result))
         expect(executor._fake_lifecycle_runs == {}, str(executor._fake_lifecycle_runs))
+        # The fresh running migration row is untouched -- not rolled back.
+        still = conn.execute("SELECT status FROM arclink_pod_migrations WHERE migration_id = ?", (row["migration_id"],)).fetchone()
+        expect(still["status"] == "running", str(dict(still)))
     print("PASS test_running_migration_id_cannot_be_reentered")
 
 

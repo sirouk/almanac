@@ -83,6 +83,11 @@ class ArcLinkSovereignWorkerError(RuntimeError):
 SOLO_JOB_KIND = "sovereign_pod_apply"
 TEARDOWN_JOB_KIND = "sovereign_pod_teardown"
 TERMINAL_JOB_STATUSES = {"succeeded", "cancelled"}
+# An apply job is only "already applied" when it SUCCEEDED. A *cancelled* apply
+# job means the apply never ran to completion -- treating it as success would
+# mark the deployment active with no compose up behind it. Cancelled stays
+# cancelled.
+TERMINAL_APPLIED_JOB_STATUSES = {"succeeded"}
 TEARDOWN_REQUEST_STATUSES = {"teardown_requested", "teardown_failed", "cancelled"}
 TEARDOWN_TERMINAL_STATUSES = {"torn_down", "teardown_complete"}
 MISSING_CHUTES_CLIENT_ERROR = "ArcLink live Chutes key execution requires an injectable ChutesKeyClient"
@@ -123,10 +128,14 @@ class SovereignWorkerConfig:
 class SovereignSecretResolver(FileMaterializingSecretResolver):
     """Resolve secret:// references from env or an operator-local secret store."""
 
-    def __init__(self, *, env: Mapping[str, str], secret_store_dir: Path, materialization_root: Path) -> None:
+    def __init__(self, *, env: Mapping[str, str], secret_store_dir: Path, materialization_root: Path, deployment_id: str = "") -> None:
         self.env = env
         self.secret_store_dir = secret_store_dir
-        super().__init__(value_provider=self._value_for_ref, materialization_root=materialization_root)
+        super().__init__(
+            value_provider=self._value_for_ref,
+            materialization_root=materialization_root,
+            deployment_id=deployment_id,
+        )
 
     def materialize(self, secret_ref: str, target_path: str) -> ResolvedSecretFile:
         resolved = super().materialize(secret_ref, target_path)
@@ -776,9 +785,23 @@ def process_sovereign_deployment(
 ) -> dict[str, Any]:
     deployment_id = str(deployment["deployment_id"])
     job = _ensure_apply_job(conn, deployment_id=deployment_id)
-    if str(job["status"]) in TERMINAL_JOB_STATUSES:
+    if str(job["status"]) in TERMINAL_APPLIED_JOB_STATUSES:
         _mark_deployment_status(conn, deployment_id=deployment_id, status="active")
         return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "already_applied"}
+    if str(job["status"]) == "cancelled":
+        # The apply was cancelled before it completed: do NOT mark the deployment
+        # active (there is no compose up behind it). Record the deployment as
+        # cancelled so the scheduler stops re-selecting it as provisioning_ready.
+        if str(deployment.get("status") or "") != "cancelled":
+            _mark_deployment_status(conn, deployment_id=deployment_id, status="cancelled")
+        append_arclink_event(
+            conn,
+            subject_kind="deployment",
+            subject_id=deployment_id,
+            event_type="sovereign_apply_cancelled",
+            metadata={"job_id": str(job["job_id"])},
+        )
+        return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "cancelled"}
     if str(job["status"]) == "running":
         return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "already_running"}
     if str(job["status"]) == "failed":
@@ -788,6 +811,8 @@ def process_sovereign_deployment(
                 deployment_id=deployment_id,
                 job_id=str(job["job_id"]),
                 reason="max_attempts_exhausted",
+                worker=worker,
+                executor=executor,
             )
             return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "max_attempts_exhausted"}
         transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="queued")
@@ -903,6 +928,8 @@ def process_sovereign_deployment(
                 reason="max_attempts_exhausted_after_failure",
                 error=error,
                 had_durable_runtime=had_durable_runtime,
+                worker=worker,
+                executor=executor,
             )
         append_arclink_event(
             conn,
@@ -964,6 +991,76 @@ def _deployment_has_durable_runtime(
     return False
 
 
+def _best_effort_failed_placement_teardown(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    job_id: str,
+    worker: SovereignWorkerConfig | None,
+    executor: ArcLinkExecutor | None,
+) -> str:
+    """Best-effort compose teardown of a dead provisioning_failed deployment.
+
+    Runs BEFORE the placement is released so the placed host (and thus the
+    executor to reach it) is still resolvable. Never raises -- a teardown failure
+    here must not block releasing the placement; the operator-hiccup alert and the
+    audit trail still fire downstream.
+    """
+    placement = _active_placement_with_host(conn, deployment_id=deployment_id)
+    if placement is None:
+        return "no_active_placement"
+    deployment_row = conn.execute(
+        "SELECT * FROM arclink_deployments WHERE deployment_id = ?",
+        (deployment_id,),
+    ).fetchone()
+    if deployment_row is None:
+        return "deployment_missing"
+    deployment = dict(deployment_row)
+    try:
+        intent = _minimal_teardown_intent(deployment=deployment, worker=worker) if worker is not None else None
+    except Exception as exc:
+        return f"intent_error:{type(exc).__name__}"
+    selected_executor = executor
+    if selected_executor is None and worker is not None and intent is not None:
+        try:
+            selected_executor = _executor_for_host(worker=worker, host=placement["host"], intent=intent)
+        except Exception as exc:
+            return f"executor_error:{type(exc).__name__}"
+    if selected_executor is None or intent is None:
+        return "skipped_no_executor"
+    metadata = json_loads_safe(str(deployment.get("metadata_json") or "{}"))
+    remove_volumes = _teardown_removes_volumes(metadata) if isinstance(metadata, Mapping) else False
+    try:
+        config_root = Path(str(intent["state_roots"]["config"]))
+        result = selected_executor.docker_compose_lifecycle(
+            DockerComposeLifecycleRequest(
+                deployment_id=deployment_id,
+                action="teardown",
+                env_file=str(config_root / "arclink.env"),
+                compose_file=str(config_root / "compose.yaml"),
+                idempotency_key=f"arclink:sovereign:failed-placement-teardown:{deployment_id}",
+                remove_volumes=remove_volumes,
+            )
+        )
+    except Exception as exc:
+        append_arclink_event(
+            conn,
+            subject_kind="deployment",
+            subject_id=deployment_id,
+            event_type="failed_placement_teardown_error",
+            metadata={"job_id": job_id, "error_type": type(exc).__name__},
+        )
+        return f"teardown_error:{type(exc).__name__}"
+    append_arclink_event(
+        conn,
+        subject_kind="deployment",
+        subject_id=deployment_id,
+        event_type="failed_placement_teardown_issued",
+        metadata={"job_id": job_id, "status": str(getattr(result, "status", ""))},
+    )
+    return str(getattr(result, "status", "") or "issued")
+
+
 def _release_failed_deployment_placement_if_exhausted(
     conn: sqlite3.Connection,
     *,
@@ -972,6 +1069,8 @@ def _release_failed_deployment_placement_if_exhausted(
     reason: str,
     error: str = "",
     had_durable_runtime: bool | None | Any = _RUNTIME_SNAPSHOT_UNSET,
+    worker: SovereignWorkerConfig | None = None,
+    executor: ArcLinkExecutor | None = None,
 ) -> dict[str, Any] | None:
     # ``had_durable_runtime`` lets the caller pass a TRI-STATE runtime-state
     # snapshot taken BEFORE its exception handler overwrites service health to
@@ -1013,6 +1112,20 @@ def _release_failed_deployment_placement_if_exhausted(
             metadata={"job_id": job_id, "reason": reason, "runtime": "indeterminate"},
         )
         return None
+    # H1 fix: a genuinely-dead provisioning failure releases the placement, but
+    # the deployment's compose project may still be half-up on the placed host.
+    # The teardown batch never picks up provisioning_failed deployments, so unless
+    # we tear the project down HERE -- while the host/placement is still known --
+    # the containers/volumes orphan forever. Issue a best-effort compose teardown
+    # BEFORE remove_placement (which drops the host link). Any failure is logged
+    # and never blocks the placement release.
+    teardown_status = _best_effort_failed_placement_teardown(
+        conn,
+        deployment_id=deployment_id,
+        job_id=job_id,
+        worker=worker,
+        executor=executor,
+    )
     removed = remove_placement(conn, deployment_id=deployment_id)
     if removed is None:
         return None
@@ -1021,7 +1134,12 @@ def _release_failed_deployment_placement_if_exhausted(
         subject_kind="deployment",
         subject_id=deployment_id,
         event_type="placement_released_after_provisioning_failure",
-        metadata={"job_id": job_id, "reason": reason, "placement_id": str(removed.get("placement_id") or "")},
+        metadata={
+            "job_id": job_id,
+            "reason": reason,
+            "placement_id": str(removed.get("placement_id") or ""),
+            "orphan_teardown": teardown_status,
+        },
     )
     append_arclink_audit(
         conn,

@@ -594,6 +594,64 @@ def test_discord_credential_ack_updates_original_component_message() -> None:
     print("PASS test_discord_credential_ack_updates_original_component_message")
 
 
+def test_discord_interaction_response_suppresses_mentions() -> None:
+    from types import SimpleNamespace
+
+    control = load_module("arclink_control.py", "arclink_control_dc_mention_guard_test")
+    dc = load_module("arclink_discord.py", "arclink_discord_mention_guard_test")
+    conn = memory_db(control)
+    old_turn = dc.handle_arclink_public_bot_turn
+
+    def fake_turn(*args, **kwargs):
+        # Echo attacker-supplied mention text back through the interaction reply.
+        return SimpleNamespace(
+            reply="@everyone @here <@&1234567890> you have been pinged",
+            action="agent_message_queued",
+            session_id="onb_mention_guard",
+            buttons=(),
+        )
+
+    dc.handle_arclink_public_bot_turn = fake_turn
+    try:
+        result = dc.handle_discord_interaction(
+            conn,
+            {
+                "id": "int_mention_guard",
+                "type": 2,
+                "guild_id": "guild_42",
+                "channel_id": "ch_42",
+                "member": {"user": {"id": "u_42"}},
+                "data": {"name": "raven"},
+            },
+        )
+    finally:
+        dc.handle_arclink_public_bot_turn = old_turn
+    expect(result["data"].get("allowed_mentions") == {"parse": []}, str(result["data"]))
+    # The echoed text still contains the literal characters, but Discord will not
+    # resolve them into pings because parse is empty.
+    expect("@everyone" in result["data"]["content"], str(result["data"]))
+    print("PASS test_discord_interaction_response_suppresses_mentions")
+
+
+def test_discord_followup_suppresses_mentions() -> None:
+    dc = load_module("arclink_discord.py", "arclink_discord_followup_mention_guard_test")
+    cfg = dc.DiscordConfig(bot_token="tok", app_id="app1", public_key="a" * 64, guild_id="g1")
+    transport = dc.LiveDiscordTransport(cfg)
+    captured: dict[str, object] = {}
+
+    def fake_post_json(url, payload, *, label="discord_api"):
+        captured["url"] = url
+        captured["payload"] = payload
+        captured["label"] = label
+        return b"{}"
+
+    transport._post_json = fake_post_json
+    transport.send_followup("tok_followup", "@everyone <@&999> echoed text")
+    expect(captured["payload"].get("allowed_mentions") == {"parse": []}, str(captured["payload"]))
+    expect(captured["payload"].get("content") == "@everyone <@&999> echoed text", str(captured["payload"]))
+    print("PASS test_discord_followup_suppresses_mentions")
+
+
 def main() -> int:
     test_discord_config_from_env()
     test_discord_ping_pong()
@@ -611,7 +669,9 @@ def main() -> int:
     test_discord_validate_live_readiness()
     test_discord_registers_public_bot_actions()
     test_discord_credential_ack_updates_original_component_message()
-    print("PASS all 16 ArcLink Discord adapter tests")
+    test_discord_interaction_response_suppresses_mentions()
+    test_discord_followup_suppresses_mentions()
+    print("PASS all 18 ArcLink Discord adapter tests")
     return 0
 
 

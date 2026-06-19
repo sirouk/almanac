@@ -272,6 +272,46 @@ class HostedApiConfig:
             minimum=1,
             maximum=10000,
         )
+        # ``/onboarding/start`` is public and unauthenticated; creating sessions is
+        # the cheapest enumeration/abuse vector, so it gets a per-IP ceiling at the
+        # public-route gate (in addition to the per-channel-identity limit inside
+        # ``start_public_onboarding_api``).
+        self.public_onboarding_start_rate_limit: int = _bounded_env_int(
+            e,
+            "ARCLINK_PUBLIC_ONBOARDING_START_RATE_LIMIT",
+            30,
+            minimum=1,
+            maximum=10000,
+        )
+        self.public_onboarding_answer_rate_limit: int = _bounded_env_int(
+            e,
+            "ARCLINK_PUBLIC_ONBOARDING_ANSWER_RATE_LIMIT",
+            60,
+            minimum=1,
+            maximum=10000,
+        )
+        # Checkout creates real Stripe sessions; keep its per-IP ceiling tighter.
+        self.public_onboarding_checkout_rate_limit: int = _bounded_env_int(
+            e,
+            "ARCLINK_PUBLIC_ONBOARDING_CHECKOUT_RATE_LIMIT",
+            20,
+            minimum=1,
+            maximum=10000,
+        )
+        self.public_onboarding_status_rate_limit: int = _bounded_env_int(
+            e,
+            "ARCLINK_PUBLIC_ONBOARDING_STATUS_RATE_LIMIT",
+            120,
+            minimum=1,
+            maximum=10000,
+        )
+        self.public_adapter_mode_rate_limit: int = _bounded_env_int(
+            e,
+            "ARCLINK_PUBLIC_ADAPTER_MODE_RATE_LIMIT",
+            120,
+            minimum=1,
+            maximum=10000,
+        )
         self.default_price_id: str = str(
             e.get("ARCLINK_FOUNDERS_PRICE_ID")
             or e.get("ARCLINK_DEFAULT_PRICE_ID")
@@ -728,10 +768,20 @@ def _check_webhook_rate_limit(
 
 
 def _public_route_rate_limit_for(config: HostedApiConfig, route_key: str) -> int:
+    if route_key == "public_onboarding_start":
+        return config.public_onboarding_start_rate_limit
     if route_key == "public_academy_observatory":
         return config.public_academy_observatory_rate_limit
     if route_key == "fleet_enrollment_callback":
         return config.fleet_enrollment_callback_rate_limit
+    if route_key == "public_onboarding_answer":
+        return config.public_onboarding_answer_rate_limit
+    if route_key == "public_onboarding_checkout":
+        return config.public_onboarding_checkout_rate_limit
+    if route_key == "onboarding_status":
+        return config.public_onboarding_status_rate_limit
+    if route_key == "adapter_mode":
+        return config.public_adapter_mode_rate_limit
     return 0
 
 
@@ -4171,7 +4221,15 @@ def route_arclink_hosted_api(
                 headers=headers,
                 remote_addr=remote_addr,
             )
-        if route_key in {"public_academy_observatory", "fleet_enrollment_callback"}:
+        if route_key in {
+            "public_onboarding_start",
+            "public_academy_observatory",
+            "fleet_enrollment_callback",
+            "public_onboarding_answer",
+            "public_onboarding_checkout",
+            "onboarding_status",
+            "adapter_mode",
+        }:
             _check_public_route_rate_limit(
                 conn,
                 config=cfg,

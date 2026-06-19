@@ -225,6 +225,74 @@ def test_public_academy_observatory_rate_limit_returns_429() -> None:
     print("PASS test_public_academy_observatory_rate_limit_returns_429")
 
 
+def test_public_unauthenticated_routes_have_per_ip_rate_limits() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_public_route_ceiling_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_public_route_ceiling_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(
+        env={
+            "ARCLINK_BASE_DOMAIN": "example.test",
+            "ARCLINK_PUBLIC_ADAPTER_MODE_RATE_LIMIT": "1",
+            "ARCLINK_PUBLIC_ONBOARDING_STATUS_RATE_LIMIT": "1",
+            "ARCLINK_PUBLIC_ONBOARDING_CHECKOUT_RATE_LIMIT": "1",
+            "ARCLINK_PUBLIC_ONBOARDING_START_RATE_LIMIT": "1",
+            "ARCLINK_PUBLIC_ROUTE_RATE_LIMIT_WINDOW_SECONDS": "60",
+        }
+    )
+
+    # /onboarding/start is public + unauthenticated; the public-route gate must
+    # throttle it per IP (defense-in-depth alongside the per-identity limit
+    # inside start_public_onboarding_api).
+    start_body = '{"channel": "telegram", "channel_identity": "tg:111"}'
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/onboarding/start", headers={}, body=start_body, config=config, remote_addr="203.0.113.200",
+    )
+    first_start = status
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/onboarding/start", headers={}, body=start_body, config=config, remote_addr="203.0.113.200",
+    )
+    expect(status == 429, f"second onboarding/start expected 429 got {status} (first was {first_start}): {payload}")
+
+    # /adapter-mode previously had no per-IP ceiling; it now throttles.
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/adapter-mode", headers={}, config=config, remote_addr="203.0.113.77",
+    )
+    expect(status == 200, f"first adapter-mode expected 200 got {status}: {payload}")
+    status, payload, headers = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/adapter-mode", headers={}, config=config, remote_addr="203.0.113.77",
+    )
+    expect(status == 429, f"second adapter-mode expected 429 got {status}: {payload}")
+    header_dict = {name.lower(): value for name, value in headers}
+    expect(header_dict.get("x-ratelimit-limit") == "1", str(headers))
+
+    # /onboarding/status now enforces a per-IP ceiling too.
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/onboarding/status", headers={}, query={"session_id": "missing"}, config=config, remote_addr="198.51.100.9",
+    )
+    expect(status != 429, f"first onboarding/status should not be rate limited got {status}: {payload}")
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/onboarding/status", headers={}, query={"session_id": "missing"}, config=config, remote_addr="198.51.100.9",
+    )
+    expect(status == 429, f"second onboarding/status expected 429 got {status}: {payload}")
+
+    # /onboarding/checkout (creates real Stripe sessions) now has its own ceiling.
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/onboarding/checkout", headers={}, body="{}", config=config, remote_addr="192.0.2.13",
+    )
+    first_checkout = status
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/onboarding/checkout", headers={}, body="{}", config=config, remote_addr="192.0.2.13",
+    )
+    expect(status == 429, f"second onboarding/checkout expected 429 got {status} (first was {first_checkout}): {payload}")
+
+    scopes = {row[0] for row in conn.execute("SELECT DISTINCT scope FROM rate_limits").fetchall()}
+    expect("arclink:public-route:adapter_mode" in scopes, str(scopes))
+    expect("arclink:public-route:onboarding_status" in scopes, str(scopes))
+    expect("arclink:public-route:public_onboarding_checkout" in scopes, str(scopes))
+    expect("arclink:public-route:public_onboarding_start" in scopes, str(scopes))
+    print("PASS test_public_unauthenticated_routes_have_per_ip_rate_limits")
+
+
 def test_user_dashboard_requires_session_auth() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_user_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_user_test")
@@ -6394,6 +6462,7 @@ def main() -> int:
     test_public_onboarding_routes_work_without_session_auth()
     test_public_academy_observatory_is_aggregate_and_redacted()
     test_public_academy_observatory_rate_limit_returns_429()
+    test_public_unauthenticated_routes_have_per_ip_rate_limits()
     test_user_dashboard_requires_session_auth()
     test_user_backup_deploy_key_request_requires_session_and_csrf()
     test_user_backup_write_check_route_requires_session_csrf_and_never_activates()

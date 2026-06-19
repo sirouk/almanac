@@ -32,13 +32,23 @@ def _payload_from_raw(raw: str) -> dict[str, Any]:
 
 
 def _runtime_uid_gid() -> tuple[int, int]:
+    """Resolve the unprivileged runtime uid/gid the child must run as.
+
+    H3 fix: NEVER hardcode (1000, 1000). A wrong fallback would silently run the
+    bridge child as some unintended uid -- a privilege-drop that does not drop to
+    the intended user is a security hole, not a convenience. Resolve from, in order:
+    explicit ARCLINK_UID/ARCLINK_GID, the runtime account by name, then the
+    HERMES_HOME owner. If NONE resolve, raise so the spawn fails closed rather than
+    dropping to a guessed uid.
+    """
     uid_text = str(os.environ.get("ARCLINK_UID") or "").strip()
     gid_text = str(os.environ.get("ARCLINK_GID") or "").strip()
     if uid_text.isdigit() and gid_text.isdigit() and int(uid_text) > 0 and int(gid_text) > 0:
         return int(uid_text), int(gid_text)
     try:
         entry = pwd.getpwnam(DEFAULT_RUNTIME_USER)
-        return int(entry.pw_uid), int(entry.pw_gid)
+        if int(entry.pw_uid) > 0 and int(entry.pw_gid) > 0:
+            return int(entry.pw_uid), int(entry.pw_gid)
     except KeyError:
         pass
     hermes_home = str(os.environ.get("HERMES_HOME") or "").strip()
@@ -49,17 +59,32 @@ def _runtime_uid_gid() -> tuple[int, int]:
                 return int(st.st_uid), int(st.st_gid)
         except OSError:
             pass
-    return 1000, 1000
+    raise RuntimeError(
+        "arclink public agent bridge root wrapper cannot resolve the unprivileged "
+        "runtime uid/gid (set ARCLINK_UID and ARCLINK_GID, or provide the "
+        f"'{DEFAULT_RUNTIME_USER}' account / a HERMES_HOME owned by it); refusing to "
+        "drop privileges to a guessed user"
+    )
 
 
 def _drop_to_runtime_user(uid: int, gid: int):
     def _drop() -> None:
-        try:
-            os.setgroups([])
-        except OSError:
-            pass
+        # H3 fix: do NOT swallow setgroups failure. If we cannot clear the
+        # supplementary groups, the child would keep root's group memberships after
+        # the setuid -- so we let the OSError propagate out of preexec_fn, which makes
+        # subprocess.Popen fail the spawn (fail closed) rather than run a partially
+        # privileged child.
+        os.setgroups([])
         os.setgid(gid)
         os.setuid(uid)
+        # H3 fix: assert the drop actually took effect for BOTH real and effective
+        # ids before exec. A setuid/setgid that silently did not stick (or a
+        # mismatch) must abort the spawn, never run the Hermes turn with leftover
+        # privilege.
+        if not (os.getuid() == uid and os.geteuid() == uid):
+            raise RuntimeError(f"uid drop failed: expected {uid}, got ruid={os.getuid()} euid={os.geteuid()}")
+        if not (os.getgid() == gid and os.getegid() == gid):
+            raise RuntimeError(f"gid drop failed: expected {gid}, got rgid={os.getgid()} egid={os.getegid()}")
 
     return _drop
 
@@ -115,8 +140,13 @@ def main() -> int:
     raw = sys.stdin.read()
     payload = _payload_from_raw(raw)
     preloaded_user = _preload_telegram_getme(payload)
-    uid, gid = _runtime_uid_gid()
-    preexec_fn = _drop_to_runtime_user(uid, gid) if os.geteuid() == 0 else None
+    # H3: only resolve/drop when we are actually root. Resolving the runtime uid/gid
+    # now raises when unresolved, so doing it unconditionally would break the
+    # already-unprivileged path (where no drop is needed).
+    preexec_fn = None
+    if os.geteuid() == 0:
+        uid, gid = _runtime_uid_gid()
+        preexec_fn = _drop_to_runtime_user(uid, gid)
     proc = subprocess.run(
         [sys.executable, str(CHILD_SCRIPT)],
         input=raw,

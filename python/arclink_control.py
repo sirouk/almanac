@@ -8280,22 +8280,17 @@ def _operator_hiccup_already_armed(conn: sqlite3.Connection, *, key: str) -> boo
     re-arms cleanly. Keyed on audit state -- not on undelivered notice rows -- so
     an undelivered notice never blocks a future notice after a real recovery.
 
-    Concurrency note (accepted, documented): the arm check (this SELECT) and the
-    subsequent audit INSERT in report_operator_hiccup are not a single atomic
-    statement, so two TRULY concurrent same-key reports could in principle both
-    observe "not armed" and both notify. This is accepted because every production
-    caller is already single-writer per key UPSTREAM of this helper:
-      * the public-agent-bridge source pages per-outbox-row-id only after the row
-        is leased to exactly one worker via _claim_notification_for_delivery, so
-        no two workers ever report the same row-id key concurrently; and
-      * the sovereign-provisioning source pages per-deployment-id only after
-        remove_placement() returns a non-None row, and that DELETE returns the row
-        to exactly one caller (None on re-entry), so the page is single-success
-        per deployment.
-    There are no direct concurrent same-key callers, so a guarded single-write is
-    not worth the added transaction complexity; if a future caller is NOT
-    single-writer per key, gate it the same way (lease / single-success delete) or
-    wrap report_operator_hiccup in a BEGIN IMMEDIATE arm+insert.
+    Concurrency note (H1 fix): the arm check (this SELECT) and the subsequent audit
+    INSERT now run inside a single BEGIN IMMEDIATE transaction in both
+    report_operator_hiccup and resolve_operator_hiccup, so two truly concurrent
+    same-key reports (or a concurrent resolve vs report) serialise on the write
+    lock and resolve to a single deterministic outcome -- the second writer blocks,
+    then re-reads the freshly-armed/resolved state. The ORDER BY below uses
+    ``rowid DESC`` as the tiebreaker on whole-second ``created_at`` so a same-second
+    resolve vs report can never mis-order. Production callers are additionally
+    single-writer per key upstream (per-outbox-row-id after _claim_notification_for_delivery;
+    per-deployment-id after a single-success remove_placement DELETE), so this is
+    defense in depth rather than the only guard.
     """
     fail_action = f"{OPERATOR_HICCUP_AUDIT_PREFIX}{key}"
     ok_action = f"{OPERATOR_HICCUP_RESOLVED_AUDIT_PREFIX}{key}"
@@ -8355,43 +8350,60 @@ def report_operator_hiccup(
     clean_key = str(key or "").strip()
     if not clean_key:
         raise ValueError("report_operator_hiccup requires a non-empty key")
-    if _operator_hiccup_already_armed(conn, key=clean_key):
-        return 0
-    target_id, channel_kind = _operator_hiccup_target(cfg)
-    notice_extra: dict[str, Any] = {
-        "operator_hiccup_source": str(source or "").strip(),
-        "operator_hiccup_key": clean_key,
-    }
-    if extra:
-        for extra_key, extra_value in dict(extra).items():
-            notice_extra.setdefault(str(extra_key), extra_value)
-    notification_id = queue_notification(
-        conn,
-        target_kind=target_kind or "operator",
-        target_id=target_id,
-        channel_kind=channel_kind,
-        message=message,
-        extra=notice_extra,
-        commit=False,
-    )
-    append_arclink_audit(
-        conn,
-        action=f"{OPERATOR_HICCUP_AUDIT_PREFIX}{clean_key}",
-        actor_id=f"system:{str(source or 'operator_hiccup').strip()}",
-        target_kind="operator-hiccup",
-        target_id=clean_key,
-        reason=str(reason or message)[:300],
-        metadata={
-            "source": str(source or "").strip(),
-            "key": clean_key,
-            "notification_id": int(notification_id),
-            "channel_kind": channel_kind,
-        },
-        commit=False,
-    )
-    if commit:
-        conn.commit()
-    return int(notification_id)
+    # H1 fix: make the arm-check + audit-insert ATOMIC. Without this, two truly
+    # concurrent same-key reports (or a concurrent resolve+report) could both
+    # observe "not armed" and both notify. BEGIN IMMEDIATE takes the write lock up
+    # front, so the second writer blocks until the first commits and then sees the
+    # freshly-armed audit row. The arm check already orders by ``created_at DESC,
+    # rowid DESC`` (rowid is the monotonic tiebreaker), so the whole-second
+    # ``created_at`` resolution can never mis-order a same-second resolve vs report.
+    own_txn = not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        if _operator_hiccup_already_armed(conn, key=clean_key):
+            if own_txn:
+                conn.commit()
+            return 0
+        target_id, channel_kind = _operator_hiccup_target(cfg)
+        notice_extra: dict[str, Any] = {
+            "operator_hiccup_source": str(source or "").strip(),
+            "operator_hiccup_key": clean_key,
+        }
+        if extra:
+            for extra_key, extra_value in dict(extra).items():
+                notice_extra.setdefault(str(extra_key), extra_value)
+        notification_id = queue_notification(
+            conn,
+            target_kind=target_kind or "operator",
+            target_id=target_id,
+            channel_kind=channel_kind,
+            message=message,
+            extra=notice_extra,
+            commit=False,
+        )
+        append_arclink_audit(
+            conn,
+            action=f"{OPERATOR_HICCUP_AUDIT_PREFIX}{clean_key}",
+            actor_id=f"system:{str(source or 'operator_hiccup').strip()}",
+            target_kind="operator-hiccup",
+            target_id=clean_key,
+            reason=str(reason or message)[:300],
+            metadata={
+                "source": str(source or "").strip(),
+                "key": clean_key,
+                "notification_id": int(notification_id),
+                "channel_kind": channel_kind,
+            },
+            commit=False,
+        )
+        if own_txn or commit:
+            conn.commit()
+        return int(notification_id)
+    except Exception:
+        if own_txn:
+            conn.rollback()
+        raise
 
 
 def resolve_operator_hiccup(
@@ -8416,21 +8428,34 @@ def resolve_operator_hiccup(
     clean_key = str(key or "").strip()
     if not clean_key:
         raise ValueError("resolve_operator_hiccup requires a non-empty key")
-    if not _operator_hiccup_already_armed(conn, key=clean_key):
-        return False
-    append_arclink_audit(
-        conn,
-        action=f"{OPERATOR_HICCUP_RESOLVED_AUDIT_PREFIX}{clean_key}",
-        actor_id=f"system:{str(source or 'operator_hiccup').strip()}",
-        target_kind="operator-hiccup",
-        target_id=clean_key,
-        reason=str(reason or "resolved")[:300],
-        metadata={"source": str(source or "").strip(), "key": clean_key},
-        commit=False,
-    )
-    if commit:
-        conn.commit()
-    return True
+    # H1 fix: same atomic arm-check + audit-insert as report_operator_hiccup, so a
+    # concurrent resolve vs report on the same key resolves to a single
+    # deterministic outcome instead of both racing on a stale "armed?" read.
+    own_txn = not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        if not _operator_hiccup_already_armed(conn, key=clean_key):
+            if own_txn:
+                conn.commit()
+            return False
+        append_arclink_audit(
+            conn,
+            action=f"{OPERATOR_HICCUP_RESOLVED_AUDIT_PREFIX}{clean_key}",
+            actor_id=f"system:{str(source or 'operator_hiccup').strip()}",
+            target_kind="operator-hiccup",
+            target_id=clean_key,
+            reason=str(reason or "resolved")[:300],
+            metadata={"source": str(source or "").strip(), "key": clean_key},
+            commit=False,
+        )
+        if own_txn or commit:
+            conn.commit()
+        return True
+    except Exception:
+        if own_txn:
+            conn.rollback()
+        raise
 
 
 def _notification_due_now(next_attempt_at: str | None) -> bool:
@@ -10053,8 +10078,14 @@ def sync_vault_repo_mirrors(
 
 
 def mark_notification_delivered(conn: sqlite3.Connection, notification_id: int) -> None:
+    # Idempotent / no-clobber: only the FIRST delivery stamps delivered_at (and
+    # clears delivery_error). A duplicate/late success on an already-delivered row
+    # must NOT re-stamp a fresh delivered_at or re-clear a meaningful error, so the
+    # ``delivered_at IS NULL`` guard makes a second call a no-op. This pairs with
+    # the same guard in mark_notification_error so neither late writer can clobber
+    # the terminal state of a row that another worker already finalised.
     conn.execute(
-        "UPDATE notification_outbox SET delivered_at = ?, delivery_error = NULL WHERE id = ?",
+        "UPDATE notification_outbox SET delivered_at = ?, delivery_error = NULL WHERE id = ? AND delivered_at IS NULL",
         (utc_now_iso(), notification_id),
     )
     conn.commit()
@@ -10073,11 +10104,19 @@ def notification_error_retry_delay_seconds(attempts: int, notification_id: int |
 
 
 def mark_notification_error(conn: sqlite3.Connection, notification_id: int, error: str) -> None:
+    # No-clobber on a delivered row: a late or duplicate error (e.g. a recycled /
+    # re-leased bridge worker, or the album path that marks an absorbed sibling
+    # delivered and THEN records an "absorbed" note) must never overwrite the
+    # delivery_error / attempt_count / next_attempt_at of a row another writer
+    # already marked delivered. The ``delivered_at IS NULL`` guard makes this a
+    # no-op on a delivered row, pairing with the guard in mark_notification_delivered.
     row = conn.execute(
-        "SELECT attempt_count FROM notification_outbox WHERE id = ?",
+        "SELECT attempt_count FROM notification_outbox WHERE id = ? AND delivered_at IS NULL",
         (notification_id,),
     ).fetchone()
-    attempts = int(row["attempt_count"] or 0) + 1 if row is not None else 1
+    if row is None:
+        return
+    attempts = int(row["attempt_count"] or 0) + 1
     now_iso = utc_now_iso()
     conn.execute(
         """
@@ -10087,6 +10126,7 @@ def mark_notification_error(conn: sqlite3.Connection, notification_id: int, erro
             next_attempt_at = ?,
             delivery_error = ?
         WHERE id = ?
+          AND delivered_at IS NULL
         """,
         (
             attempts,
@@ -10097,6 +10137,101 @@ def mark_notification_error(conn: sqlite3.Connection, notification_id: int, erro
         ),
     )
     conn.commit()
+
+
+# C1: the extra_json path under which a detached public-agent bridge worker records
+# the unique lease token it owns. Kept in sync with the mirror constant in
+# arclink_notification_delivery (PUBLIC_AGENT_BRIDGE_WORKER_TOKEN_JSON_PATH). The
+# token is a hex nonce and never contains JSON-path metacharacters, so the literal
+# nested path form is safe.
+NOTIFICATION_WORKER_TOKEN_JSON_PATH = "$._public_agent_bridge_worker.token"
+
+
+def _notification_token_guard_sql(worker_token: str) -> tuple[str, list[Any]]:
+    """Build the ATOMIC token-ownership predicate for a guarded terminal write.
+
+    C1: the ownership check and the terminal write must be ONE statement so there is
+    no check-then-write TOCTOU window (the previous helper read the token, then wrote
+    in a separate statement, so a re-lease between the two let a stale worker stamp a
+    duplicate delivery). The predicate is appended to a ``WHERE id=? AND delivered_at
+    IS NULL`` UPDATE and returns the bound params to splice in.
+
+    Semantics:
+      * non-empty ``worker_token`` (a DETACHED worker): the row's recorded token must
+        EQUAL this token. A MISSING recorded token (json_extract -> NULL) is treated
+        as NOT owned -- ``= ?`` never matches NULL -- so a worker can only finalise a
+        row that still carries ITS token.
+      * empty ``worker_token`` (the in-process claim-holder: the album/loop dispatch
+        path that holds the claim, not a detached lease): the row must have NO
+        recorded worker token. A row that DOES carry a token belongs to a detached
+        worker, so the claim-holder must not finalise it out from under that worker.
+    """
+    clean = str(worker_token or "").strip()
+    if clean:
+        return (
+            " AND json_extract(COALESCE(extra_json, '{}'), ?) = ?",
+            [NOTIFICATION_WORKER_TOKEN_JSON_PATH, clean],
+        )
+    return (
+        " AND json_extract(COALESCE(extra_json, '{}'), ?) IS NULL",
+        [NOTIFICATION_WORKER_TOKEN_JSON_PATH],
+    )
+
+
+def mark_notification_delivered_if_owned(
+    conn: sqlite3.Connection, notification_id: int, worker_token: str
+) -> int:
+    """C1: ATOMIC, token-guarded delivered-mark. Returns the rowcount (0 => no-op).
+
+    A single ``UPDATE ... WHERE id=? AND <token-guard> AND delivered_at IS NULL``
+    stamps delivered_at / clears delivery_error ONLY when the caller still owns the
+    lease, so a recycled/re-leased worker (or a claim-holder racing a detached
+    worker) can never duplicate a delivery on a row another owner finalised.
+    """
+    guard_sql, guard_params = _notification_token_guard_sql(worker_token)
+    cursor = conn.execute(
+        "UPDATE notification_outbox SET delivered_at = ?, delivery_error = NULL "
+        "WHERE id = ?" + guard_sql + " AND delivered_at IS NULL",
+        [utc_now_iso(), int(notification_id), *guard_params],
+    )
+    conn.commit()
+    return int(getattr(cursor, "rowcount", 0) or 0)
+
+
+def mark_notification_error_if_owned(
+    conn: sqlite3.Connection, notification_id: int, error: str, worker_token: str
+) -> int:
+    """C1: ATOMIC, token-guarded error-mark. Returns the rowcount (0 => no-op).
+
+    The attempt_count read is also token-guarded so a stale owner never even reads a
+    row it no longer owns; the write is a single guarded UPDATE. Mirrors
+    mark_notification_error (same retry-backoff schedule) with the ownership guard.
+    """
+    guard_sql, guard_params = _notification_token_guard_sql(worker_token)
+    row = conn.execute(
+        "SELECT attempt_count FROM notification_outbox "
+        "WHERE id = ?" + guard_sql + " AND delivered_at IS NULL",
+        [int(notification_id), *guard_params],
+    ).fetchone()
+    if row is None:
+        return 0
+    attempts = int(row["attempt_count"] or 0) + 1
+    now_iso = utc_now_iso()
+    cursor = conn.execute(
+        "UPDATE notification_outbox "
+        "SET attempt_count = ?, last_attempt_at = ?, next_attempt_at = ?, delivery_error = ? "
+        "WHERE id = ?" + guard_sql + " AND delivered_at IS NULL",
+        [
+            attempts,
+            now_iso,
+            utc_after_seconds_iso(notification_error_retry_delay_seconds(attempts, notification_id)),
+            str(error or "")[:500],
+            int(notification_id),
+            *guard_params,
+        ],
+    )
+    conn.commit()
+    return int(getattr(cursor, "rowcount", 0) or 0)
 
 
 def fetch_undelivered_notifications(

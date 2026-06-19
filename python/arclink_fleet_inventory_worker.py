@@ -284,7 +284,20 @@ def _apply_liveness_state(
     machine_id = _linked_machine_id(host)
     now = utc_now_iso()
     if result.ok:
-        metadata = json_loads_safe(str(host.get("metadata_json") or "{}"))
+        # Read-merge-write the LIVE metadata row (not the caller's possibly-stale
+        # snapshot) and patch ONLY the two keys we own here. Crucially we serialize
+        # with plain json -- NOT _redacted_json -- because the redacting serializer
+        # truncates long values and replaces "secretish"-named keys with
+        # [REDACTED], which would silently corrupt unrelated gate keys such as
+        # image_sync_state / image_sync_digest that the placement-eligibility check
+        # depends on. Host metadata is operator-managed config, not a probe payload.
+        current_meta_row = conn.execute(
+            "SELECT metadata_json FROM arclink_fleet_hosts WHERE host_id = ?",
+            (host_id,),
+        ).fetchone()
+        metadata = json_loads_safe(
+            str((current_meta_row["metadata_json"] if current_meta_row is not None else host.get("metadata_json")) or "{}")
+        )
         if not isinstance(metadata, dict):
             metadata = {}
         host_sets = ["status = 'active'", "last_health_state = 'active'", "updated_at = ?"]
@@ -294,7 +307,7 @@ def _apply_liveness_state(
             metadata["placement_activated_at"] = now
             host_sets.append("drain = 0")
             host_sets.append("metadata_json = ?")
-            host_params.append(_redacted_json(metadata))
+            host_params.append(json.dumps(metadata, sort_keys=True))
         host_params.append(host_id)
         conn.execute(f"UPDATE arclink_fleet_hosts SET {', '.join(host_sets)} WHERE host_id = ?", host_params)
         if machine_id:
@@ -368,6 +381,49 @@ def _apply_capacity_or_inventory(
     try:
         asu_capacity = compute_asu(hardware) if hardware else float(capacity_slots)
     except Exception as exc:
+        # A partial probe (a zero/missing hardware dimension -- e.g. disk_gib=0
+        # because the disk could not be measured) makes compute_asu fail closed.
+        # We must NOT persist asu_capacity=0/ready from such a probe: that would
+        # render an otherwise-healthy host unschedulable (ASU 0). Instead preserve
+        # the machine's last known nonzero capacity (falling back to the probed
+        # capacity_slots) and keep it ready so scheduling is unaffected, while
+        # recording the partial-probe error for observability.
+        prior = conn.execute(
+            "SELECT asu_capacity, status FROM arclink_inventory_machines WHERE machine_id = ?",
+            (machine_id,),
+        ).fetchone()
+        prior_capacity = float((prior["asu_capacity"] if prior is not None else 0) or 0)
+        prior_status = str((prior["status"] if prior is not None else "") or "")
+        if prior_capacity > 0 and prior_status == "ready":
+            # We have a prior KNOWN-GOOD nonzero capacity from an earlier full
+            # probe. A later partial probe must not erase it: keep the machine
+            # ready on the preserved capacity so it stays schedulable, and never
+            # persist asu_capacity=0 from the partial probe.
+            conn.execute(
+                """
+                UPDATE arclink_inventory_machines
+                SET asu_capacity = ?, connectivity_summary_json = ?, last_probed_at = ?
+                WHERE machine_id = ?
+                """,
+                (
+                    prior_capacity,
+                    _redacted_json(
+                        {
+                            "ok": False,
+                            "probe_kind": kind,
+                            "partial_probe": True,
+                            "preserved_asu_capacity": prior_capacity,
+                            "error": f"invalid hardware summary: {redact_then_truncate(str(exc), limit=240)}",
+                        }
+                    ),
+                    now,
+                    machine_id,
+                ),
+            )
+            return
+        # No prior known-good capacity to preserve (machine was never fully
+        # probed): a partial/invalid summary genuinely degrades it. We still do
+        # NOT write a computed 0 capacity -- asu_capacity is left untouched.
         conn.execute(
             """
             UPDATE arclink_inventory_machines
@@ -426,38 +482,66 @@ def record_host_probe(
         raise ArcLinkFleetInventoryWorkerError("fleet probe requires a host id")
     clean_now = now_iso or utc_now_iso()
     error = redact_then_truncate(result.error, limit=1000)
-    conn.execute(
-        """
-        INSERT INTO arclink_fleet_host_probes (
-          probe_id, host_id, probed_at, kind, ok, latency_ms, payload_json, error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            _probe_id(),
-            host_id,
-            clean_now,
-            clean_kind,
-            1 if result.ok else 0,
-            max(0, int(result.latency_ms or 0)),
-            _redacted_json(result.payload),
-            error,
-        ),
-    )
-    if clean_kind == "liveness":
-        _apply_liveness_state(conn, host=host, result=ProbeResult(result.ok, result.payload, error, result.latency_ms), notify=notify)
-    else:
-        _apply_capacity_or_inventory(conn, host=host, kind=clean_kind, result=ProbeResult(result.ok, result.payload, error, result.latency_ms))
-    append_arclink_audit(
-        conn,
-        action="fleet_host_probed",
-        actor_id="system:fleet_inventory_worker",
-        target_kind="fleet_host",
-        target_id=host_id,
-        reason=f"fleet inventory worker recorded {clean_kind} probe",
-        metadata={"kind": clean_kind, "ok": bool(result.ok), "hostname": str(host.get("hostname") or "")},
-        commit=False,
-    )
-    conn.commit()
+    # Run the SELECT-then-UPDATE state transition under a single BEGIN IMMEDIATE
+    # transaction so two concurrent probe passes cannot interleave a stale read
+    # with a write (lost-update). Re-read the host row INSIDE the lock so the
+    # applied transition is computed from the just-locked committed state, not
+    # from the possibly-stale row captured by the caller's pre-pass snapshot.
+    own_txn = not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        fresh = conn.execute(
+            "SELECT * FROM arclink_fleet_hosts WHERE host_id = ?",
+            (host_id,),
+        ).fetchone()
+        if fresh is not None:
+            # Preserve the joined machine-link / endpoint fields the caller
+            # resolved (machine_id, ssh_host, ...) while taking the authoritative
+            # fleet-host columns from the freshly-locked row.
+            host = {**dict(host), **dict(fresh)}
+        conn.execute(
+            """
+            INSERT INTO arclink_fleet_host_probes (
+              probe_id, host_id, probed_at, kind, ok, latency_ms, payload_json, error
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                _probe_id(),
+                host_id,
+                clean_now,
+                clean_kind,
+                1 if result.ok else 0,
+                max(0, int(result.latency_ms or 0)),
+                _redacted_json(result.payload),
+                error,
+            ),
+        )
+        if clean_kind == "liveness":
+            _apply_liveness_state(conn, host=host, result=ProbeResult(result.ok, result.payload, error, result.latency_ms), notify=notify)
+        else:
+            _apply_capacity_or_inventory(conn, host=host, kind=clean_kind, result=ProbeResult(result.ok, result.payload, error, result.latency_ms))
+    except Exception:
+        if own_txn and conn.in_transaction:
+            conn.rollback()
+        raise
+    try:
+        append_arclink_audit(
+            conn,
+            action="fleet_host_probed",
+            actor_id="system:fleet_inventory_worker",
+            target_kind="fleet_host",
+            target_id=host_id,
+            reason=f"fleet inventory worker recorded {clean_kind} probe",
+            metadata={"kind": clean_kind, "ok": bool(result.ok), "hostname": str(host.get("hostname") or "")},
+            commit=False,
+        )
+    except Exception:
+        if own_txn and conn.in_transaction:
+            conn.rollback()
+        raise
+    if own_txn:
+        conn.commit()
     return dict(conn.execute("SELECT * FROM arclink_fleet_hosts WHERE host_id = ?", (host_id,)).fetchone())
 
 
@@ -506,35 +590,59 @@ def process_due_hosts(
         timeout=int(os.environ.get("ARCLINK_FLEET_PROBE_TIMEOUT_SECONDS", "20") or "20"),
     )
     results: list[dict[str, Any]] = []
-    for host in _host_rows(conn):
-        for kind in PROBE_KINDS:
-            if not force and not probe_due(
-                conn,
-                host_id=str(host["host_id"]),
-                kind=kind,
-                now_iso=clean_now,
-                cadence_seconds=int(effective_cadences[kind]),
-            ):
-                continue
-            try:
-                result = probe_runner(host, kind)
-            except Exception as exc:
-                result = ProbeResult(ok=False, error=str(exc))
-            refreshed = record_host_probe(conn, host=host, kind=kind, result=result, now_iso=clean_now, notify=notify)
-            host = {**host, **refreshed}
-            results.append(
-                {
-                    "host_id": str(host["host_id"]),
-                    "hostname": str(host["hostname"]),
-                    "kind": kind,
-                    "ok": bool(result.ok),
-                    "status": str(refreshed["status"]),
-                    "health_state": str(refreshed["last_health_state"] or refreshed["status"]),
-                    "error": redact_then_truncate(result.error, limit=240),
-                }
-            )
-    pruned = prune_host_probes(conn, retention_per_host_kind=retention_per_host_kind)
-    return {"probes": results, "probe_count": len(results), "pruned": pruned}
+    errors: list[dict[str, Any]] = []
+    try:
+        for host in _host_rows(conn):
+            for kind in PROBE_KINDS:
+                if not force and not probe_due(
+                    conn,
+                    host_id=str(host["host_id"]),
+                    kind=kind,
+                    now_iso=clean_now,
+                    cadence_seconds=int(effective_cadences[kind]),
+                ):
+                    continue
+                try:
+                    result = probe_runner(host, kind)
+                except Exception as exc:
+                    result = ProbeResult(ok=False, error=str(exc))
+                # Each host's state transition is its own BEGIN IMMEDIATE
+                # transaction inside record_host_probe; wrap the whole body in a
+                # log-and-continue guard so a single bad row (a failed UPDATE,
+                # a serialization conflict, ...) cannot abort the entire pass and
+                # starve every other due host. The failed host's transaction is
+                # rolled back independently and the next pass retries it.
+                try:
+                    refreshed = record_host_probe(conn, host=host, kind=kind, result=result, now_iso=clean_now, notify=notify)
+                except Exception as exc:
+                    if conn.in_transaction:
+                        conn.rollback()
+                    errors.append(
+                        {
+                            "host_id": str(host.get("host_id") or ""),
+                            "hostname": str(host.get("hostname") or ""),
+                            "kind": kind,
+                            "error": redact_then_truncate(str(exc), limit=240),
+                        }
+                    )
+                    continue
+                host = {**host, **refreshed}
+                results.append(
+                    {
+                        "host_id": str(host["host_id"]),
+                        "hostname": str(host["hostname"]),
+                        "kind": kind,
+                        "ok": bool(result.ok),
+                        "status": str(refreshed["status"]),
+                        "health_state": str(refreshed["last_health_state"] or refreshed["status"]),
+                        "error": redact_then_truncate(result.error, limit=240),
+                    }
+                )
+    finally:
+        # Retention pruning must always run, even if the loop above raised, so a
+        # probe-history table cannot grow without bound after a bad pass.
+        pruned = prune_host_probes(conn, retention_per_host_kind=retention_per_host_kind)
+    return {"probes": results, "probe_count": len(results), "pruned": pruned, "errors": errors, "error_count": len(errors)}
 
 
 def _load_conn() -> sqlite3.Connection:

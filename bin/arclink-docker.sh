@@ -198,6 +198,89 @@ require_docker_compose() {
   fi
 }
 
+# True when a `compose down` argument list requests volume destruction. Matches
+# the documented compose flags `--volumes` and its short form `-v` (including the
+# `-v` bundled into a combined short-flag cluster such as `-vt`). A plain `down`
+# with no such flag only stops the stack and stays ungated.
+docker_down_args_destroy_volumes() {
+  local arg=""
+  for arg in "$@"; do
+    case "$arg" in
+      --volumes|--volumes=*)
+        # `--volumes` and any `--volumes=<value>` assignment form (e.g.
+        # `--volumes=true`) request volume destruction.
+        return 0
+        ;;
+      --*)
+        # Any other long flag (e.g. --remove-orphans, --timeout) is not volume
+        # destruction; skip it so its value cannot be misread as a short flag.
+        ;;
+      -*)
+        # Short flag or combined short-flag cluster; treat a contained `v` as
+        # `--volumes` (compose accepts e.g. `-v`, `-vt`).
+        if [[ "$arg" == *v* ]]; then
+          return 0
+        fi
+        ;;
+    esac
+  done
+  return 1
+}
+
+# Guard for the destructive teardown/remove path. `compose down --volumes`
+# instantly stops the control stack AND destroys the named qmd volume with no
+# undo. This gate mirrors confirm_control_runtime_reset in deploy.sh: it requires
+# an interactive `type REMOVE` (plus the control host name as a second factor),
+# or, for non-interactive callers, ARCLINK_CONFIRM_CONTROL_REMOVE='REMOVE' AND
+# ARCLINK_CONFIRM_CONTROL_REMOVE_HOST set to this host's name. The legitimate
+# operator path is preserved: an operator who confirms (or sets both env vars)
+# proceeds exactly as before.
+confirm_docker_control_remove() {
+  local action="${1:-teardown}"
+  local control_host="" answer="" host_answer=""
+
+  control_host="$(hostname -f 2>/dev/null || hostname 2>/dev/null || true)"
+  [[ -z "$control_host" ]] && control_host="this-host"
+
+  # Explicit non-interactive override (double-keyed: phrase + host name).
+  if [[ "${ARCLINK_CONFIRM_CONTROL_REMOVE:-}" == "REMOVE" \
+        && "${ARCLINK_CONFIRM_CONTROL_REMOVE_HOST:-}" == "$control_host" ]]; then
+    return 0
+  fi
+
+  cat >&2 <<EOF
+
+ArcLink Sovereign Control Node ${action}
+
+This stops the entire control stack AND runs 'compose down --volumes', which
+DESTROYS the named qmd volume. The control SQLite DB is a host bind-mount and
+survives, but the qmd index volume and any other named volumes do not.
+
+Back up first if you have not already:
+  ./deploy.sh control backup
+
+Confirmation is required before the control node is torn down.
+EOF
+
+  if [[ ! -t 0 ]]; then
+    echo "Refusing non-interactive control ${action} without explicit confirmation." >&2
+    echo "Set ARCLINK_CONFIRM_CONTROL_REMOVE='REMOVE' and ARCLINK_CONFIRM_CONTROL_REMOVE_HOST='$control_host' to run non-interactively." >&2
+    return 1
+  fi
+
+  read -r -p "Type REMOVE to confirm control ${action} (blank cancels): " answer
+  if [[ "$answer" != "REMOVE" ]]; then
+    echo "Control ${action} cancelled." >&2
+    return 1
+  fi
+  read -r -p "Confirm host (type $control_host; blank cancels): " host_answer
+  if [[ "$host_answer" != "$control_host" ]]; then
+    echo "Control ${action} cancelled (host name did not match)." >&2
+    return 1
+  fi
+  return 0
+}
+
 prepare_compose() {
   require_docker_compose
   bootstrap
@@ -3412,6 +3495,14 @@ main() {
       ;;
     down)
       require_docker_compose
+      # A plain `down` only stops the stack and is safe to run ungated. But
+      # `down --volumes` (or `-v`) DESTROYS named volumes (the qmd index, etc.)
+      # with no undo, so it must clear the same confirm gate as teardown/remove.
+      # This is the single chokepoint for the compose `down` path, so gating it
+      # here also covers `deploy.sh control down --volumes`, which routes here.
+      if docker_down_args_destroy_volumes "$@"; then
+        confirm_docker_control_remove "down --volumes"
+      fi
       compose down "$@"
       ;;
     ps)
@@ -3490,10 +3581,12 @@ main() {
       ;;
     teardown)
       require_docker_compose
+      confirm_docker_control_remove teardown
       compose down --volumes --remove-orphans "$@"
       ;;
     remove)
       require_docker_compose
+      confirm_docker_control_remove remove
       compose down --volumes --remove-orphans "$@"
       ;;
     *)

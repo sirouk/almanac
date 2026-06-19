@@ -164,12 +164,16 @@ run_job_once() {
   local started_at=""
   local rc=0
   started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  write_running_status "$started_at"
+  # Status writes must never abort the supervisor loop. A transient status-write
+  # failure (ENOSPC, read-only mount, etc.) under `set -e` would otherwise kill
+  # the loop permanently; only a signal should stop it. The workload still runs
+  # and its result is still reported below.
+  write_running_status "$started_at" || echo "docker-job-loop: failed to write running status for $JOB_NAME (continuing)" >&2
   "$@" >"$output_file" 2>&1 || rc=$?
   if [[ "$rc" != "0" ]]; then
     redact_output "$output_file" >&2
   fi
-  write_status "$(status_for_return_code "$rc")" "$rc" "$output_file" "$started_at"
+  write_status "$(status_for_return_code "$rc")" "$rc" "$output_file" "$started_at" || echo "docker-job-loop: failed to write status for $JOB_NAME (rc=$rc)" >&2
   cleanup
   output_file=""
 }

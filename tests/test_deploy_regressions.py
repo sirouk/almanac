@@ -2277,7 +2277,7 @@ def test_deploy_sh_retires_public_docker_control_center() -> None:
     expect("arclink-fleet-probe-wrapper liveness" in text, "expected local starter SSH smoke test to verify probe execution")
     expect("ensure_control_local_fleet_worker_registered()" in text, "expected local starter worker to be auto-registered before readiness")
     expect("sync_control_docker_image_to_fleet_workers()" in text, "expected control upgrades to seed the ArcLink image to SSH workers")
-    expect("docker image save \"$image\" | timeout \"$load_timeout\" ssh" in text, "expected fleet image sync to use a bounded private SSH lane")
+    expect("timeout \"$save_timeout\" docker image save \"$image\" | timeout \"$load_timeout\" ssh" in text, "expected fleet image sync to bound both the docker image save and the private SSH lane")
     expect("timeout \"$inspect_timeout\" ssh" in text and "ServerAliveInterval=5" in text and "arclink-ssh-ok" in text, "expected fleet image inspect SSH to be time-bounded and prove readiness")
     expect("docker image inspect --format '{{.Id}}' $q_image 2>/dev/null || true\" </dev/null" in text, "expected fleet image inspect SSH not to consume the worker row stream")
     expect(

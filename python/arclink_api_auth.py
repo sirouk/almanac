@@ -2225,6 +2225,48 @@ def acknowledge_user_credential_api(
     return ArcLinkApiResponse(status=200, payload={"credential": public})
 
 
+# Markdown metacharacters that can break Telegram entity pairing or Discord
+# native markdown -- including the cross-tenant link/mention injection vector in
+# share notifications (`[`, `]`, `(`, `)`, `@`). Each maps to a visually similar
+# Unicode stand-in so the rendered label still reads naturally but cannot be
+# interpreted as markup or a mention by the recipient's channel.
+_SHARE_LABEL_MARKDOWN_SUBSTITUTIONS = {
+    "`": "ˋ",   # MODIFIER LETTER GRAVE ACCENT
+    "*": "∗",   # ASTERISK OPERATOR
+    "_": "ˍ",   # MODIFIER LETTER LOW MACRON
+    "~": "˜",   # SMALL TILDE
+    "|": "ǀ",   # LATIN LETTER DENTAL CLICK
+    "[": "❲",   # LIGHT LEFT TORTOISE SHELL BRACKET ORNAMENT
+    "]": "❳",   # LIGHT RIGHT TORTOISE SHELL BRACKET ORNAMENT
+    "(": "❨",   # MEDIUM LEFT PARENTHESIS ORNAMENT
+    ")": "❩",   # MEDIUM RIGHT PARENTHESIS ORNAMENT
+    "@": "﹫",   # SMALL COMMERCIAL AT (neutralizes @everyone/@here style mentions)
+    "<": "‹",   # SINGLE LEFT-POINTING ANGLE QUOTATION MARK (neutralizes <@&role>)
+    ">": "›",   # SINGLE RIGHT-POINTING ANGLE QUOTATION MARK
+}
+
+
+def _safe_share_label(value: str) -> str:
+    """Neutralize markdown/link/mention metacharacters in a user-controlled label.
+
+    The returned string is safe to interpolate into a cross-tenant Raven share
+    notification (Telegram or Discord) without letting an owner-supplied display
+    name or resource path inject links, code spans, or guild mentions into the
+    recipient's reply. Display only -- stored values stay raw.
+    """
+    rendered = str(value or "")
+    for metachar, replacement in _SHARE_LABEL_MARKDOWN_SUBSTITUTIONS.items():
+        rendered = rendered.replace(metachar, replacement)
+    return rendered
+
+
+# Only TRUE markdown/link/mention metacharacters that enable injection into a
+# cross-tenant Raven notification are rejected here. Normal path characters --
+# including ``_`` -- must pass so legitimate paths like ``Q1_notes`` and the
+# grants that materialize from them keep working.
+_SHARE_PATH_MARKDOWN_METACHARS = frozenset("`*~|[]()@<>")
+
+
 def _clean_share_path(value: str) -> str:
     text = str(value or "").replace("\\", "/").strip()
     if not text or text in {"/", ".", "./"}:
@@ -2239,6 +2281,8 @@ def _clean_share_path(value: str) -> str:
         lowered = part.lower()
         if lowered in {".ssh", "secrets"} or lowered == ".env" or lowered.startswith(".env.") or "bootstrap-token" in lowered:
             raise ArcLinkApiAuthError("ArcLink share path cannot target private runtime or secret material")
+        if _SHARE_PATH_MARKDOWN_METACHARS.intersection(part):
+            raise ArcLinkApiAuthError("ArcLink share path cannot contain markdown or mention metacharacters")
         parts.append(part)
     if not parts:
         raise ArcLinkApiAuthError("ArcLink share requires a named file or directory path")
@@ -2931,10 +2975,16 @@ def _queue_share_grant_owner_notification(
     resource_root = str(grant.get("resource_root") or "").strip()
     resource_path = str(grant.get("resource_path") or "").strip()
     recipient = str(grant.get("recipient_user_id") or "").strip()
+    # Owner-supplied label/path renders cross-tenant into the owner's own channel;
+    # neutralize markdown/link/mention metacharacters before interpolation.
+    safe_label = _safe_share_label(resource_label)
+    safe_root = _safe_share_label(resource_root)
+    safe_path = _safe_share_label(resource_path)
+    safe_recipient = _safe_share_label(recipient)
     message = (
         "Raven share approval requested.\n\n"
-        f"Recipient `{recipient}` is asking for {access_label} access to `{resource_label}` "
-        f"from `{resource_root}:{resource_path}`.\n\n"
+        f"Recipient `{safe_recipient}` is asking for {access_label} access to `{safe_label}` "
+        f"from `{safe_root}:{safe_path}`.\n\n"
         f"Approve to let the recipient accept it as a {accept_label}. "
         "Deny leaves the share closed. Accepted Linked resources cannot be reshared."
     )
@@ -2985,9 +3035,14 @@ def queue_share_grant_recipient_notification(
     resource_root = str(grant.get("resource_root") or "").strip()
     resource_path = str(grant.get("resource_path") or "").strip()
     inherited = " with inherited subpages" if resource_kind == "notion" else ""
+    # Owner-supplied label/path is delivered cross-tenant to the recipient;
+    # neutralize markdown/link/mention metacharacters before interpolation.
+    safe_label = _safe_share_label(resource_label)
+    safe_root = _safe_share_label(resource_root)
+    safe_path = _safe_share_label(resource_path)
     message = (
         "Raven share ready.\n\n"
-        f"The owner approved {access_label} access to `{resource_label}` from `{resource_root}:{resource_path}`{inherited}.\n\n"
+        f"The owner approved {access_label} access to `{safe_label}` from `{safe_root}:{safe_path}`{inherited}.\n\n"
         f"Accept to add it to your Linked resources. {linked_label} and cannot be reshared."
     )
     notification_id = queue_notification(

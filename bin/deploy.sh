@@ -2173,6 +2173,9 @@ emit_runtime_config() {
   local hermes_docs_ref=""
 
   normalize_runtime_config_defaults
+  # Read-only reconcile: this folds known fleet-inventory hosts into the in-memory
+  # executor allowlist var so the emitted config is consistent. It does NOT write
+  # the control DB, so it is safe to run on every config emission.
   reconcile_executor_allowlist_from_fleet_inventory
   hermes_agent_ref="$(deploy_pin_get_or_default hermes-agent ref "${ARCLINK_HERMES_AGENT_REF:-ce089169d578b96c82641f17186ba63c288b22d8}")"
   hermes_docs_repo_url="${ARCLINK_HERMES_DOCS_REPO_URL:-https://github.com/NousResearch/hermes-agent.git}"
@@ -2838,6 +2841,95 @@ require_main_upstream_branch_for_upgrade() {
   fi
   echo "Refusing production upgrade from non-arclink upstream branch: $branch" >&2
   echo "Set ARCLINK_ALLOW_NON_ARCLINK_UPGRADE=1 only for an explicit staging or emergency deployment." >&2
+  return 1
+}
+
+# Read the commit currently deployed at $ARCLINK_REPO_DIR. Prefer that repo's
+# git HEAD; fall back to deployed_commit recorded in arclink-release.json.
+currently_deployed_commit() {
+  local commit=""
+  if [[ -n "${ARCLINK_REPO_DIR:-}" && -d "$ARCLINK_REPO_DIR/.git" ]]; then
+    commit="$(git_head_commit "$ARCLINK_REPO_DIR")"
+  fi
+  if [[ -z "$commit" ]]; then
+    local release_file="${ARCLINK_RELEASE_STATE_FILE:-$STATE_DIR/arclink-release.json}"
+    if [[ -r "$release_file" ]]; then
+      commit="$(python3 - "$release_file" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+    sys.stdout.write(str(data.get("deployed_commit") or "").strip())
+except Exception:
+    pass
+PY
+)"
+    fi
+  fi
+  printf '%s\n' "$commit"
+}
+
+# Refuse a source-mode upgrade that would roll the deployment backwards (an
+# older commit) or sideways (a diverged commit), mirroring the Docker-path
+# guard in sync_control_upgrade_checkout_from_upstream. A normal forward upgrade
+# (upstream is a descendant of the deployed commit, or no deployed commit is
+# known, or they are identical) is always allowed. The shallow upstream clone is
+# deepened just enough to resolve ancestry against the deployed commit.
+# Override with ARCLINK_ALLOW_UPGRADE_DOWNGRADE=1 for an explicit rollback.
+guard_source_upgrade_not_downgrade() {
+  local checkout_dir="$1"
+  local upstream_commit="$2"
+  local deployed_commit=""
+
+  if [[ "${ARCLINK_ALLOW_UPGRADE_DOWNGRADE:-0}" == "1" ]]; then
+    echo "Skipping source upgrade downgrade guard because ARCLINK_ALLOW_UPGRADE_DOWNGRADE=1." >&2
+    return 0
+  fi
+  if ! command -v git >/dev/null 2>&1; then
+    return 0
+  fi
+
+  deployed_commit="$(currently_deployed_commit)"
+  if [[ -z "$deployed_commit" ]]; then
+    # No prior deployment to compare against (fresh install / unknown state).
+    return 0
+  fi
+  if [[ "$deployed_commit" == "$upstream_commit" ]]; then
+    echo "Upgrade checkout is already at the deployed commit ${deployed_commit:0:12}; proceeding to re-sync."
+    return 0
+  fi
+
+  # The upstream checkout is shallow (clone --depth 1), so it has no connected
+  # history to test ancestry against. Deepen it enough to connect the deployed
+  # commit into upstream's history. A targeted fetch of the bare deployed commit
+  # would only land it as an isolated shallow graft (ancestry would never
+  # resolve), so we deepen the clone's own branch history instead.
+  if git -C "$checkout_dir" rev-parse --is-shallow-repository >/dev/null 2>&1 \
+     && [[ "$(git -C "$checkout_dir" rev-parse --is-shallow-repository 2>/dev/null)" == "true" ]]; then
+    git -C "$checkout_dir" fetch --quiet --unshallow 2>/dev/null \
+      || git -C "$checkout_dir" fetch --quiet --deepen 1000 2>/dev/null \
+      || true
+  fi
+
+  if ! git -C "$checkout_dir" cat-file -e "${deployed_commit}^{commit}" 2>/dev/null; then
+    # The deployed commit is not present in upstream history at all. Either the
+    # deployment is ahead of upstream (a local/diverged build) or history was
+    # rewritten. Refuse rather than silently overwrite with an unrelated tree.
+    echo "Refusing upgrade: the deployed commit ${deployed_commit:0:12} is not present in upstream history." >&2
+    echo "Upstream ${upstream_commit:0:12} cannot be confirmed as a forward move (the deployment may be ahead of, or diverged from, upstream)." >&2
+    echo "Set ARCLINK_ALLOW_UPGRADE_DOWNGRADE=1 only for an explicit, intentional rollback or rebase." >&2
+    return 1
+  fi
+
+  if git -C "$checkout_dir" merge-base --is-ancestor "$deployed_commit" "$upstream_commit"; then
+    echo "Forward upgrade confirmed: ${deployed_commit:0:12} -> ${upstream_commit:0:12}."
+    return 0
+  fi
+  if git -C "$checkout_dir" merge-base --is-ancestor "$upstream_commit" "$deployed_commit"; then
+    echo "Refusing upgrade: upstream ${upstream_commit:0:12} is OLDER than the deployed commit ${deployed_commit:0:12} (downgrade)." >&2
+  else
+    echo "Refusing upgrade: upstream ${upstream_commit:0:12} has DIVERGED from the deployed commit ${deployed_commit:0:12}." >&2
+  fi
+  echo "Set ARCLINK_ALLOW_UPGRADE_DOWNGRADE=1 only for an explicit, intentional rollback or rebase." >&2
   return 1
 }
 
@@ -5665,6 +5757,11 @@ run_root_upgrade() {
     echo "Could not determine upstream commit after cloning $ARCLINK_UPSTREAM_REPO_URL." >&2
     return 1
   fi
+
+  # Refuse a backwards/diverged source upgrade before overwriting the deployed
+  # repo, mirroring the Docker-path ff-only/ancestry guard. A normal forward
+  # upgrade is unaffected.
+  guard_source_upgrade_not_downgrade "$checkout_dir" "$upstream_commit"
 
   sync_public_repo_from_source "$checkout_dir" "$ARCLINK_REPO_DIR"
   seed_private_repo "$ARCLINK_PRIV_DIR"
@@ -9065,6 +9162,67 @@ PY
   fi
 }
 
+# Idempotent inverse of ensure_control_wireguard_peer. Removes the [Peer] block
+# whose PublicKey matches from the interface config file, and removes the peer
+# from the live interface. Safe to call when the peer is already absent. Used to
+# roll back a peer that was added before its DB inventory row could be committed
+# (otherwise a failed insert under `set -e` leaves an orphan peer with mesh
+# access and no DB row).
+remove_control_wireguard_peer() {
+  local worker_public_key="$1"
+  local iface="${ARCLINK_WIREGUARD_INTERFACE:-wg-arclink}"
+  local config_path="${ARCLINK_WIREGUARD_CONTROL_CONFIG_PATH:-/etc/wireguard/$iface.conf}"
+
+  [[ "${ARCLINK_WIREGUARD_ENABLED:-1}" == "0" ]] && return 0
+  [[ -z "$worker_public_key" ]] && return 0
+  if [[ ${EUID:-$(id -u)} -ne 0 && "$config_path" == /etc/wireguard/* ]]; then
+    config_path="$BOOTSTRAP_DIR/arclink-priv/state/wireguard/$iface.conf.planned"
+  fi
+
+  if [[ -f "$config_path" ]]; then
+    python3 - "$config_path" "$worker_public_key" <<'PY' || true
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+public_key = sys.argv[2]
+lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+out: list[str] = []
+block: list[str] = []
+in_peer = False
+
+
+def flush(block_lines: list[str]) -> None:
+    if not block_lines:
+        return
+    # Drop the entire [Peer] block when it carries the target public key.
+    if any(line.strip() == f"PublicKey = {public_key}" for line in block_lines):
+        return
+    out.extend(block_lines)
+
+
+for line in lines:
+    if line.strip() == "[Peer]":
+        flush(block)
+        block = [line]
+        in_peer = True
+    elif in_peer:
+        block.append(line)
+    else:
+        out.append(line)
+flush(block)
+path.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
+PY
+    chmod 600 "$config_path" 2>/dev/null || true
+  fi
+
+  if [[ ${EUID:-$(id -u)} -eq 0 ]] && command -v wg >/dev/null 2>&1 && wg show "$iface" >/dev/null 2>&1; then
+    wg set "$iface" peer "$worker_public_key" remove >/dev/null 2>&1 || true
+  fi
+}
+
 sync_control_wireguard_peers_from_inventory() {
   local db_path="" line="" hostname="" worker_cidr="" worker_public_key=""
 
@@ -9614,6 +9772,7 @@ sync_control_docker_image_to_fleet_workers() {
   local remote_image_id="" remote_probe="" probe_marker=$'arclink-ssh-ok\t' q_image="" target="" sync_failed=0
   local inspect_timeout="${ARCLINK_FLEET_IMAGE_SYNC_INSPECT_TIMEOUT_SECONDS:-30}"
   local load_timeout="${ARCLINK_FLEET_IMAGE_SYNC_LOAD_TIMEOUT_SECONDS:-900}"
+  local save_timeout="${ARCLINK_FLEET_IMAGE_SYNC_SAVE_TIMEOUT_SECONDS:-900}"
   local -a ssh_opts=()
 
   [[ "$enabled" == "0" || "$enabled" == "false" || "$enabled" == "no" ]] && return 0
@@ -9682,7 +9841,7 @@ sync_control_docker_image_to_fleet_workers() {
       mark_control_fleet_worker_image_sync_state "$host_id" "active" "$local_image_id"
       continue
     fi
-    if docker image save "$image" | timeout "$load_timeout" ssh "${ssh_opts[@]}" "$target" "docker image load >/tmp/arclink-image-load.log && docker image inspect --format '{{.Id}}' $q_image" >/dev/null; then
+    if timeout "$save_timeout" docker image save "$image" | timeout "$load_timeout" ssh "${ssh_opts[@]}" "$target" "docker image load >/tmp/arclink-image-load.log && docker image inspect --format '{{.Id}}' $q_image" >/dev/null; then
       mark_control_fleet_worker_image_sync_state "$host_id" "active" "$local_image_id"
     else
       sync_failed=1
@@ -10128,6 +10287,21 @@ run_remote_fleet_worker_bootstrap() {
   fi
 }
 
+# Roll back a WireGuard peer that was added during worker registration before
+# its DB inventory row was committed, then return the supplied exit code. Reads
+# pending_wg_peer_rollback_key from the calling function's scope (bash dynamic
+# scoping). A blank key makes this a safe no-op. Always returns rc so callers
+# can `return "$(...)"`-style propagate the original failure.
+_register_worker_rollback_orphan_peer() {
+  local rc="${1:-1}"
+  if [[ -n "${pending_wg_peer_rollback_key:-}" ]]; then
+    echo "Rolling back WireGuard peer ${hostname:-} after a failed registration (no DB row was committed)..." >&2
+    remove_control_wireguard_peer "$pending_wg_peer_rollback_key" || true
+    pending_wg_peer_rollback_key=""
+  fi
+  return "$rc"
+}
+
 register_control_remote_fleet_worker() {
   local docker_env="" db_path="" hostname="" ssh_host="" private_dns_name="" tailscale_dns_name="" tail_default="" ssh_user="" region="" capacity_slots=""
   local wireguard_private_ip="" wireguard_private_cidr="" wireguard_public_key="" wireguard_interface="" wireguard_control_endpoint=""
@@ -10138,6 +10312,14 @@ register_control_remote_fleet_worker() {
   local fleet_share_metadata_json="" fleet_share_public_key=""
   local advanced_prompts="${ARCLINK_FLEET_REGISTER_ADVANCED_PROMPTS:-0}"
   local result_json="" json=0 noninteractive=0 no_smoke=0 smoke_requested=0 arg="" tags_mode="csv"
+  # Tracks a WireGuard peer that has been added to the mesh but whose DB
+  # inventory row has not yet been committed. If registration fails before the
+  # row lands, _register_worker_rollback_orphan_peer removes the orphan peer so
+  # it cannot retain mesh access with no DB record. A function-local RETURN trap
+  # is unreliable here (set -e aborts skip it) and a function-local EXIT trap
+  # would clobber the script's global EXIT cleanup, so rollback is invoked
+  # explicitly at every failure exit between the peer-add and the row commit.
+  local pending_wg_peer_rollback_key="" db_insert_rc=0 bootstrap_rc=0 config_write_rc=0
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -10339,6 +10521,7 @@ EOF
   fi
   if [[ -n "$wireguard_private_cidr" && -n "$wireguard_public_key" ]]; then
     ensure_control_wireguard_peer "$hostname" "$wireguard_private_cidr" "$wireguard_public_key"
+    pending_wg_peer_rollback_key="$wireguard_public_key"
   fi
   if [[ "$noninteractive" != "1" && "$advanced_prompts" == "1" ]]; then
     private_dns_name="$(normalize_optional_answer "$(ask "Production private mesh DNS/IP (WireGuard; type none to clear)" "${private_dns_name:-$ssh_host}")")"
@@ -10346,7 +10529,7 @@ EOF
   fi
   if [[ -n "$private_dns_name" ]] && ! is_safe_control_fleet_host_value "$private_dns_name"; then
     echo "Production private mesh DNS/IP may contain only letters, numbers, dots, dashes, underscores, or colons." >&2
-    return 1
+    _register_worker_rollback_orphan_peer 1; return 1
   fi
   if [[ "$noninteractive" != "1" && "$advanced_prompts" == "1" ]]; then
     tail_default=""
@@ -10361,7 +10544,7 @@ EOF
   fi
   if [[ -n "$tailscale_dns_name" ]] && ! is_safe_control_fleet_host_value "$tailscale_dns_name"; then
     echo "Tailscale MagicDNS name may contain only letters, numbers, dots, dashes, underscores, or colons." >&2
-    return 1
+    _register_worker_rollback_orphan_peer 1; return 1
   fi
   if [[ "$noninteractive" != "1" && "$advanced_prompts" == "1" ]]; then
     remote_bootstrap="$(ask_yes_no "SSH into this worker and run the full ArcLink join now" "${remote_bootstrap:-1}")"
@@ -10401,19 +10584,19 @@ EOF
   if [[ "$remote_bootstrap" == "1" ]]; then
     if [[ -z "$bootstrap_ssh_host" ]] || ! is_safe_control_fleet_host_value "$bootstrap_ssh_host"; then
       echo "Bootstrap SSH host may contain only letters, numbers, dots, dashes, underscores, or colons." >&2
-      return 1
+      _register_worker_rollback_orphan_peer 1; return 1
     fi
     if ! is_safe_local_fleet_user "$bootstrap_ssh_user"; then
       echo "Refusing unsafe bootstrap SSH user: $bootstrap_ssh_user" >&2
-      return 1
+      _register_worker_rollback_orphan_peer 1; return 1
     fi
     if [[ ! "$bootstrap_ssh_port" =~ ^[0-9]+$ ]] || (( bootstrap_ssh_port < 1 || bootstrap_ssh_port > 65535 )); then
       echo "Bootstrap SSH port must be a TCP port number." >&2
-      return 1
+      _register_worker_rollback_orphan_peer 1; return 1
     fi
     if [[ ! "$bootstrap_token_ttl" =~ ^[0-9]+$ ]] || (( bootstrap_token_ttl < 60 )); then
       echo "Bootstrap enrollment token TTL must be at least 60 seconds." >&2
-      return 1
+      _register_worker_rollback_orphan_peer 1; return 1
     fi
   fi
   if [[ "$noninteractive" != "1" && "$advanced_prompts" == "1" ]]; then
@@ -10425,7 +10608,7 @@ EOF
   fi
   if ! is_safe_local_fleet_user "$ssh_user"; then
     echo "Refusing unsafe SSH user: $ssh_user" >&2
-    return 1
+    _register_worker_rollback_orphan_peer 1; return 1
   fi
   if [[ "$noninteractive" != "1" && "$advanced_prompts" == "1" ]]; then
     region="$(normalize_optional_answer "$(ask "Fleet region/tag (type none to clear)" "${ARCLINK_LOCAL_FLEET_REGION:-}")")"
@@ -10438,7 +10621,7 @@ EOF
   fi
   if [[ ! "$capacity_slots" =~ ^[0-9]+$ || "$capacity_slots" -lt 1 ]]; then
     echo "Fleet capacity slots must be a positive integer." >&2
-    return 1
+    _register_worker_rollback_orphan_peer 1; return 1
   fi
   if [[ "$noninteractive" != "1" && "$advanced_prompts" == "1" ]]; then
     state_root_base="$(normalize_optional_answer "$(ask "Remote deployment state root base" "${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}")")"
@@ -10449,7 +10632,7 @@ EOF
   fi
   if [[ "$state_root_base" != /* || "$state_root_base" == "/" ]]; then
     echo "Remote deployment state root base must be an absolute non-root path." >&2
-    return 1
+    _register_worker_rollback_orphan_peer 1; return 1
   fi
   if [[ "$noninteractive" != "1" && "$advanced_prompts" == "1" ]]; then
     edge_target="$(normalize_optional_answer "$(ask "Worker edge target override (type none to clear)" "${ARCLINK_EDGE_TARGET:-}")")"
@@ -10470,8 +10653,10 @@ EOF
         "$bootstrap_control_url" "$bootstrap_token_ttl" "$bootstrap_skip_prereqs" \
         "$state_root_base" "${ARCLINK_FLEET_SHARE_HUB_ROOT:-/arcdata/captains}"
     )" || {
+      bootstrap_rc=$?
       [[ "$json" == "1" ]] || printf '%s\n' "$bootstrap_output" >&2
-      return 1
+      _register_worker_rollback_orphan_peer "$bootstrap_rc"
+      return "$bootstrap_rc"
     }
     if [[ "$json" != "1" && -n "$bootstrap_output" ]]; then
       printf '%s\n' "$bootstrap_output"
@@ -10481,6 +10666,20 @@ EOF
       ensure_control_wireguard_peer "$hostname" "$wireguard_private_cidr" "$wireguard_public_key"
       sync_control_wireguard_peers_from_inventory
     fi
+    # Mixed `--wireguard-public-key --bootstrap-remote`: a pre-bootstrap peer was
+    # added at line ~10520 with the operator-supplied key. The worker callback may
+    # report a DIFFERENT key (the one we just added above), which would leave the
+    # stale pre-bootstrap peer in the config on success. Replace it: if the armed
+    # key differs from the now-authoritative callback key, remove the old peer.
+    if [[ -n "${pending_wg_peer_rollback_key:-}" \
+          && -n "$wireguard_public_key" \
+          && "$pending_wg_peer_rollback_key" != "$wireguard_public_key" ]]; then
+      remove_control_wireguard_peer "$pending_wg_peer_rollback_key" || true
+    fi
+    # The remote bootstrap already created this worker's DB inventory row (the
+    # join callback enrolled it), so the peer here is backed by a record. Clear
+    # any pending rollback armed by the earlier direct-key peer-add.
+    pending_wg_peer_rollback_key=""
     fleet_share_metadata_json="$(lookup_control_fleet_share_worker_metadata_json "$hostname" | head -n 1)"
     if [[ -n "$fleet_share_metadata_json" ]]; then
       fleet_share_public_key="$(json_field "$fleet_share_metadata_json" "public_key")"
@@ -10541,9 +10740,22 @@ EOF
     echo "Worker registration did not pass smoke proof; ArcPod provisioning remains disabled until a worker smoke test passes." >&2
   fi
 
-  write_docker_runtime_config "$docker_env"
+  # Everything from here to the DB-row commit still runs while the WireGuard
+  # peer is armed but unbacked by an inventory record. Under `set -e` a failure
+  # in write_docker_runtime_config (or the db-path lookup) would abort the
+  # function and leave an orphan peer with no rollback, so guard these steps the
+  # same way as the validation exits above.
+  write_docker_runtime_config "$docker_env" && config_write_rc=0 || config_write_rc=$?
+  if [[ "$config_write_rc" -ne 0 ]]; then
+    _register_worker_rollback_orphan_peer "$config_write_rc"
+    return "$config_write_rc"
+  fi
   CONFIG_TARGET="$docker_env"
-  db_path="$(control_host_db_path)"
+  db_path="$(control_host_db_path)" && config_write_rc=0 || config_write_rc=$?
+  if [[ "$config_write_rc" -ne 0 ]]; then
+    _register_worker_rollback_orphan_peer "$config_write_rc"
+    return "$config_write_rc"
+  fi
   result_json="$(
     ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
       python3 - "$db_path" "$hostname" "$region" "$capacity_slots" "$ssh_host" "$private_dns_name" "$tailscale_dns_name" "$ssh_user" "$state_root_base" "$edge_target" "$tags" "$tags_mode" "$smoke_status" "$wireguard_private_ip" "$wireguard_private_cidr" "$wireguard_public_key" "$wireguard_interface" "$wireguard_control_endpoint" "$remote_bootstrap" "$bootstrap_ssh_host" "$bootstrap_ssh_user" "${fleet_share_metadata_json:-}" <<'PY'
@@ -10688,7 +10900,18 @@ try:
 finally:
     conn.close()
 PY
-  )"
+  )" || {
+    # The inventory insert failed, so no DB row exists for this worker. Remove
+    # the WireGuard peer that was added earlier before returning the failure, so
+    # we do not leave an orphan peer with mesh access and no inventory record.
+    db_insert_rc=$?
+    _register_worker_rollback_orphan_peer "$db_insert_rc"
+    return "$db_insert_rc"
+  }
+  # The DB inventory row is committed at this point; the peer is now backed by a
+  # record, so disarm the orphan-peer rollback for the remaining (non-fatal)
+  # steps and the normal returns below.
+  pending_wg_peer_rollback_key=""
 
   if [[ "$json" == "1" ]]; then
     python3 - "$result_json" "${ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST:-}" <<'PY'
@@ -12342,6 +12565,148 @@ remove_control_generated_secret_refs() {
   find "$secret_root" -mindepth 1 -maxdepth 1 -type d \( -name 'arcdep_*' -o -name 'dep_*' -o -name 'users' \) -exec rm -rf {} +
 }
 
+# Capture the list of REMOTE fleet workers that host customer ArcPods being
+# wiped by a runtime reset. The reset only cleans LOCAL docker/state; without
+# this, customer ArcPods and their state-root dirs are silently orphaned on
+# remote workers (leaked compute + customer data + phantom capacity).
+#
+# This MUST run BEFORE reset_control_runtime_database wipes the deployments
+# tables. It writes a small TSV (hostname<TAB>ssh<TAB>state_root<TAB>count) to
+# the given file. We deliberately only CAPTURE here and PRINT a checklist later
+# (print_control_reset_remote_orphan_checklist): inline remote `rm -rf` during a
+# reset is too dangerous (a wrong state-root or a half-reachable worker could
+# delete the wrong tree or abort the reset). A single unreachable worker must
+# never abort the reset, so this is best-effort and always returns 0.
+capture_control_reset_remote_worker_orphans() {
+  local db_path="$1"
+  local out_file="$2"
+
+  : >"$out_file" 2>/dev/null || return 0
+  [[ -r "$db_path" ]] || return 0
+
+  ARCLINK_CONFIG_FILE="$(docker_env_file_path)" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 - "$db_path" "$out_file" <<'PY' 2>/dev/null || true
+from __future__ import annotations
+
+import json
+import sqlite3
+import sys
+from pathlib import Path
+
+db_path = sys.argv[1]
+out_file = Path(sys.argv[2])
+
+
+def is_remote(metadata: dict) -> bool:
+    if metadata.get("control_network_mode") == "remote":
+        return True
+    # A worker with an SSH host distinct from the control host is remote.
+    return bool(metadata.get("ssh_host"))
+
+
+lines: list[str] = []
+try:
+    conn = sqlite3.connect(db_path, timeout=15.0)
+    conn.row_factory = sqlite3.Row
+    try:
+        tables = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if "arclink_fleet_hosts" not in tables:
+            raise SystemExit(0)
+        hosts = conn.execute(
+            "SELECT host_id, hostname, metadata_json FROM arclink_fleet_hosts"
+        ).fetchall()
+        for host in hosts:
+            try:
+                metadata = json.loads(host["metadata_json"] or "{}")
+            except json.JSONDecodeError:
+                metadata = {}
+            if not is_remote(metadata):
+                continue
+            ssh_host = str(metadata.get("ssh_host") or "")
+            ssh_user = str(metadata.get("ssh_user") or "arclink")
+            state_root = str(metadata.get("state_root_base") or "/arcdata/deployments")
+            count = 0
+            if {"arclink_deployment_placements"} <= tables:
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS n
+                    FROM arclink_deployment_placements
+                    WHERE host_id = ? AND status = 'active'
+                    """,
+                    (host["host_id"],),
+                ).fetchone()
+                count = int(row["n"]) if row else 0
+            # Only report workers that actually carry placed deployments.
+            if count <= 0:
+                continue
+            ssh_target = f"{ssh_user}@{ssh_host}" if ssh_host else ""
+            lines.append(
+                "\t".join(
+                    [
+                        str(host["hostname"] or host["host_id"]),
+                        ssh_target,
+                        state_root,
+                        str(count),
+                    ]
+                )
+            )
+    finally:
+        conn.close()
+except sqlite3.Error:
+    lines = []
+
+out_file.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+PY
+  return 0
+}
+
+# Print a clear, actionable checklist of remote fleet workers that may still
+# hold orphaned customer ArcPods after a runtime reset, with the exact cleanup
+# command per worker. Reads the TSV captured before the DB wipe. No-op when no
+# remote workers carried deployments.
+print_control_reset_remote_orphan_checklist() {
+  local capture_file="$1"
+  local state_root_base="" hostname="" ssh_target="" state_root="" count="" any=0
+
+  [[ -r "$capture_file" ]] || return 0
+  [[ -s "$capture_file" ]] || return 0
+
+  while IFS=$'\t' read -r hostname ssh_target state_root count; do
+    [[ -z "$hostname" ]] && continue
+    if [[ "$any" == "0" ]]; then
+      echo
+      echo "ACTION REQUIRED: remote fleet workers may still hold orphaned customer ArcPods."
+      echo "This reset cleaned only the LOCAL control node. The workers below hosted"
+      echo "deployments that were just wiped from the control database; their generated"
+      echo "pods and per-deployment state dirs were NOT touched on the remote hosts."
+      echo
+      echo "For each worker, verify and clean the orphaned deployment state:"
+      any=1
+    fi
+    echo "  - worker: $hostname (had $count active placement(s))"
+    if [[ -n "$ssh_target" ]]; then
+      echo "      ssh $ssh_target"
+      echo "      # stop+remove leftover generated pods:"
+      echo "      docker ps -a --filter 'name=arclink-arcdep_' --filter 'name=arclink-dep_' --format '{{.Names}}' | xargs -r docker rm -f"
+      echo "      # remove orphaned per-deployment state dirs (review before deleting):"
+      echo "      ls -la ${state_root%/}/  # then: rm -rf ${state_root%/}/arcdep_* ${state_root%/}/dep_*"
+    else
+      echo "      (no SSH host recorded in inventory; locate this worker and clean ${state_root%/}/{arcdep_*,dep_*})"
+    fi
+  done <"$capture_file"
+
+  if [[ "$any" == "1" ]]; then
+    echo
+    echo "Tip: re-run a worker smoke test after cleanup with ./deploy.sh control inventory probe-all."
+  fi
+  return 0
+}
+
 remove_control_operator_runtime_state() {
   local host_priv="" state_root=""
   local -a paths=()
@@ -12738,7 +13103,7 @@ PY
 run_control_runtime_reset() {
   local scope="${1:-sandbox}"
   local state_dir="$BOOTSTRAP_DIR/arclink-priv/state"
-  local backup_dir="" db_path="" docker_env=""
+  local backup_dir="" db_path="" docker_env="" remote_orphan_capture=""
 
   confirm_control_runtime_reset "$scope"
   confirm_control_operator_runtime_reset "$scope"
@@ -12779,6 +13144,12 @@ run_control_runtime_reset() {
   fi
   echo "Resetting Telegram active-agent command scopes..."
   reset_control_telegram_active_command_scopes "$db_path"
+  # Capture remote fleet workers that host the deployments about to be wiped,
+  # BEFORE the DB rows are cleared. Best-effort; never blocks the reset.
+  remote_orphan_capture="$(mktemp "${state_dir}/.arclink-reset-remote-orphans.XXXXXX" 2>/dev/null || mktemp 2>/dev/null || true)"
+  if [[ -n "$remote_orphan_capture" ]]; then
+    capture_control_reset_remote_worker_orphans "$db_path" "$remote_orphan_capture"
+  fi
   if [[ "$scope" == "production" ]]; then
     echo "Clearing production user/customer runtime rows from control database..."
   else
@@ -12805,6 +13176,14 @@ run_control_runtime_reset() {
     echo "Backup kept at: $backup_dir"
   else
     echo "No reset backup was created."
+  fi
+
+  # Surface any remote fleet workers whose customer ArcPods were just orphaned
+  # by the reset, with the exact cleanup command for each. Best-effort; failure
+  # to print the checklist must not fail the reset.
+  if [[ -n "$remote_orphan_capture" ]]; then
+    print_control_reset_remote_orphan_checklist "$remote_orphan_capture" || true
+    rm -f "$remote_orphan_capture" 2>/dev/null || true
   fi
 
   finish_deploy_operation

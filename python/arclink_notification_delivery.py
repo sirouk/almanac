@@ -34,7 +34,9 @@ from arclink_control import (
     fetch_undelivered_notifications,
     has_pending_curator_brief_fanout,
     mark_notification_delivered,
+    mark_notification_delivered_if_owned,
     mark_notification_error,
+    mark_notification_error_if_owned,
     parse_utc_iso,
     report_operator_hiccup,
     resolve_operator_hiccup,
@@ -42,6 +44,7 @@ from arclink_control import (
     utc_after_seconds_iso,
     utc_now_iso,
 )
+from arclink_control import _notification_token_guard_sql
 from arclink_discord import discord_create_dm_channel, discord_edit_message, discord_send_message
 from arclink_http import http_request
 from arclink_telegram import telegram_edit_message_text, telegram_send_message
@@ -418,6 +421,29 @@ def _public_agent_bridge_hiccup_min_attempts() -> int:
 # terminal errors -- never interleaved with a maybe-delivered outcome -- can page.
 PUBLIC_AGENT_BRIDGE_TERMINAL_FAILURE_KEY = "_public_agent_bridge_consecutive_terminal_failures"
 
+# M3 fix: a turn that the bridge reports as ok-but-unconfirmed (held for
+# reconciliation, no message ids) is NON-terminal, so the terminal-failure gate
+# deliberately excludes it -- but a stuck "delivers but never confirms" outage
+# would then page the operator NEVER, a silent blind spot. We track a separate
+# consecutive-UNCONFIRMED counter and escalate via a DISTINCT operator hiccup key
+# once a turn stays unconfirmed across too many cycles, so the blind spot is
+# observable without conflating it with the terminal-failure gate.
+PUBLIC_AGENT_BRIDGE_UNCONFIRMED_COUNT_KEY = "_public_agent_bridge_consecutive_unconfirmed"
+
+
+def _public_agent_bridge_unconfirmed_count_json_path() -> str:
+    return f"$.{PUBLIC_AGENT_BRIDGE_UNCONFIRMED_COUNT_KEY}"
+
+
+def _public_agent_bridge_unconfirmed_escalate_after() -> int:
+    """How many CONSECUTIVE unconfirmed cycles before the operator is paged (M3)."""
+    return _int_env(
+        "ARCLINK_PUBLIC_AGENT_BRIDGE_UNCONFIRMED_ESCALATE_AFTER",
+        3,
+        minimum=2,
+        maximum=100,
+    )
+
 
 def _public_agent_bridge_terminal_failure_json_path() -> str:
     """SQLite ``json`` path for the consecutive-terminal-failure key.
@@ -426,6 +452,16 @@ def _public_agent_bridge_terminal_failure_json_path() -> str:
     form is safe; we centralise it so every merge-safe writer uses the same path.
     """
     return f"$.{PUBLIC_AGENT_BRIDGE_TERMINAL_FAILURE_KEY}"
+
+
+# C1 fix: the per-outbox-row extra_json path under which a detached worker records
+# the unique lease token it owns. Every terminal write from a detached worker is
+# guarded on this path so a worker whose pid was recycled and whose row was
+# re-leased to a NEW worker (different token) is a NO-OP -- only the worker that
+# currently owns the lease can finalise the row. The token never contains JSON-path
+# metacharacters, so the literal nested ``$._public_agent_bridge_worker.token`` form
+# is safe.
+PUBLIC_AGENT_BRIDGE_WORKER_TOKEN_JSON_PATH = "$._public_agent_bridge_worker.token"
 
 
 def _bump_public_agent_bridge_terminal_failures(conn: Any, notification_id: int) -> int:
@@ -512,6 +548,103 @@ def _reset_public_agent_bridge_terminal_failures(conn: Any, notification_id: int
         return
 
 
+def _bump_public_agent_bridge_unconfirmed_count(conn: Any, notification_id: int) -> int:
+    """M3: increment and return the row's consecutive-unconfirmed counter.
+
+    Merge-safe (single atomic json_set, same pattern as the terminal-failure
+    counter) so it never clobbers a concurrent writer of another key on the row.
+    Returns the new count (0 when the row is missing/delivered).
+    """
+    path = _public_agent_bridge_unconfirmed_count_json_path()
+    cursor = conn.execute(
+        """
+        UPDATE notification_outbox
+        SET extra_json = json_set(
+            COALESCE(extra_json, '{}'),
+            ?,
+            COALESCE(CAST(json_extract(COALESCE(extra_json, '{}'), ?) AS INTEGER), 0) + 1
+        )
+        WHERE id = ? AND delivered_at IS NULL
+        """,
+        (path, path, int(notification_id)),
+    )
+    conn.commit()
+    if int(getattr(cursor, "rowcount", 0) or 0) <= 0:
+        return 0
+    row = conn.execute(
+        "SELECT json_extract(COALESCE(extra_json, '{}'), ?) AS count FROM notification_outbox WHERE id = ?",
+        (path, int(notification_id)),
+    ).fetchone()
+    if row is None:
+        return 0
+    try:
+        count = int(row["count"])
+    except (TypeError, ValueError):
+        count = 1
+    return count if count >= 1 else 1
+
+
+def _reset_public_agent_bridge_unconfirmed_count(conn: Any, notification_id: int) -> None:
+    """M3: clear the consecutive-unconfirmed counter (best-effort, fail-closed).
+
+    Called on delivery and on any genuine TERMINAL error so the unconfirmed run is
+    only ever a run of CONSECUTIVE unconfirmed cycles.
+    """
+    try:
+        conn.execute(
+            """
+            UPDATE notification_outbox
+            SET extra_json = json_remove(COALESCE(extra_json, '{}'), ?)
+            WHERE id = ?
+            """,
+            (_public_agent_bridge_unconfirmed_count_json_path(), int(notification_id)),
+        )
+        conn.commit()
+    except Exception:  # noqa: BLE001 - counter bookkeeping must never break delivery.
+        return
+
+
+def _public_agent_bridge_unconfirmed_hiccup_key(notification_id: int) -> str:
+    """M3: distinct operator-hiccup key for the unconfirmed-escalation blind spot.
+
+    Deliberately separate from _public_agent_bridge_hiccup_key (the terminal-failure
+    gate) so a "delivers but never confirms" outage is observable on its own and
+    does not conflate with genuine terminal failures.
+    """
+    return f"public_agent_bridge_unconfirmed:{int(notification_id)}"
+
+
+def _maybe_escalate_public_agent_bridge_unconfirmed(conn: Any, notification_id: int) -> None:
+    """M3: page the operator once a turn stays UNCONFIRMED across too many cycles.
+
+    Bumps the consecutive-unconfirmed counter and, once it crosses the threshold,
+    reports a hiccup under the distinct unconfirmed key. Best-effort/fail-closed so
+    it can never break delivery. The alert re-arms on delivery via the resolve path.
+    """
+    try:
+        count = _bump_public_agent_bridge_unconfirmed_count(conn, notification_id)
+        if count < _public_agent_bridge_unconfirmed_escalate_after():
+            return
+        cfg = Config.from_env()
+        message = (
+            "ArcLink public-agent bridge has been UNCONFIRMED (delivered through "
+            f"the gateway but never confirmed on the platform) for {count} "
+            f"consecutive cycles (notification #{int(notification_id)}). This is the "
+            "\"delivers but never confirms\" blind spot -- the platform send may be "
+            "silently failing even though the turn keeps reporting ok."
+        )
+        report_operator_hiccup(
+            conn,
+            cfg,
+            source="public_agent_bridge_unconfirmed",
+            key=_public_agent_bridge_unconfirmed_hiccup_key(notification_id),
+            message=message,
+            reason=f"public-agent bridge turn unconfirmed for {count} consecutive cycles",
+        )
+    except Exception:  # noqa: BLE001 - escalation must never break delivery.
+        return
+
+
 def _public_agent_bridge_hiccup_key(notification_id: int) -> str:
     """Per-row dedup/resolve key for a public-agent-turn hiccup.
 
@@ -546,6 +679,16 @@ def _resolve_public_agent_bridge_hiccup(conn: Any, notification_id: int) -> None
             key=_public_agent_bridge_hiccup_key(notification_id),
             reason="public-agent bridge turn delivered after prior terminal attempts",
         )
+        # M3: a delivered turn also clears any unconfirmed-escalation alert (and its
+        # consecutive-unconfirmed counter) for the same row.
+        resolve_operator_hiccup(
+            conn,
+            cfg,
+            source="public_agent_bridge_unconfirmed",
+            key=_public_agent_bridge_unconfirmed_hiccup_key(notification_id),
+            reason="public-agent bridge turn confirmed-delivered after prior unconfirmed cycles",
+        )
+        _reset_public_agent_bridge_unconfirmed_count(conn, notification_id)
     except Exception:  # noqa: BLE001 - resolve bookkeeping must never break delivery.
         return
 
@@ -596,6 +739,10 @@ def _maybe_report_public_agent_bridge_hiccup(
         # A delivered row is a success, never a hiccup.
         if str(row["delivered_at"] or "").strip():
             return
+        # M3: a genuine terminal error breaks any consecutive-unconfirmed run, so
+        # clear that counter -- the unconfirmed escalation only fires for an
+        # uninterrupted run of "delivers but never confirms" cycles.
+        _reset_public_agent_bridge_unconfirmed_count(conn, notification_id)
         # BUG #1 fix: this site IS a genuine terminal error, so credit one
         # CONSECUTIVE terminal failure to the same row the gate reads, then gate on
         # that counter. We deliberately do NOT use attempt_count here: attempt_count
@@ -1017,12 +1164,18 @@ def _gateway_has_public_agent_bridge_root_wrapper(exec_prefix: list[str]) -> boo
         return False
     docker_binary = str(os.environ.get("ARCLINK_DOCKER_BINARY") or "").strip() or "docker"
     probe = [docker_binary, *list(exec_prefix)[1:], "test", "-e", PUBLIC_AGENT_BRIDGE_ROOT_WRAPPER_SCRIPT]
-    present = False
     try:
         proc = subprocess.run(probe, capture_output=True, timeout=15, check=False)
-        present = proc.returncode == 0
     except Exception:
-        present = False
+        # H4 fix: a thrown/timed-out probe (transient docker hiccup, 15s timeout)
+        # tells us NOTHING about whether the wrapper exists -- caching that as a
+        # NEGATIVE would pin L2 off for the full TTL (300s) after a single blip.
+        # Return the safe legacy answer (False) WITHOUT caching, so the very next
+        # turn re-probes and L2 recovers as soon as docker does.
+        return False
+    # Only a probe that genuinely RAN and returned is authoritative; cache that
+    # present/absent result.
+    present = proc.returncode == 0
     _ROOT_WRAPPER_PRESENT_CACHE[key] = (now, present)
     return present
 
@@ -1554,8 +1707,16 @@ def _write_public_agent_bridge_job(
     payload: dict[str, Any] | None = None,
     project_name: str = "",
     gateway_exec_request: dict[str, Any] | None = None,
+    worker_token: str = "",
 ) -> Path:
     body: dict[str, Any]
+    # C1 fix: every detached worker carries a unique lease token, embedded in the
+    # job body so the worker can prove it still owns the row's lease before any
+    # terminal write. The SAME token is stamped into the row's extra_json at spawn
+    # (see _record_public_agent_bridge_worker), so a row that was re-leased to a
+    # NEW worker (different token) rejects this worker's late delivered/error/
+    # unconfirmed update -- closing the recycled-pid duplicate-send race.
+    clean_token = str(worker_token or "").strip()
     if gateway_exec_request is not None:
         if not isinstance(gateway_exec_request, dict):
             raise ValueError("gateway exec broker request must be a JSON object")
@@ -1564,9 +1725,15 @@ def _write_public_agent_bridge_job(
         body = {
             "notification_id": int(notification_id),
             "command_kind": command_kind,
+            # M4: carry the project so a broker FAILURE can be enriched with
+            # kind=gateway-exec-broker + project (the broker path previously had no
+            # project in its job body, so the enriched operator page could not name
+            # the failing turn's deployment).
+            "project_name": str(project_name or "").strip(),
             "gateway_exec_request": clean_request,
             "gateway_exec_request_requires_runtime_secret": requires_runtime_secret,
             "timeout_seconds": _public_agent_bridge_max_seconds(),
+            "worker_token": clean_token,
         }
     else:
         clean_cmd = [str(part) for part in cmd or []]
@@ -1582,6 +1749,7 @@ def _write_public_agent_bridge_job(
             "payload": clean_payload,
             "payload_requires_runtime_secret": requires_runtime_secret,
             "timeout_seconds": _public_agent_bridge_max_seconds(),
+            "worker_token": clean_token,
         }
     job_dir = _public_agent_bridge_job_dir()
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -1627,16 +1795,78 @@ def _append_public_agent_bridge_log(message: str) -> None:
         return
 
 
+def _public_agent_bridge_log_tail(max_lines: int = 6, max_chars: int = 320) -> str:
+    """Return the last few lines of the per-turn bridge log (best-effort).
+
+    Used by M4 to make an otherwise-opaque operator page (e.g. a bare "exit
+    status 1" with empty stdout/stderr) actionable by quoting the most recent
+    bridge-log lines. Never raises -- a missing/unreadable log yields ''.
+    """
+    try:
+        log_path = _public_agent_bridge_log_path()
+        if not log_path.exists():
+            return ""
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    tail_lines = [line.strip() for line in lines if line.strip()][-max(1, int(max_lines)):]
+    tail = " | ".join(tail_lines)
+    return tail[-max(1, int(max_chars)):] if tail else ""
+
+
+def _enrich_public_agent_bridge_error(
+    base_error: str,
+    *,
+    command_kind: str = "",
+    project_name: str = "",
+    include_log_tail: bool = False,
+) -> str:
+    """M4: enrich a terminal bridge error with the command kind/project (and, when
+    the subprocess gave us nothing, the tail of the per-turn bridge log) so the
+    operator page actually says WHICH turn failed instead of just "exit status N".
+    """
+    parts = [str(base_error or "").strip() or "Hermes public gateway bridge failed"]
+    context: list[str] = []
+    clean_kind = str(command_kind or "").strip()
+    clean_project = str(project_name or "").strip()
+    if clean_kind:
+        context.append(f"kind={clean_kind}")
+    if clean_project:
+        context.append(f"project={clean_project}")
+    if context:
+        parts.append(f"[{', '.join(context)}]")
+    if include_log_tail:
+        tail = _public_agent_bridge_log_tail()
+        if tail:
+            parts.append(f"log-tail: {tail}")
+    return " ".join(parts)
+
+
 def _public_agent_bridge_unconfirmed_retry_seconds() -> int:
     return _int_env("ARCLINK_PUBLIC_AGENT_BRIDGE_UNCONFIRMED_RETRY_SECONDS", 86400, minimum=900, maximum=604800)
 
 
-def _mark_public_agent_bridge_unconfirmed(conn: Any, notification_id: int, reason: str) -> None:
+def _mark_public_agent_bridge_unconfirmed(
+    conn: Any, notification_id: int, reason: str, *, worker_token: str = ""
+) -> bool:
+    """Mark a turn unconfirmed/held. Returns True only when the guarded write applied.
+
+    C1: the UPDATE carries the lease-token guard (see _notification_token_guard_sql in
+    arclink_control) so the ownership check and the write are ONE statement. A
+    non-empty ``worker_token`` (detached worker) must still own the lease; an empty
+    token (the in-process claim-holder loop) only applies when no detached worker
+    owns the row. The merge-safe terminal-counter reset and operator escalation run
+    ONLY when the write applied, so a stale owner's late unconfirmed-mark touches
+    nothing.
+    """
+    guard_sql, guard_params = _notification_token_guard_sql(worker_token)
     row = conn.execute(
-        "SELECT attempt_count FROM notification_outbox WHERE id = ?",
-        (int(notification_id),),
+        "SELECT attempt_count FROM notification_outbox WHERE id = ?" + guard_sql + " AND delivered_at IS NULL",
+        [int(notification_id), *guard_params],
     ).fetchone()
-    attempts = int(row["attempt_count"] or 0) + 1 if row is not None else 1
+    if row is None:
+        return False
+    attempts = int(row["attempt_count"] or 0) + 1
     now_iso = utc_now_iso()
     clean_reason = str(reason or "bridge completed without confirmed platform delivery").strip()
     error_text = (
@@ -1644,37 +1874,77 @@ def _mark_public_agent_bridge_unconfirmed(conn: Any, notification_id: int, reaso
         if clean_reason.startswith(PUBLIC_AGENT_BRIDGE_UNCONFIRMED)
         else f"{PUBLIC_AGENT_BRIDGE_UNCONFIRMED}: {clean_reason}"
     )
-    conn.execute(
-        """
-        UPDATE notification_outbox
-        SET attempt_count = ?,
-            last_attempt_at = ?,
-            next_attempt_at = ?,
-            delivery_error = ?
-        WHERE id = ?
-          AND delivered_at IS NULL
-        """,
-        (
+    cursor = conn.execute(
+        "UPDATE notification_outbox "
+        "SET attempt_count = ?, last_attempt_at = ?, next_attempt_at = ?, delivery_error = ? "
+        "WHERE id = ?" + guard_sql + " AND delivered_at IS NULL",
+        [
             attempts,
             now_iso,
             utc_after_seconds_iso(_public_agent_bridge_unconfirmed_retry_seconds()),
             error_text[:500],
             int(notification_id),
-        ),
+            *guard_params,
+        ],
     )
     conn.commit()
+    if int(getattr(cursor, "rowcount", 0) or 0) < 1:
+        return False
     # BUG #1 fix: an unconfirmed/held outcome is NON-terminal and may actually have
     # delivered, so it must NOT carry any prior terminal credit forward -- reset the
     # consecutive-terminal-failure counter so a later genuine terminal error starts
     # a FRESH consecutive run rather than tipping a mixed history over the threshold.
     _reset_public_agent_bridge_terminal_failures(conn, notification_id)
+    # M3 fix: track the consecutive-unconfirmed run and page the operator once a turn
+    # stays "delivers but never confirms" across too many cycles (distinct key).
+    _maybe_escalate_public_agent_bridge_unconfirmed(conn, notification_id)
+    return True
+
+
+def _worker_mark_notification_delivered(conn: Any, notification_id: int, worker_token: str) -> bool:
+    """C1: ATOMIC token-guarded delivered-mark for a detached worker.
+
+    Returns False (no write) when the row was re-leased to a DIFFERENT worker since
+    this worker spawned -- so a recycled-pid worker that finishes after the row was
+    handed to a new worker cannot stamp a duplicate delivery (and the new worker's
+    own send stays authoritative). Only the lease owner finalises the row. The
+    ownership check and the write are a SINGLE SQL UPDATE (mark_notification_delivered_if_owned),
+    so there is no check-then-write race, and a MISSING recorded token rejects the
+    worker (a tokenless row is not provably owned by this worker).
+    """
+    applied = mark_notification_delivered_if_owned(conn, notification_id, worker_token) >= 1
+    if applied:
+        _resolve_public_agent_bridge_hiccup(conn, notification_id)
+    return applied
+
+
+def _worker_mark_notification_error(conn: Any, notification_id: int, error: str, worker_token: str) -> bool:
+    """C1: ATOMIC token-guarded error-mark for a detached worker (see delivered variant)."""
+    return mark_notification_error_if_owned(conn, notification_id, error, worker_token) >= 1
+
+
+def _worker_mark_public_agent_bridge_unconfirmed(
+    conn: Any, notification_id: int, reason: str, worker_token: str
+) -> bool:
+    """C1: ATOMIC token-guarded unconfirmed/held-mark for a detached worker.
+
+    The unconfirmed UPDATE itself carries the token guard (see
+    _mark_public_agent_bridge_unconfirmed), so the held-mark only applies when this
+    worker still owns the lease; the merge-safe terminal-counter reset and the
+    operator-escalation side-effects then run ONLY when the guarded write applied.
+    """
+    if not _mark_public_agent_bridge_unconfirmed(conn, notification_id, reason, worker_token=worker_token):
+        return False
+    return True
 
 
 def _public_agent_bridge_worker_stale_seconds() -> int:
     return _int_env("ARCLINK_PUBLIC_AGENT_BRIDGE_ORPHAN_REAPER_SECONDS", 600, minimum=60, maximum=86400)
 
 
-def _record_public_agent_bridge_worker(notification_id: int, *, pid: int, job_path: Path) -> None:
+def _record_public_agent_bridge_worker(
+    notification_id: int, *, pid: int, job_path: Path, worker_token: str = ""
+) -> None:
     if int(notification_id or 0) <= 0 or int(pid or 0) <= 0:
         return
     try:
@@ -1697,6 +1967,10 @@ def _record_public_agent_bridge_worker(notification_id: int, *, pid: int, job_pa
                     "pid": int(pid),
                     "job_path": str(job_path),
                     "spawned_at": utc_now_iso(),
+                    # C1: the unique lease token this worker owns; the worker carries
+                    # the same token in its job body and guards every terminal write
+                    # on it, so a row re-leased to a newer token rejects this worker.
+                    "token": str(worker_token or "").strip(),
                 },
                 sort_keys=True,
             )
@@ -1722,14 +1996,37 @@ def _record_public_agent_bridge_worker(notification_id: int, *, pid: int, job_pa
         )
 
 
-def _public_agent_bridge_worker_pid_active(pid: int) -> bool:
+def _public_agent_bridge_worker_pid_active(pid: int, *, expected_job_path: str = "") -> bool:
+    """True when ``pid`` is genuinely THIS row's live bridge worker.
+
+    C1 fix: the worker is spawned as ``python ... --public-agent-bridge-worker
+    <job_path>`` and the job_path is unique per spawn (it embeds the pid + nonce),
+    so when ``expected_job_path`` is supplied we require it to appear on the live
+    process's cmdline. Matching only ``--public-agent-bridge-worker`` (the old
+    behaviour) would treat ANY bridge worker as alive, so a recycled pid now
+    running a DIFFERENT turn's worker would wrongly keep this row leased forever
+    (or, conversely, never let the reaper re-arm a genuinely-dead worker). The
+    job_path check ties liveness to the specific lease.
+    """
     if int(pid or 0) <= 0:
         return False
     proc_cmdline = Path("/proc") / str(int(pid)) / "cmdline"
+    clean_job_path = str(expected_job_path or "").strip()
     try:
         if proc_cmdline.exists():
             cmdline = proc_cmdline.read_text(encoding="utf-8", errors="replace").replace("\x00", " ")
-            return "--public-agent-bridge-worker" in cmdline and "arclink_notification_delivery.py" in cmdline
+            is_bridge_worker = (
+                "--public-agent-bridge-worker" in cmdline and "arclink_notification_delivery.py" in cmdline
+            )
+            if not is_bridge_worker:
+                return False
+            if clean_job_path:
+                # The pid is a bridge worker, but only OURS if it is running our job.
+                return clean_job_path in cmdline
+            return True
+        # No /proc (non-Linux / restricted): fall back to a bare liveness probe. We
+        # cannot verify the job_path, so we conservatively treat a live pid as our
+        # worker (the worker's own token-guarded writes still prevent duplicates).
         os.kill(int(pid), 0)
         return True
     except ProcessLookupError:
@@ -1775,7 +2072,22 @@ def reap_orphaned_public_agent_bridge_leases(cfg: Config, *, limit: int = 50) ->
             if not isinstance(worker, dict):
                 continue
             pid = int(worker.get("pid") or 0)
-            if _public_agent_bridge_worker_pid_active(pid):
+            recorded_job_path = str(worker.get("job_path") or "").strip()
+            recorded_token = str(worker.get("token") or "").strip()
+            # C1: a worker is only "provably alive for this row" when the row records
+            # BOTH a lease token AND a job_path AND the recorded pid is running THAT
+            # specific job. A missing token (the worker never stamped its lease) or a
+            # missing job_path (we cannot tie a live pid to THIS lease) means the
+            # worker is NOT provably alive, so the lease is ELIGIBLE to re-arm -- a
+            # bare pid liveness check on an empty job_path would otherwise let a
+            # recycled pid running a DIFFERENT turn pin this lease forever. Only when
+            # token+job_path are both present and the pid runs that job do we leave the
+            # still-running worker alone.
+            if (
+                recorded_token
+                and recorded_job_path
+                and _public_agent_bridge_worker_pid_active(pid, expected_job_path=recorded_job_path)
+            ):
                 continue
             # BUG #1 fix -- MERGE-SAFE write: stamp ONLY the worker-metadata
             # ``reclaimed_at`` subkey via ``json_set`` instead of serialising the
@@ -1831,6 +2143,10 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
                 required=job.get("gateway_exec_request_requires_runtime_secret") is True,
             )
         timeout_seconds = int(job.get("timeout_seconds") or _public_agent_bridge_max_seconds())
+        # C1: the lease token this worker owns. All terminal writes below are guarded
+        # on it so a recycled-pid worker whose row was re-leased to a newer worker
+        # cannot finalise (and duplicate-send) the row.
+        worker_token = str(job.get("worker_token") or "").strip()
         if notification_id <= 0:
             raise RuntimeError("public Agent bridge job is missing notification_id")
         cfg = Config.from_env()
@@ -1848,20 +2164,22 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
             ok, error = _run_gateway_exec_broker_request(gateway_exec_request)
             if ok:
                 with connect_db(cfg) as conn:
-                    mark_notification_delivered(conn, notification_id)
-                    # Resolve-on-delivery: clear any prior terminal-attempt alert
-                    # for this turn now that it actually delivered (BUG #1).
-                    _resolve_public_agent_bridge_hiccup(conn, notification_id)
+                    # Resolve-on-delivery is folded into the guarded helper.
+                    owned = _worker_mark_notification_delivered(conn, notification_id, worker_token)
                 _append_public_agent_bridge_log(
                     json.dumps(
-                        {"event": "public_agent_bridge_broker_delivered", "notification_id": notification_id},
+                        {
+                            "event": "public_agent_bridge_broker_delivered",
+                            "notification_id": notification_id,
+                            "lease_owned": owned,
+                        },
                         sort_keys=True,
                     )
                 )
                 return 0
             if _is_public_agent_bridge_unconfirmed(error):
                 with connect_db(cfg) as conn:
-                    _mark_public_agent_bridge_unconfirmed(conn, notification_id, error)
+                    _worker_mark_public_agent_bridge_unconfirmed(conn, notification_id, error, worker_token)
                 _append_public_agent_bridge_log(
                     json.dumps(
                         {
@@ -1873,15 +2191,26 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
                     )
                 )
                 return 0
+            # M4 (STILL-BROKEN fix): the broker failure path previously wrote/paged the
+            # RAW broker error with no context -- only the direct-subprocess path was
+            # enriched. Route it through the SAME enrichment so the operator page names
+            # the command kind (gateway-exec-broker) + project and, when the broker
+            # handed us nothing, the tail of the per-turn bridge log.
+            broker_error = _enrich_public_agent_bridge_error(
+                f"Hermes public gateway bridge failed: {error}",
+                command_kind="gateway-exec-broker",
+                project_name=project_name,
+                include_log_tail=not str(error or "").strip(),
+            )
             with connect_db(cfg) as conn:
-                mark_notification_error(conn, notification_id, f"Hermes public gateway bridge failed: {error}")
-                _maybe_report_public_agent_bridge_hiccup(conn, notification_id, error=str(error))
+                if _worker_mark_notification_error(conn, notification_id, broker_error, worker_token):
+                    _maybe_report_public_agent_bridge_hiccup(conn, notification_id, error=broker_error)
             _append_public_agent_bridge_log(
                 json.dumps(
                     {
                         "event": "public_agent_bridge_broker_failed",
                         "notification_id": notification_id,
-                        "error": str(error)[:500],
+                        "error": str(broker_error)[:500],
                     },
                     sort_keys=True,
                 )
@@ -1892,8 +2221,10 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
         valid, command_kind, reason = _validate_public_agent_bridge_cmd(cmd, project_name=project_name)
         if not valid:
             with connect_db(cfg) as conn:
-                mark_notification_error(conn, notification_id, f"Hermes public gateway bridge rejected command: {reason}")
-                _maybe_report_public_agent_bridge_hiccup(conn, notification_id, error=f"rejected command: {reason}")
+                if _worker_mark_notification_error(
+                    conn, notification_id, f"Hermes public gateway bridge rejected command: {reason}", worker_token
+                ):
+                    _maybe_report_public_agent_bridge_hiccup(conn, notification_id, error=f"rejected command: {reason}")
             _append_public_agent_bridge_log(
                 json.dumps(
                     {
@@ -1926,11 +2257,17 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
                 timeout=timeout_seconds,
             )
         except subprocess.TimeoutExpired:
+            # M4: make the operator page actionable -- name the command kind/project
+            # so a bare "timed out" is not the only signal.
+            timeout_error = _enrich_public_agent_bridge_error(
+                "Hermes public gateway bridge timed out",
+                command_kind=command_kind,
+                project_name=project_name,
+                include_log_tail=False,
+            )
             with connect_db(cfg) as conn:
-                mark_notification_error(conn, notification_id, "Hermes public gateway bridge timed out")
-                _maybe_report_public_agent_bridge_hiccup(
-                    conn, notification_id, error="Hermes public gateway bridge timed out"
-                )
+                if _worker_mark_notification_error(conn, notification_id, timeout_error, worker_token):
+                    _maybe_report_public_agent_bridge_hiccup(conn, notification_id, error=timeout_error)
             _append_public_agent_bridge_log(
                 json.dumps({"event": "public_agent_bridge_timeout", "notification_id": notification_id}, sort_keys=True)
             )
@@ -1942,9 +2279,18 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
         if proc.returncode != 0:
             detail = ANSI_RE.sub("", (proc.stderr or proc.stdout or "")).strip().splitlines()
             tail = detail[-1][:220] if detail else f"exit status {proc.returncode}"
+            # M4: an exit-N with empty stdout/stderr collapses to a useless
+            # "exit status N". Enrich with command kind/project and the tail of the
+            # per-turn bridge log so the operator page points at the failing turn.
+            failure_error = _enrich_public_agent_bridge_error(
+                f"Hermes public gateway bridge failed: {tail}",
+                command_kind=command_kind,
+                project_name=project_name,
+                include_log_tail=not (proc.stderr or proc.stdout or "").strip(),
+            )
             with connect_db(cfg) as conn:
-                mark_notification_error(conn, notification_id, f"Hermes public gateway bridge failed: {tail}")
-                _maybe_report_public_agent_bridge_hiccup(conn, notification_id, error=str(tail))
+                if _worker_mark_notification_error(conn, notification_id, failure_error, worker_token):
+                    _maybe_report_public_agent_bridge_hiccup(conn, notification_id, error=failure_error)
             _append_public_agent_bridge_log(
                 json.dumps(
                     {
@@ -1963,16 +2309,14 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
         result = public_agent_bridge_delivery_result(payload_out)
         if result.get("delivered") is True:
             with connect_db(cfg) as conn:
-                mark_notification_delivered(conn, notification_id)
-                # Resolve-on-delivery: clear any prior terminal-attempt alert for
-                # this turn now that it actually delivered (BUG #1).
-                _resolve_public_agent_bridge_hiccup(conn, notification_id)
+                owned = _worker_mark_notification_delivered(conn, notification_id, worker_token)
             _append_public_agent_bridge_log(
                 json.dumps(
                     {
                         "event": "public_agent_bridge_delivered",
                         "notification_id": notification_id,
                         "message_ids": result.get("message_ids") or [],
+                        "lease_owned": owned,
                     },
                     sort_keys=True,
                 )
@@ -1981,7 +2325,7 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
         if result.get("ok") is True and _public_agent_bridge_should_hold_for_reconciliation(result):
             reason = _public_agent_bridge_unconfirmed_error(result)
             with connect_db(cfg) as conn:
-                _mark_public_agent_bridge_unconfirmed(conn, notification_id, reason)
+                _worker_mark_public_agent_bridge_unconfirmed(conn, notification_id, reason, worker_token)
             _append_public_agent_bridge_log(
                 json.dumps(
                     {
@@ -1995,9 +2339,15 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
             return 0
         if result.get("ok") is True:
             error = _public_agent_bridge_delivery_error(result, label="Hermes public gateway bridge")
+            failure_error = _enrich_public_agent_bridge_error(
+                f"Hermes public gateway bridge failed: {error}",
+                command_kind=command_kind,
+                project_name=project_name,
+                include_log_tail=False,
+            )
             with connect_db(cfg) as conn:
-                mark_notification_error(conn, notification_id, f"Hermes public gateway bridge failed: {error}")
-                _maybe_report_public_agent_bridge_hiccup(conn, notification_id, error=str(error))
+                if _worker_mark_notification_error(conn, notification_id, failure_error, worker_token):
+                    _maybe_report_public_agent_bridge_hiccup(conn, notification_id, error=failure_error)
             _append_public_agent_bridge_log(
                 json.dumps(
                     {
@@ -2009,12 +2359,15 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
                 )
             )
             return 1
+        no_ok_error = _enrich_public_agent_bridge_error(
+            str(result.get("error") or "Hermes public gateway bridge completed without an ok response"),
+            command_kind=command_kind,
+            project_name=project_name,
+            include_log_tail=not str(result.get("error") or "").strip(),
+        )
         with connect_db(cfg) as conn:
-            no_ok_error = str(
-                result.get("error") or "Hermes public gateway bridge completed without an ok response"
-            )
-            mark_notification_error(conn, notification_id, no_ok_error)
-            _maybe_report_public_agent_bridge_hiccup(conn, notification_id, error=no_ok_error)
+            if _worker_mark_notification_error(conn, notification_id, no_ok_error, worker_token):
+                _maybe_report_public_agent_bridge_hiccup(conn, notification_id, error=no_ok_error)
         _append_public_agent_bridge_log(
             json.dumps({"event": "public_agent_bridge_no_ok", "notification_id": notification_id}, sort_keys=True)
         )
@@ -2042,6 +2395,12 @@ def _spawn_public_agent_gateway_bridge(
     else:
         clean_cmd = []
     if notification_id is not None:
+        # C1: mint a unique lease token for THIS worker. It is embedded in the job
+        # body (the worker proves ownership with it) and stamped into the row's
+        # extra_json BEFORE the worker is spawned, so the row carries the owning
+        # token from the moment the lease is handed out. A later re-lease overwrites
+        # the token, and the stale worker's guarded terminal writes then no-op.
+        worker_token = secrets.token_hex(16)
         try:
             job_path = _write_public_agent_bridge_job(
                 notification_id=notification_id,
@@ -2049,9 +2408,34 @@ def _spawn_public_agent_gateway_bridge(
                 payload=payload or {},
                 project_name=project_name,
                 gateway_exec_request=gateway_exec_request,
+                worker_token=worker_token,
             )
         except (OSError, ValueError) as exc:
             return False, f"could not write public gateway bridge job: {str(exc)[:180]}"
+        # C1: the lease token MUST land on the row BEFORE the worker spawns -- every
+        # terminal write the worker makes is guarded on the row's recorded token, and
+        # a MISSING recorded token is treated as not-owned, so a worker that ran
+        # without its token stamped could never finalise its own row (it would loop /
+        # be reaped and risk a duplicate send). If the stamp fails (or matches no
+        # undelivered row), ABORT the spawn so a tokenless worker never runs.
+        try:
+            with connect_db(Config.from_env()) as conn:
+                cursor = conn.execute(
+                    """
+                    UPDATE notification_outbox
+                    SET extra_json = json_set(COALESCE(extra_json, '{}'), ?, ?)
+                    WHERE id = ? AND delivered_at IS NULL
+                    """,
+                    (PUBLIC_AGENT_BRIDGE_WORKER_TOKEN_JSON_PATH, worker_token, int(notification_id)),
+                )
+                conn.commit()
+                stamped = int(getattr(cursor, "rowcount", 0) or 0) >= 1
+        except Exception as exc:  # noqa: BLE001 - a stamp failure must abort the spawn, not run tokenless.
+            _unlink_public_agent_bridge_job(job_path)
+            return False, f"could not stamp public gateway bridge lease token: {str(exc)[:180]}"
+        if not stamped:
+            _unlink_public_agent_bridge_job(job_path)
+            return False, "could not stamp public gateway bridge lease token (row missing or already delivered)"
         log_path = _public_agent_bridge_log_path()
         try:
             log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2068,6 +2452,7 @@ def _spawn_public_agent_gateway_bridge(
                     int(notification_id),
                     pid=int(getattr(proc, "pid", 0) or 0),
                     job_path=job_path,
+                    worker_token=worker_token,
                 )
                 try:
                     returncode = proc.wait(timeout=0.25)
@@ -2424,12 +2809,85 @@ def _absorb_telegram_album_siblings(
                         absorbed.append(int(item["id"]))
                 if len(updates) > 1:
                     extra["telegram_update_json_list"] = updates
+                    # M1 fix: persist the merged album (and the absorbed ids) into the
+                    # LEADER row's extra_json BEFORE marking siblings delivered. The
+                    # merged list was previously in-memory only, so if the leader turn
+                    # then FAILED, its retry re-loaded the leader row (siblings already
+                    # delivered -> no re-merge) and lost every non-leader media item.
+                    # Persisting it means a leader retry replays the full album from
+                    # the row. Merge-safe json_set of two keys, scoped to the
+                    # still-undelivered leader row.
+                    #
+                    # M1 (STILL-BROKEN fix): the persist is NO LONGER best-effort. We
+                    # mark siblings delivered ONLY when the leader-row persist actually
+                    # landed (rowcount >= 1). A failed/zero-row persist that still
+                    # delivered the siblings would strand the album: the leader retry
+                    # would re-load a leader row WITHOUT the merged list and the
+                    # siblings would already be delivered (un-re-mergeable). So a failed
+                    # persist now LEAVES the siblings undelivered for a later retry.
+                    persisted = False
+                    try:
+                        cursor = conn.execute(
+                            """
+                            UPDATE notification_outbox
+                            SET extra_json = json_set(
+                                json_set(COALESCE(extra_json, '{}'), '$.telegram_update_json_list', json(?)),
+                                '$._absorbed_album_sibling_ids', json(?)
+                            )
+                            WHERE id = ? AND delivered_at IS NULL
+                            """,
+                            (
+                                json.dumps(updates),
+                                json.dumps([int(absorbed_id) for absorbed_id in absorbed]),
+                                int(own_id),
+                            ),
+                        )
+                        conn.commit()
+                        persisted = int(getattr(cursor, "rowcount", 0) or 0) >= 1
+                    except Exception:  # noqa: BLE001 - a persist failure leaves siblings for retry.
+                        persisted = False
+                    if not persisted:
+                        # The merged album did not land on the leader row, so we must
+                        # NOT mark siblings delivered (that would lose them). Drop the
+                        # in-memory merge too so this leader turn does not send a
+                        # partial album, and let the next cycle retry the merge.
+                        extra.pop("telegram_update_json_list", None)
+                        return None
                     for absorbed_id in absorbed:
-                        mark_notification_delivered(conn, absorbed_id)
+                        # C1: deliver the sibling with the in-process claim-holder's
+                        # (empty-token) guard: it applies ONLY when no detached worker
+                        # currently owns the sibling row. A sibling re-leased to its own
+                        # detached worker is left for that worker to finalise, so the
+                        # leader never duplicate-delivers a row out from under a worker.
+                        if mark_notification_delivered_if_owned(conn, absorbed_id, "") < 1:
+                            continue
                         # Resolve-on-delivery: an absorbed album turn is served via
                         # the leader, so clear any prior alert for it (BUG #1).
                         _resolve_public_agent_bridge_hiccup(conn, absorbed_id)
-                        mark_notification_error(conn, absorbed_id, f"absorbed_into_album_leader:{own_id}")
+                        # C2 fix: the sibling is now DELIVERED, so recording the
+                        # "absorbed" provenance via mark_notification_error would be a
+                        # no-op (the delivered guard rejects it) AND would otherwise
+                        # clobber a clean delivery_error=NULL with a non-error string.
+                        # Persist the provenance note in extra_json instead, so the
+                        # sibling row stays delivered with a clean error column and the
+                        # leader linkage is still auditable. Merge-safe json_set of a
+                        # single key, scoped to the just-delivered row.
+                        try:
+                            conn.execute(
+                                """
+                                UPDATE notification_outbox
+                                SET extra_json = json_set(
+                                    COALESCE(extra_json, '{}'),
+                                    '$._absorbed_into_album_leader',
+                                    ?
+                                )
+                                WHERE id = ? AND delivered_at IS NOT NULL
+                                """,
+                                (int(own_id), int(absorbed_id)),
+                            )
+                            conn.commit()
+                        except Exception:  # noqa: BLE001 - provenance note must never break delivery.
+                            pass
                 return None
         _time.sleep(0.4)
 
@@ -2615,20 +3073,26 @@ def run_public_agent_turns_once(
                     _reset_public_agent_bridge_terminal_failures(conn, int(row["id"]))
                     summary["deferred_public_agent_bridge"] += 1
                     continue
+                # C1: this loop is the in-process claim-holder, NOT a detached worker,
+                # so every terminal write uses the empty-token guard -- it applies only
+                # when no detached worker currently owns the row. A row re-leased to a
+                # detached bridge worker is left for that worker to finalise, so this
+                # loop never duplicate-marks (delivered/error/unconfirmed) a row another
+                # owner is authoritative for.
                 if _is_public_agent_bridge_unconfirmed(error):
                     _mark_public_agent_bridge_unconfirmed(conn, int(row["id"]), error)
                     summary["unconfirmed_public_agent_bridge"] += 1
                     continue
-                mark_notification_error(conn, int(row["id"]), error)
-                _maybe_report_public_agent_bridge_hiccup(conn, int(row["id"]), error=error)
+                if mark_notification_error_if_owned(conn, int(row["id"]), error, "") >= 1:
+                    _maybe_report_public_agent_bridge_hiccup(conn, int(row["id"]), error=error)
                 summary["errors"] += 1
                 if verbose:
                     sys.stderr.write(f"[deliver-public-agent] id={row['id']} error={error}\n")
                 continue
-            mark_notification_delivered(conn, int(row["id"]))
-            # Resolve-on-delivery: this loop only handles public-agent-turn rows,
-            # so a delivered row clears any prior terminal-attempt alert (BUG #1).
-            _resolve_public_agent_bridge_hiccup(conn, int(row["id"]))
+            if mark_notification_delivered_if_owned(conn, int(row["id"]), "") >= 1:
+                # Resolve-on-delivery: this loop only handles public-agent-turn rows,
+                # so a delivered row clears any prior terminal-attempt alert (BUG #1).
+                _resolve_public_agent_bridge_hiccup(conn, int(row["id"]))
             summary["delivered"] += 1
     return summary
 
@@ -2848,21 +3312,45 @@ def run_once(cfg: Config, *, limit: int = 50, verbose: bool = False) -> dict[str
             if error == "HANDLED_BY_CONSUMER":
                 # Safety: any remaining curator rows are already handled above.
                 continue
+            is_public_agent_turn = (
+                str(row.get("target_kind") or "").strip().lower() == "public-agent-turn"
+            )
             if error:
-                mark_notification_error(conn, int(row["id"]), error)
-                _maybe_report_public_agent_bridge_hiccup(conn, int(row["id"]), error=error)
+                # C1: public-agent-turn rows can be owned by a DETACHED bridge worker.
+                # This generic loop is the in-process claim-holder, not a detached
+                # worker, so its terminal writes for bridge rows use the empty-token
+                # guard -- they finalise ONLY a row no detached worker currently owns
+                # (and only when not yet delivered). A row re-leased to a detached
+                # worker is left for that worker to finalise, so this loop never
+                # clobbers a delivery/error another owner is authoritative for. The
+                # hiccup page then fires ONLY when this caller actually recorded the
+                # error. Non-bridge kinds keep the bare retry-scheduling write.
+                if is_public_agent_turn:
+                    if mark_notification_error_if_owned(conn, int(row["id"]), error, "") >= 1:
+                        _maybe_report_public_agent_bridge_hiccup(
+                            conn, int(row["id"]), error=error
+                        )
+                else:
+                    mark_notification_error(conn, int(row["id"]), error)
+                    _maybe_report_public_agent_bridge_hiccup(conn, int(row["id"]), error=error)
                 summary["errors"] += 1
                 if verbose:
                     sys.stderr.write(f"[deliver] id={row['id']} error={error}\n")
                 continue
+            if is_public_agent_turn:
+                # C1: empty-token guarded delivered-mark. Only run the resolve and
+                # count it as delivered when THIS write actually finalised the row
+                # (rowcount>=1). If a detached worker owns the row the write is a
+                # no-op -- leave the resolve and the delivered side effects to that
+                # owning worker. Mirrors the dedicated loop at :3116.
+                if mark_notification_delivered_if_owned(conn, int(row["id"]), "") >= 1:
+                    # Resolve-on-delivery: a turn that paged at the terminal-attempt
+                    # threshold can still self-heal and deliver on a later retry (no
+                    # max-attempt cap), so clear its alert (BUG #1).
+                    _resolve_public_agent_bridge_hiccup(conn, int(row["id"]))
+                    summary["delivered"] += 1
+                continue
             mark_notification_delivered(conn, int(row["id"]))
-            # Resolve-on-delivery for public-agent-turn rows only: a turn that
-            # paged at the terminal-attempt threshold can still self-heal and
-            # deliver on a later retry (no max-attempt cap), so clear its alert
-            # (BUG #1). Guarded on target_kind so we never load Config for the
-            # vastly more common non-bridge deliveries.
-            if str(row.get("target_kind") or "").strip().lower() == "public-agent-turn":
-                _resolve_public_agent_bridge_hiccup(conn, int(row["id"]))
             _mark_wrapped_report_delivered(conn, row)
             summary["delivered"] += 1
             if (row.get("channel_kind") or "").lower() == "tui-only":

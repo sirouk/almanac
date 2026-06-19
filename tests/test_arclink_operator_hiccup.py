@@ -389,6 +389,13 @@ def test_bridge_unconfirmed_increments_then_one_terminal_does_not_page() -> None
     _point_config_at_operator()
 
     threshold = delivery._public_agent_bridge_hiccup_min_attempts()
+    # This test is scoped to the TERMINAL-failure gate. The separate M3
+    # unconfirmed-escalation (a distinct operator key) would otherwise page on the
+    # long unconfirmed run below, which is correct but orthogonal here -- raise its
+    # threshold above this run so it never fires and the assertion stays about the
+    # terminal gate alone.
+    os.environ["ARCLINK_PUBLIC_AGENT_BRIDGE_UNCONFIRMED_ESCALATE_AFTER"] = str(threshold + 5)
+
     nid = _public_agent_turn_row(control, conn, attempt_count=0)
     # (threshold - 1) genuine NON-terminal unconfirmed/held outcomes. Each bumps the
     # row's attempt_count (the maybe-delivered turns) and resets the terminal
@@ -430,6 +437,7 @@ def test_bridge_unconfirmed_increments_then_one_terminal_does_not_page() -> None
         "a row with mostly maybe-delivered outcomes + 1 terminal error must NOT page "
         "(consecutive-terminal counter, not attempt_count)",
     )
+    os.environ.pop("ARCLINK_PUBLIC_AGENT_BRIDGE_UNCONFIRMED_ESCALATE_AFTER", None)
     print("PASS test_bridge_unconfirmed_increments_then_one_terminal_does_not_page")
 
 

@@ -4237,7 +4237,9 @@ def test_agent_helpers_reject_symlink_escaped_agent_paths() -> None:
         def missing_entry(_value):
             raise KeyError(_value)
 
-        def process_env(home: Path, hermes_home: Path, workspace: Path) -> dict[str, str]:
+        def process_env(
+            home: Path, hermes_home: Path, workspace: Path, *, uid: int = 23456, gid: int = 23456
+        ) -> dict[str, str]:
             return {
                 "PATH": process_helper.SAFE_PATH,
                 "HOME": str(home.resolve(strict=False)),
@@ -4248,8 +4250,8 @@ def test_agent_helpers_reject_symlink_escaped_agent_paths() -> None:
                 "DRIVE_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
                 "CODE_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
                 "TERMINAL_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
-                "ARCLINK_AGENT_UID": "23456",
-                "ARCLINK_AGENT_GID": "23456",
+                "ARCLINK_AGENT_UID": str(uid),
+                "ARCLINK_AGENT_GID": str(gid),
             }
 
         def common_process_request(
@@ -4258,6 +4260,9 @@ def test_agent_helpers_reject_symlink_escaped_agent_paths() -> None:
             home: Path,
             hermes_home: Path,
             workspace: Path,
+            *,
+            uid: int = 23456,
+            gid: int = 23456,
         ) -> dict[str, object]:
             repo = case_root / "repo"
             priv = case_root / "arclink-priv"
@@ -4276,13 +4281,13 @@ def test_agent_helpers_reject_symlink_escaped_agent_paths() -> None:
                 "home": str(home),
                 "hermes_home": str(hermes_home),
                 "workspace": str(workspace),
-                "uid": 23456,
-                "gid": 23456,
+                "uid": uid,
+                "gid": gid,
                 "repo_dir": str(repo),
                 "priv_dir": str(priv),
                 "state_dir": str(state),
                 "runtime_dir": str(runtime),
-                "env": process_env(home, hermes_home, workspace),
+                "env": process_env(home, hermes_home, workspace, uid=uid, gid=gid),
             }
 
         def reject_user_case(
@@ -4421,6 +4426,11 @@ def test_agent_helpers_reject_symlink_escaped_agent_paths() -> None:
             )
             expect(ok is True and isinstance(payload, dict), str(payload))
             expect(valid_home.is_dir() and valid_hermes.is_dir() and valid_workspace.is_dir(), str(payload))
+            # M1: the process request must carry the uid/gid the user helper just
+            # allocated and persisted; the process helper binds the request to that
+            # assignment file even though "alex" is not yet in this container's pwd db.
+            allocated_uid = int(payload["uid"])
+            allocated_gid = int(payload["gid"])
 
             process_request = common_process_request(
                 valid_root,
@@ -4428,6 +4438,8 @@ def test_agent_helpers_reject_symlink_escaped_agent_paths() -> None:
                 valid_home,
                 valid_hermes,
                 valid_workspace,
+                uid=allocated_uid,
+                gid=allocated_gid,
             )
             ok, payload = process_helper.run_agent_process_helper_request(process_request)
             expect(ok is True and payload.get("returncode") == 0, str(payload))

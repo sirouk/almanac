@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import grp
 import hashlib
-import hmac
 import json
 import os
 import pwd
@@ -24,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from arclink_boundary import require_docker_trusted_host_risk_accepted
+from arclink_broker_signing import NonceStore, verify_broker_request
 from arclink_rejection_incidents import agent_home_root_rejection_path, record_rejection_incident
 
 
@@ -60,10 +60,27 @@ def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict[s
     handler.wfile.write(body)
 
 
-def _is_authorized(headers: Any) -> bool:
-    expected = _helper_token()
-    supplied = str(headers.get(AGENT_USER_HELPER_TOKEN_HEADER) or "").strip()
-    return bool(expected and supplied and hmac.compare_digest(expected, supplied))
+def _nonce_store_path() -> Path | None:
+    base = agent_home_root_rejection_path(SERVICE_NAME)
+    if base is None:
+        return None
+    return base.parent / "signature-nonces.json"
+
+
+_NONCE_STORE = NonceStore(_nonce_store_path)
+
+
+def _is_authorized(headers: Any, raw_body: bytes) -> bool:
+    # Lock-step-safe accept-both: bare token admits while
+    # ARCLINK_BROKER_REQUIRE_SIGNED is off; HMAC enforced only when flipped on.
+    ok, _reason = verify_broker_request(
+        _helper_token(),
+        headers,
+        raw_body,
+        _NONCE_STORE,
+        bearer_header=AGENT_USER_HELPER_TOKEN_HEADER,
+    )
+    return ok
 
 
 def _require_safe_agent_id(value: Any) -> str:
@@ -561,9 +578,6 @@ class AgentUserHelperHandler(BaseHTTPRequestHandler):
         if self.path != "/v1/agent-user":
             _json_response(self, 404, {"ok": False, "error": "not found"})
             return
-        if not _is_authorized(self.headers):
-            _json_response(self, 401, {"ok": False, "error": "unauthorized"})
-            return
         try:
             length = int(self.headers.get("Content-Length") or "0")
         except ValueError:
@@ -571,8 +585,13 @@ class AgentUserHelperHandler(BaseHTTPRequestHandler):
         if length <= 0 or length > MAX_REQUEST_BYTES:
             _json_response(self, 413, {"ok": False, "error": "invalid agent user helper request size"})
             return
+        # Read the body BEFORE authenticating so the body-hash HMAC covers it.
+        raw_body = self.rfile.read(length)
+        if not _is_authorized(self.headers, raw_body):
+            _json_response(self, 401, {"ok": False, "error": "unauthorized"})
+            return
         try:
-            body = json.loads(self.rfile.read(length).decode("utf-8"))
+            body = json.loads(raw_body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             _json_response(self, 400, {"ok": False, "error": "invalid JSON"})
             return

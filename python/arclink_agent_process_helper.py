@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import hmac
 import ipaddress
 import json
 import os
+import pwd
 import re
 import signal
 import stat
@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from arclink_boundary import require_docker_trusted_host_risk_accepted
+from arclink_broker_signing import NonceStore, verify_broker_request
 from arclink_rejection_incidents import private_state_rejection_path, record_rejection_incident
 
 
@@ -89,10 +90,30 @@ def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict[s
     handler.wfile.write(body)
 
 
-def _is_authorized(headers: Any) -> bool:
-    expected = _helper_token()
-    supplied = str(headers.get(AGENT_PROCESS_HELPER_TOKEN_HEADER) or "").strip()
-    return bool(expected and supplied and hmac.compare_digest(expected, supplied))
+def _nonce_store_path() -> Path | None:
+    base = private_state_rejection_path(
+        SERVICE_NAME,
+        env_names=("ARCLINK_PRIV_DIR", "ARCLINK_DOCKER_CONTAINER_PRIV_DIR"),
+    )
+    if base is None:
+        return None
+    return base.parent / "signature-nonces.json"
+
+
+_NONCE_STORE = NonceStore(_nonce_store_path)
+
+
+def _is_authorized(headers: Any, raw_body: bytes) -> bool:
+    # Lock-step-safe accept-both: bare token admits while
+    # ARCLINK_BROKER_REQUIRE_SIGNED is off; HMAC enforced only when flipped on.
+    ok, _reason = verify_broker_request(
+        _helper_token(),
+        headers,
+        raw_body,
+        _NONCE_STORE,
+        bearer_header=AGENT_PROCESS_HELPER_TOKEN_HEADER,
+    )
+    return ok
 
 
 def _reject_raw_commands(request_body: dict[str, Any]) -> None:
@@ -382,6 +403,106 @@ def _channels(value: Any) -> list[str]:
     return channels
 
 
+AGENT_ID_ASSIGNMENTS_FILE = ".arclink-user-ids.json"
+
+
+def _assignment_uid_gid(home_root: Path, unix_user: str) -> tuple[int, int] | None:
+    """M1: read the deterministic (uid, gid) the agent-user-helper persisted.
+
+    The agent-user-helper allocates each unix_user's uid/gid by hash-seeded
+    linear probing and persists the result in ``<home_root>/.arclink-user-ids.json``.
+    That allocation is not a pure function of the user (it depends on what is
+    already used), so the process helper cannot recompute it -- but the user
+    helper shares the same Docker agent-home-root volume, so the helper can READ
+    the assignment file as the deterministic source of truth and bind the
+    request's ids to it even before the OS account materialises in this
+    container's pwd database. Returns None when the file is absent or has no
+    entry for the user (the only case where accept-both still applies). The file
+    is read-only here: only the user helper ever writes it.
+    """
+    # Fail CLOSED on tamper: a present-but-symlinked/non-regular/unreadable/
+    # malformed assignment file RAISES (so the caller rejects the request) rather
+    # than returning None, which would fall back to trusting the request's uid/gid.
+    # Only a genuinely ABSENT file or a valid file with NO entry for this user
+    # returns None (the only case where first-ever accept-both still applies).
+    try:
+        assignments_path = (home_root / AGENT_ID_ASSIGNMENTS_FILE).resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("agent process helper could not resolve the assignment file path") from exc
+    # Stay strictly under the validated home root; never follow a symlink out.
+    if assignments_path != (home_root.resolve(strict=False) / AGENT_ID_ASSIGNMENTS_FILE):
+        raise ValueError("agent process helper assignment file path escaped the home root")
+    try:
+        info = os.lstat(assignments_path)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise ValueError("agent process helper could not stat the assignment file") from exc
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise ValueError("agent process helper assignment file is a symlink or not a regular file")
+    try:
+        raw = json.loads(assignments_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("agent process helper assignment file is unreadable or malformed") from exc
+    if not isinstance(raw, dict):
+        raise ValueError("agent process helper assignment file is not a JSON object")
+    entry = raw.get(unix_user)
+    if entry is None:
+        return None
+    if not isinstance(entry, dict):
+        raise ValueError("agent process helper assignment entry is malformed")
+    try:
+        assigned_uid = int(entry["uid"])
+        assigned_gid = int(entry["gid"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("agent process helper assignment entry has invalid uid/gid") from exc
+    return assigned_uid, assigned_gid
+
+
+def _bind_uid_gid_to_account(
+    unix_user: str, uid: int, gid: int, *, home_root: Path | None = None
+) -> tuple[int, int]:
+    """M1: bind the request's uid/gid to the resolved Unix account.
+
+    The helper drops privileges to (uid, gid) via setpriv, so it must not trust
+    the request's numeric ids blindly. Resolve the account from
+    ``pwd.getpwnam(unix_user)`` and REJECT if the request disagrees, so a token
+    holder cannot run an agent command as an arbitrary uid/gid (e.g. 0). The
+    user is created by the agent-user-helper before any process step, so the
+    account exists on the legitimate path.
+
+    Unknown-user binding: when the OS account does not exist yet (just-in-time
+    creation race), fall back to the agent-user-helper's persisted assignment
+    file under the Docker agent-home-root and REJECT if the request disagrees,
+    so the previously request-trusting unknown-user path is bound too. Only when
+    neither the OS account nor a persisted assignment exists do we accept-both on
+    the validated request ids rather than hard-breaking the legitimate
+    first-ever account-creation flow.
+    """
+    try:
+        info = pwd.getpwnam(unix_user)
+    except KeyError:
+        info = None
+    if info is not None:
+        resolved_uid = int(info.pw_uid)
+        resolved_gid = int(info.pw_gid)
+        if resolved_uid != uid or resolved_gid != gid:
+            raise ValueError(
+                "agent process helper request uid/gid does not match the resolved Unix account"
+            )
+        return resolved_uid, resolved_gid
+    if home_root is not None:
+        assigned = _assignment_uid_gid(home_root, unix_user)
+        if assigned is not None:
+            assigned_uid, assigned_gid = assigned
+            if assigned_uid != uid or assigned_gid != gid:
+                raise ValueError(
+                    "agent process helper request uid/gid does not match the persisted Unix account assignment"
+                )
+            return assigned_uid, assigned_gid
+    return uid, gid
+
+
 def _validate_common(request_body: dict[str, Any]) -> dict[str, Any]:
     _reject_raw_commands(request_body)
     agent_id = _require_safe_agent_id(request_body.get("agent_id"))
@@ -392,6 +513,7 @@ def _validate_common(request_body: dict[str, Any]) -> dict[str, Any]:
     workspace = _require_workspace(hermes_home, request_body.get("workspace"))
     uid = _require_agent_process_id(request_body.get("uid"), label="agent uid")
     gid = _require_agent_process_id(request_body.get("gid"), label="agent gid")
+    uid, gid = _bind_uid_gid_to_account(unix_user, uid, gid, home_root=home_root)
     repo_dir = _require_configured_path(
         _absolute_path(request_body.get("repo_dir"), label="repo dir"),
         ("ARCLINK_REPO_DIR",),
@@ -560,6 +682,8 @@ def _rejection_reason(exc: BaseException) -> str:
     text = str(exc).lower()
     if "raw commands" in text:
         return "raw_command_rejected"
+    if "uid/gid does not match" in text:
+        return "uid_gid_mismatch_rejected"
     if "dashboard backend host" in text:
         return "dashboard_backend_host_rejected"
     if "not approved for agent process execution" in text:
@@ -588,6 +712,7 @@ def _rejection_reason(exc: BaseException) -> str:
 def _rejection_message(reason: str) -> str:
     messages = {
         "raw_command_rejected": "Rejected raw command input.",
+        "uid_gid_mismatch_rejected": "Rejected request uid/gid that does not match the resolved Unix account.",
         "dashboard_backend_host_rejected": "Rejected unsafe dashboard backend host.",
         "unapproved_env_rejected": "Rejected unapproved process environment key.",
         "control_token_env_rejected": "Rejected ArcLink control token environment key.",
@@ -906,9 +1031,6 @@ class AgentProcessHelperHandler(BaseHTTPRequestHandler):
         if self.path != "/v1/agent-process":
             _json_response(self, 404, {"ok": False, "error": "not found"})
             return
-        if not _is_authorized(self.headers):
-            _json_response(self, 401, {"ok": False, "error": "unauthorized"})
-            return
         try:
             length = int(self.headers.get("Content-Length") or "0")
         except ValueError:
@@ -916,8 +1038,13 @@ class AgentProcessHelperHandler(BaseHTTPRequestHandler):
         if length <= 0 or length > MAX_REQUEST_BYTES:
             _json_response(self, 413, {"ok": False, "error": "invalid agent process helper request size"})
             return
+        # Read the body BEFORE authenticating so the body-hash HMAC covers it.
+        raw_body = self.rfile.read(length)
+        if not _is_authorized(self.headers, raw_body):
+            _json_response(self, 401, {"ok": False, "error": "unauthorized"})
+            return
         try:
-            body = json.loads(self.rfile.read(length).decode("utf-8"))
+            body = json.loads(raw_body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             _json_response(self, 400, {"ok": False, "error": "invalid JSON"})
             return

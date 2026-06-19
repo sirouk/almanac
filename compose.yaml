@@ -665,6 +665,9 @@ services:
       ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN: ${ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN:?run ./deploy.sh control bootstrap first}
       ARCLINK_DEPLOYMENT_EXEC_BROKER_HOST: 0.0.0.0
       ARCLINK_DEPLOYMENT_EXEC_BROKER_PORT: 8912
+      # GAP-019 pass-2: additive HMAC request signing. DEFAULT OFF (accept-both,
+      # bare token still admits). A separate future flip to 1 enforces signed+nonce.
+      ARCLINK_BROKER_REQUIRE_SIGNED: ${ARCLINK_BROKER_REQUIRE_SIGNED:-0}
     group_add:
       - ${ARCLINK_DOCKER_SOCKET_GID:-0}
     volumes:
@@ -696,6 +699,8 @@ services:
       ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN: ${ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN:?run ./deploy.sh control bootstrap first}
       ARCLINK_MIGRATION_CAPTURE_HELPER_HOST: 0.0.0.0
       ARCLINK_MIGRATION_CAPTURE_HELPER_PORT: 8914
+      # GAP-019 pass-2: additive HMAC request signing. DEFAULT OFF (accept-both).
+      ARCLINK_BROKER_REQUIRE_SIGNED: ${ARCLINK_BROKER_REQUIRE_SIGNED:-0}
     volumes:
       - ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
     command: ["python3", "python/arclink_migration_capture_helper.py"]
@@ -836,6 +841,20 @@ services:
       ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN: ${ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN:?run ./deploy.sh control bootstrap first}
       ARCLINK_AGENT_SUPERVISOR_BROKER_HOST: 0.0.0.0
       ARCLINK_AGENT_SUPERVISOR_BROKER_PORT: 8913
+      # GAP-019 pass-2: additive HMAC request signing. DEFAULT OFF (accept-both).
+      ARCLINK_BROKER_REQUIRE_SIGNED: ${ARCLINK_BROKER_REQUIRE_SIGNED:-0}
+      # H3: when set, the broker derives the supervisor container from this
+      # host-immutable name (and re-derives/fail-closed-verifies backend_host from
+      # its network IP) instead of trusting the request, so a token holder cannot
+      # attach an arbitrary container / SSRF the proxy. DEFAULT EMPTY (accept-both):
+      # the legitimate agent-supervisor client sends supervisor_container =
+      # HOSTNAME / gethostname(), i.e. the DYNAMIC 12-hex Docker container id, not
+      # a stable compose service name. Pinning a fixed name here would make every
+      # legitimate request mismatch (_resolve_supervisor_container rejects) and
+      # break the dashboard proxy. Operators who run the supervisor under a fixed
+      # `container_name:` / `hostname:` can set this to that exact name to activate
+      # the binding; until then it stays request-trusting (round-1 behaviour).
+      ARCLINK_DOCKER_AGENT_SUPERVISOR_CONTAINER: ${ARCLINK_DOCKER_AGENT_SUPERVISOR_CONTAINER:-}
     group_add:
       - ${ARCLINK_DOCKER_SOCKET_GID:-0}
     volumes:
@@ -876,6 +895,9 @@ services:
       ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN: ${ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN:?run ./deploy.sh control bootstrap first}
       ARCLINK_OPERATOR_UPGRADE_BROKER_HOST: 0.0.0.0
       ARCLINK_OPERATOR_UPGRADE_BROKER_PORT: 8917
+      # GAP-019 pass-2: this broker already enforces signed+nonce unconditionally
+      # (its only client always signs); the flag is published for parity/audit.
+      ARCLINK_BROKER_REQUIRE_SIGNED: ${ARCLINK_BROKER_REQUIRE_SIGNED:-0}
     volumes:
       # Keep the live checkout available at its host path so the broker can
       # write typed requests into the same private state the host runner drains.
@@ -910,6 +932,8 @@ services:
       ARCLINK_AGENT_USER_HELPER_TOKEN: ${ARCLINK_AGENT_USER_HELPER_TOKEN:?run ./deploy.sh control bootstrap first}
       ARCLINK_AGENT_USER_HELPER_HOST: 0.0.0.0
       ARCLINK_AGENT_USER_HELPER_PORT: 8915
+      # GAP-019 pass-2: additive HMAC request signing. DEFAULT OFF (accept-both).
+      ARCLINK_BROKER_REQUIRE_SIGNED: ${ARCLINK_BROKER_REQUIRE_SIGNED:-0}
     volumes:
       - ./arclink-priv/state/docker/users:/home/arclink/arclink/arclink-priv/state/docker/users
     command: ["python3", "python/arclink_agent_user_helper.py"]
@@ -944,6 +968,8 @@ services:
       ARCLINK_AGENT_PROCESS_HELPER_TOKEN: ${ARCLINK_AGENT_PROCESS_HELPER_TOKEN:?run ./deploy.sh control bootstrap first}
       ARCLINK_AGENT_PROCESS_HELPER_HOST: 0.0.0.0
       ARCLINK_AGENT_PROCESS_HELPER_PORT: 8916
+      # GAP-019 pass-2: additive HMAC request signing. DEFAULT OFF (accept-both).
+      ARCLINK_BROKER_REQUIRE_SIGNED: ${ARCLINK_BROKER_REQUIRE_SIGNED:-0}
     volumes:
       - ./arclink-priv/config:/home/arclink/arclink/arclink-priv/config
       - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
@@ -1022,6 +1048,9 @@ services:
       ARCLINK_GATEWAY_EXEC_BROKER_TOKEN: ${ARCLINK_GATEWAY_EXEC_BROKER_TOKEN:?run ./deploy.sh control bootstrap first}
       ARCLINK_GATEWAY_EXEC_BROKER_HOST: 0.0.0.0
       ARCLINK_GATEWAY_EXEC_BROKER_PORT: 8911
+      # GAP-019 pass-2: additive HMAC request signing. DEFAULT OFF (accept-both).
+      # With it on, the body-hash HMAC also pins the bridge bot_token field (H4).
+      ARCLINK_BROKER_REQUIRE_SIGNED: ${ARCLINK_BROKER_REQUIRE_SIGNED:-0}
       # The broker reconstructs the public-agent bridge command via the gated builder,
       # so it must see the L2 flag too — otherwise L2 is silently disabled on the main
       # broker path. Default 0; the builder's preflight still requires the wrapper to be

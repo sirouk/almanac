@@ -49,6 +49,7 @@ from arclink_control import _notification_token_guard_sql
 from arclink_discord import discord_create_dm_channel, discord_edit_message, discord_send_message
 from arclink_http import http_request
 from arclink_telegram import telegram_edit_message_text, telegram_send_message
+from arclink_broker_signing import sign_broker_request
 
 
 @contextlib.contextmanager
@@ -980,6 +981,9 @@ def _run_gateway_exec_broker_request(request_body: dict[str, Any]) -> tuple[bool
     except (TypeError, ValueError):
         pass
     payload_bytes = json.dumps(request_body, sort_keys=True).encode("utf-8")
+    # Always attach the additive HMAC signature headers; the broker only enforces
+    # them once ARCLINK_BROKER_REQUIRE_SIGNED is on (lock-step-safe). With the flag
+    # on, the body-hash HMAC also pins the bridge bot_token field (H4).
     request = urllib.request.Request(
         f"{broker_url}/v1/public-agent-bridge",
         data=payload_bytes,
@@ -987,6 +991,7 @@ def _run_gateway_exec_broker_request(request_body: dict[str, Any]) -> tuple[bool
         headers={
             "Content-Type": "application/json",
             GATEWAY_EXEC_BROKER_TOKEN_HEADER: token,
+            **sign_broker_request(token, payload_bytes),
         },
     )
     try:

@@ -11825,6 +11825,51 @@ control_upgrade_fetch_upstream() {
     git -C "$BOOTSTRAP_DIR" fetch --prune "$auth_url" "$branch"
 }
 
+# SECURITY: pin the docker build tree to the VERIFIED upstream commit immediately
+# before the build. $BOOTSTRAP_DIR is the docker build context (compose `context: .`
+# -> Dockerfile `COPY . /home/arclink/arclink`) and is OWNED/WRITABLE by the
+# unprivileged arclink service user. After the host-authoritative fetch the arclink
+# user can still (a) plant UNTRACKED source files in the checkout or (b) race a
+# clean-check->build TOCTOU window, so a root build would otherwise COPY
+# attacker-controlled files into the image. `reset --hard "$verified_commit"` wipes
+# any tracked-file edits and `clean -ffd` removes untracked tamper, collapsing the
+# race window to near-zero so the tree handed to `docker build` matches the verified
+# ref exactly. We deliberately DO NOT pass `-x` to clean: gitignored paths
+# (`arclink-priv/` config/state/secrets/vault, the runtime sqlite db, etc.) MUST
+# survive. The .git directory is never touched by clean, and .dockerignore already
+# excludes /.git + /arclink-priv so neither is COPYd into the image regardless.
+harden_control_upgrade_build_tree() {
+  local verified_commit="$1"
+
+  if [[ "${ARCLINK_CONTROL_UPGRADE_ALLOW_DIRTY:-0}" == "1" ]]; then
+    # An intentional local build was explicitly requested; leave the tree as-is.
+    return 0
+  fi
+  if [[ -z "$verified_commit" ]]; then
+    echo "Refusing control upgrade: no verified commit to pin the build tree to." >&2
+    return 1
+  fi
+  if ! git -C "$BOOTSTRAP_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "Pinning control build tree to verified ${verified_commit:0:12} and clearing untracked tamper before build..."
+  if ! git -C "$BOOTSTRAP_DIR" reset --hard "$verified_commit"; then
+    echo "Refusing control upgrade: could not pin the build tree to verified ${verified_commit:0:12}." >&2
+    return 1
+  fi
+  # `-ffd` removes untracked files AND untracked directories (the -ff handles a
+  # nested git checkout an attacker might plant). NO `-x`: gitignored runtime state
+  # under arclink-priv/ is preserved. The exclude is ROOT-ANCHORED (`/arclink-priv`,
+  # matching the `.gitignore` `/arclink-priv/` rule) so it protects ONLY the real
+  # top-level runtime dir -- a nested untracked `arclink-priv` an attacker plants
+  # under e.g. python/ is NOT excluded and IS wiped as tamper.
+  if ! git -C "$BOOTSTRAP_DIR" clean -ffd -e /arclink-priv; then
+    echo "Refusing control upgrade: could not clear untracked files from the build tree." >&2
+    return 1
+  fi
+}
+
 sync_control_upgrade_checkout_from_upstream() {
   local branch="" before="" after="" upstream_commit=""
   local auth_url="" origin_url="" auth_norm="" origin_norm=""
@@ -11899,12 +11944,19 @@ sync_control_upgrade_checkout_from_upstream() {
   fi
   if [[ "$before" == "$upstream_commit" ]]; then
     echo "Control upgrade checkout is current at $(git -C "$BOOTSTRAP_DIR" rev-parse --short HEAD)."
+    # Even when already at the verified tip, pin/clean the tree: the arclink user
+    # may have planted untracked source files or edited tracked files since the
+    # checkout landed, and this tree is the docker build context.
+    harden_control_upgrade_build_tree "$upstream_commit" || return 1
     return 0
   fi
   if git -C "$BOOTSTRAP_DIR" merge-base --is-ancestor "$before" "$upstream_commit"; then
     git -C "$BOOTSTRAP_DIR" merge --ff-only "$upstream_commit"
     after="$(git -C "$BOOTSTRAP_DIR" rev-parse HEAD)"
     echo "Fast-forwarded control upgrade checkout from ${before:0:12} to ${after:0:12}."
+    # Hard-pin the build tree to the verified commit and strip untracked tamper
+    # immediately before the build to defeat the arclink-writable checkout race.
+    harden_control_upgrade_build_tree "$upstream_commit" || return 1
     return 0
   fi
   if git -C "$BOOTSTRAP_DIR" merge-base --is-ancestor "$upstream_commit" "$before"; then

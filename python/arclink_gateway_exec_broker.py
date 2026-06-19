@@ -9,7 +9,6 @@ command input.
 from __future__ import annotations
 
 import argparse
-import hmac
 import json
 import os
 import re
@@ -24,6 +23,7 @@ from arclink_boundary import (
     require_docker_trusted_host_risk_accepted,
     require_trusted_docker_binary,
 )
+from arclink_broker_signing import NonceStore, verify_broker_request
 from arclink_rejection_incidents import record_rejection_incident, state_root_rejection_path
 import arclink_notification_delivery as delivery
 
@@ -48,10 +48,29 @@ def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict[s
     handler.wfile.write(body)
 
 
-def _is_authorized(headers: Any) -> bool:
-    expected = _broker_token()
-    supplied = str(headers.get(delivery.GATEWAY_EXEC_BROKER_TOKEN_HEADER) or "").strip()
-    return bool(expected and supplied and hmac.compare_digest(expected, supplied))
+def _nonce_store_path() -> Path | None:
+    base = state_root_rejection_path(SERVICE_NAME)
+    if base is None:
+        return None
+    return base.parent / "signature-nonces.json"
+
+
+_NONCE_STORE = NonceStore(_nonce_store_path)
+
+
+def _is_authorized(headers: Any, raw_body: bytes) -> bool:
+    # Lock-step-safe accept-both: bare token admits while
+    # ARCLINK_BROKER_REQUIRE_SIGNED is off. With the flag on, the body-hash HMAC
+    # additionally covers the payload (incl. the gateway bot_token field, H4) so
+    # an on-net party cannot substitute a different token in transit.
+    ok, _reason = verify_broker_request(
+        _broker_token(),
+        headers,
+        raw_body,
+        _NONCE_STORE,
+        bearer_header=delivery.GATEWAY_EXEC_BROKER_TOKEN_HEADER,
+    )
+    return ok
 
 
 def _clean_timeout(value: Any) -> int:
@@ -329,9 +348,6 @@ class GatewayExecBrokerHandler(BaseHTTPRequestHandler):
         if self.path != "/v1/public-agent-bridge":
             _json_response(self, 404, {"ok": False, "error": "not found"})
             return
-        if not _is_authorized(self.headers):
-            _json_response(self, 401, {"ok": False, "error": "unauthorized"})
-            return
         try:
             length = int(self.headers.get("Content-Length") or "0")
         except ValueError:
@@ -339,8 +355,13 @@ class GatewayExecBrokerHandler(BaseHTTPRequestHandler):
         if length <= 0 or length > MAX_REQUEST_BYTES:
             _json_response(self, 413, {"ok": False, "error": "invalid gateway exec request size"})
             return
+        # Read the body BEFORE authenticating so the body-hash HMAC covers it.
+        raw_body = self.rfile.read(length)
+        if not _is_authorized(self.headers, raw_body):
+            _json_response(self, 401, {"ok": False, "error": "unauthorized"})
+            return
         try:
-            body = json.loads(self.rfile.read(length).decode("utf-8"))
+            body = json.loads(raw_body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             _json_response(self, 400, {"ok": False, "error": "invalid JSON"})
             return

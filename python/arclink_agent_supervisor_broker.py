@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import hmac
 import ipaddress
 import json
 import os
@@ -26,6 +25,7 @@ from arclink_boundary import (
     require_docker_trusted_host_risk_accepted,
     require_trusted_docker_binary,
 )
+from arclink_broker_signing import NonceStore, verify_broker_request
 from arclink_rejection_incidents import private_state_rejection_path, record_rejection_incident
 
 
@@ -41,6 +41,17 @@ CONTAINER_PRIVATE_ROOT = "/home/arclink/arclink/arclink-priv"
 
 def _broker_token() -> str:
     return str(os.environ.get("ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN") or "").strip()
+
+
+def _configured_supervisor_container() -> str:
+    """The broker-side supervisor container name (host-immutable env).
+
+    H3: the broker derives the container it will attach to the isolated dashboard
+    network from its own configuration instead of trusting the request, so a
+    token holder cannot ask the broker to attach an arbitrary container (or, by
+    way of the re-derived backend_host, SSRF a proxy at an arbitrary IP).
+    """
+    return str(os.environ.get("ARCLINK_DOCKER_AGENT_SUPERVISOR_CONTAINER") or "").strip()
 
 
 def _docker_binary() -> str:
@@ -148,13 +159,31 @@ def _reject_raw_commands(request_body: dict[str, Any]) -> None:
         raise ValueError("agent supervisor broker does not accept raw commands")
 
 
+def _resolve_supervisor_container(request_body: dict[str, Any]) -> str:
+    """H3: derive the supervisor container broker-side and verify the request.
+
+    The broker-configured ARCLINK_DOCKER_AGENT_SUPERVISOR_CONTAINER is the
+    authority. When it is set, the request's supervisor_container must equal it
+    (accept-both during rollout: a legit request that names the same container
+    still passes; a request that names a different one is rejected). When it is
+    not configured the request value is used (legacy behaviour), still validated
+    for safe shape.
+    """
+    requested = str(request_body.get("supervisor_container") or "").strip()
+    configured = _configured_supervisor_container()
+    if configured:
+        if requested and requested != configured:
+            raise ValueError(
+                "agent supervisor broker supervisor container does not match the configured container"
+            )
+        return _require_safe_container(configured, label="supervisor container")
+    return _require_safe_container(requested, label="supervisor container")
+
+
 def _ensure_dashboard_network(request_body: dict[str, Any]) -> dict[str, Any]:
     _reject_raw_commands(request_body)
     agent_id = _require_safe_segment(str(request_body.get("agent_id") or ""), label="agent id")
-    supervisor_container = _require_safe_container(
-        str(request_body.get("supervisor_container") or ""),
-        label="supervisor container",
-    )
+    supervisor_container = _resolve_supervisor_container(request_body)
     network_name = docker_dashboard_network_name(agent_id)
     supplied_network = str(request_body.get("network") or network_name).strip()
     if supplied_network != network_name:
@@ -273,7 +302,37 @@ def _ensure_dashboard_proxy(request_body: dict[str, Any]) -> dict[str, Any]:
     supplied_container = str(request_body.get("container_name") or proxy_container_name).strip()
     if supplied_container != proxy_container_name:
         raise ValueError("agent supervisor broker proxy container does not match agent id")
-    backend_host = _require_backend_host(str(request_body.get("backend_host") or ""))
+    requested_backend_host = _require_backend_host(str(request_body.get("backend_host") or ""))
+    # H3: re-derive the backend host from the broker-configured supervisor
+    # container on the isolated dashboard network, and REJECT if the request's
+    # value disagrees -- so a token holder cannot SSRF the proxy at an arbitrary
+    # IP. Accept-both: if the broker has NO configured supervisor container the
+    # validated request value is used (round-1 legacy behaviour). But once a
+    # supervisor container IS configured this is the authority: if its network IP
+    # cannot be resolved we REJECT (fail-closed) rather than trusting the
+    # request's backend_host, so a configured deployment cannot be tricked into
+    # proxying an attacker-chosen IP by racing the container attach.
+    supervisor_container = _configured_supervisor_container()
+    backend_host = requested_backend_host
+    if supervisor_container:
+        # Configured-but-malformed is a misconfiguration, NOT a reason to fall
+        # back to trusting the request's backend_host (that would re-open the
+        # SSRF). Fail closed.
+        if not SAFE_CONTAINER_RE.fullmatch(supervisor_container):
+            raise ValueError(
+                "agent supervisor broker has a misconfigured supervisor container name"
+            )
+        derived_backend_host = _network_container_ip(network_name, supervisor_container)
+        if not derived_backend_host:
+            raise ValueError(
+                "agent supervisor broker could not resolve the configured supervisor container network IP"
+            )
+        derived_backend_host = _require_backend_host(derived_backend_host)
+        if derived_backend_host != requested_backend_host:
+            raise ValueError(
+                "agent supervisor broker proxy backend host does not match the supervisor container network IP"
+            )
+        backend_host = derived_backend_host
     backend_port = _require_port(request_body.get("backend_port"), label="backend port")
     proxy_port = _require_port(request_body.get("proxy_port"), label="proxy port")
     host_priv = _host_priv_dir()
@@ -456,10 +515,27 @@ def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict[s
     handler.wfile.write(body)
 
 
-def _is_authorized(headers: Any) -> bool:
-    expected = _broker_token()
-    supplied = str(headers.get(AGENT_SUPERVISOR_BROKER_TOKEN_HEADER) or "").strip()
-    return bool(expected and supplied and hmac.compare_digest(expected, supplied))
+def _nonce_store_path() -> Path | None:
+    base = private_state_rejection_path(SERVICE_NAME)
+    if base is None:
+        return None
+    return base.parent / "signature-nonces.json"
+
+
+_NONCE_STORE = NonceStore(_nonce_store_path)
+
+
+def _is_authorized(headers: Any, raw_body: bytes) -> bool:
+    # Lock-step-safe accept-both: bare token admits while
+    # ARCLINK_BROKER_REQUIRE_SIGNED is off; HMAC enforced only when flipped on.
+    ok, _reason = verify_broker_request(
+        _broker_token(),
+        headers,
+        raw_body,
+        _NONCE_STORE,
+        bearer_header=AGENT_SUPERVISOR_BROKER_TOKEN_HEADER,
+    )
+    return ok
 
 
 class AgentSupervisorBrokerHandler(BaseHTTPRequestHandler):
@@ -481,9 +557,6 @@ class AgentSupervisorBrokerHandler(BaseHTTPRequestHandler):
         if self.path != "/v1/agent-supervisor":
             _json_response(self, 404, {"ok": False, "error": "not found"})
             return
-        if not _is_authorized(self.headers):
-            _json_response(self, 401, {"ok": False, "error": "unauthorized"})
-            return
         try:
             length = int(self.headers.get("Content-Length") or "0")
         except ValueError:
@@ -491,8 +564,13 @@ class AgentSupervisorBrokerHandler(BaseHTTPRequestHandler):
         if length <= 0 or length > MAX_REQUEST_BYTES:
             _json_response(self, 413, {"ok": False, "error": "invalid agent supervisor request size"})
             return
+        # Read the body BEFORE authenticating so the body-hash HMAC covers it.
+        raw_body = self.rfile.read(length)
+        if not _is_authorized(self.headers, raw_body):
+            _json_response(self, 401, {"ok": False, "error": "unauthorized"})
+            return
         try:
-            body = json.loads(self.rfile.read(length).decode("utf-8"))
+            body = json.loads(raw_body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             _json_response(self, 400, {"ok": False, "error": "invalid JSON"})
             return

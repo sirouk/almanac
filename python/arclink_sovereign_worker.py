@@ -819,6 +819,47 @@ def recover_succeeded_sovereign_handoffs(
     return recovered
 
 
+def _retry_failed_job_or_lost_claim(conn: sqlite3.Connection, *, job_id: str) -> bool:
+    """Attempt the failed->queued RETRY transition; return False on a lost claim.
+
+    conc-C2 (sovereign double-execute): a worker reaches the retry having read the job
+    as 'failed', but a CONCURRENT worker may have already advanced it. Two flavors of
+    lost claim must BOTH be treated as "skip and let the winner own it":
+
+    * the competitor re-queued it (failed -> queued): the CAS would match 0 rows and
+      ``transition_arclink_provisioning_job`` returns False; and
+    * the competitor re-claimed it past queued (e.g. queued -> running, or terminal):
+      the row is no longer in 'failed', so 'queued' is no longer reachable and the CAS
+      would RAISE ``invalid transition`` -- which must NOT abort the worker pass.
+
+    Re-reading the live status under the write lock (and only attempting the CAS while
+    the row is genuinely still 'failed') collapses both flavors into a clean False
+    return, without ever raising on a row this worker no longer owns.
+    """
+    own_txn = not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute(
+            "SELECT status FROM arclink_provisioning_jobs WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+        current = str(row["status"] or "") if row is not None else ""
+        if current != "failed":
+            # A concurrent worker already advanced the job out of 'failed': lost claim.
+            if own_txn:
+                conn.commit()
+            return False
+        retried = transition_arclink_provisioning_job(conn, job_id=job_id, status="queued")
+        if own_txn:
+            conn.commit()
+        return retried
+    except BaseException:
+        if own_txn and conn.in_transaction:
+            conn.rollback()
+        raise
+
+
 def process_sovereign_deployment(
     conn: sqlite3.Connection,
     *,
@@ -858,7 +899,26 @@ def process_sovereign_deployment(
                 executor=executor,
             )
             return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "max_attempts_exhausted"}
-        transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="queued")
+        # conc-C2 (sovereign double-execute): the failed->queued RETRY transition is
+        # ALSO an atomic CAS. It is a LOST claim when a concurrent worker already
+        # advanced the job out of 'failed' (re-queued and/or re-claimed to 'running').
+        # Honor that exactly like the apply/teardown claim sites below: skip the retry
+        # and let the worker that won the claim own the job. Do NOT raise/abort the
+        # pass or mis-transition a row we no longer own.
+        retried = _retry_failed_job_or_lost_claim(conn, job_id=str(job["job_id"]))
+        if not retried:
+            append_arclink_event(
+                conn,
+                subject_kind="deployment",
+                subject_id=deployment_id,
+                event_type="sovereign_apply_retry_claim_lost",
+                metadata={"job_id": str(job["job_id"])},
+            )
+            return {
+                "deployment_id": deployment_id,
+                "job_id": str(job["job_id"]),
+                "status": "claim_lost",
+            }
 
     # conc-C2 (sovereign double-execute): transition_arclink_provisioning_job is an
     # atomic CAS. It returns False when this worker LOST the claim -- a concurrent
@@ -1385,7 +1445,25 @@ def process_sovereign_teardown(
     if str(job["status"]) == "failed":
         if int(job["attempt_count"] or 0) >= worker.max_attempts and not _teardown_failure_retryable_after_upgrade(job):
             return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "max_attempts_exhausted"}
-        transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="queued")
+        # conc-C2 (sovereign double-execute): the failed->queued RETRY transition is a
+        # CAS too. It is a lost claim when a concurrent worker already advanced this
+        # teardown out of 'failed' (re-queued or re-claimed to running); honor it like
+        # the running-claim site below -- skip and let the winner own the teardown
+        # rather than aborting the pass or mis-transitioning a row we no longer own.
+        retried = _retry_failed_job_or_lost_claim(conn, job_id=str(job["job_id"]))
+        if not retried:
+            append_arclink_event(
+                conn,
+                subject_kind="deployment",
+                subject_id=deployment_id,
+                event_type="sovereign_teardown_retry_claim_lost",
+                metadata={"job_id": str(job["job_id"]), "previous_status": current_status},
+            )
+            return {
+                "deployment_id": deployment_id,
+                "job_id": str(job["job_id"]),
+                "status": "claim_lost",
+            }
 
     # conc-C2 (sovereign double-execute): the CAS returns False when this worker
     # LOST the teardown claim -- a concurrent worker already moved the job out of

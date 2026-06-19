@@ -9,8 +9,6 @@ host namespace path as ./deploy.sh upgrade.
 from __future__ import annotations
 
 import argparse
-import hashlib
-import hmac
 import json
 import os
 import re
@@ -30,6 +28,8 @@ from arclink_boundary import (
     require_docker_trusted_host_risk_accepted,
     require_trusted_docker_binary,
 )
+import arclink_broker_signing as signing
+from arclink_broker_signing import NonceStore, verify_broker_request
 from arclink_rejection_incidents import private_state_rejection_path, record_rejection_incident
 
 
@@ -687,100 +687,63 @@ def _nonce_store_path() -> Path | None:
     return host_priv / "state" / "docker" / SERVICE_NAME / "signature-nonces.json"
 
 
-def _prune_seen_nonces_locked(cutoff: float) -> None:
-    for key, observed in list(_SEEN_SIGNATURE_NONCES.items()):
-        if observed < cutoff:
-            _SEEN_SIGNATURE_NONCES.pop(key, None)
-
-
-def _load_persisted_nonces_locked(path: Path | None, now: float) -> bool:
+def _set_seen_nonces_loaded_from(value: str) -> None:
     global _SEEN_SIGNATURE_NONCES_LOADED_FROM
-    if path is None:
-        return True
-    path_key = str(path)
-    if _SEEN_SIGNATURE_NONCES_LOADED_FROM == path_key:
-        return True
-    cutoff = now - REQUEST_SIGNATURE_TTL_SECONDS
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        data = {}
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return False
-    if not isinstance(data, dict):
-        return False
-    for key, observed in data.items():
-        nonce = str(key or "")
-        try:
-            observed_at = float(observed)
-        except (TypeError, ValueError):
-            continue
-        if observed_at >= cutoff and re.fullmatch(r"[A-Za-z0-9_.~+/=-]{16,160}", nonce):
-            _SEEN_SIGNATURE_NONCES[nonce] = observed_at
-    _SEEN_SIGNATURE_NONCES_LOADED_FROM = path_key
-    return True
+    _SEEN_SIGNATURE_NONCES_LOADED_FROM = value
 
 
-def _persist_seen_nonces_locked(path: Path | None) -> bool:
-    if path is None:
-        return True
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(_SEEN_SIGNATURE_NONCES, sort_keys=True) + "\n", encoding="utf-8")
-        os.replace(tmp, path)
-    except OSError:
-        return False
-    return True
+# Bind the shared nonce store to this module's historical globals so existing
+# tests that clear ``_SEEN_SIGNATURE_NONCES``, shrink ``MAX_SEEN_SIGNATURE_NONCES``,
+# or reset ``_SEEN_SIGNATURE_NONCES_LOADED_FROM`` keep working unchanged.
+_NONCE_STORE = NonceStore(
+    _nonce_store_path,
+    seen=_SEEN_SIGNATURE_NONCES,
+    max_entries=lambda: MAX_SEEN_SIGNATURE_NONCES,
+    loaded_from_get=lambda: _SEEN_SIGNATURE_NONCES_LOADED_FROM,
+    loaded_from_set=_set_seen_nonces_loaded_from,
+)
 
 
 def _record_nonce_if_unseen(nonce: str, now: float) -> bool:
-    cutoff = now - REQUEST_SIGNATURE_TTL_SECONDS
-    with _SEEN_SIGNATURE_NONCES_LOCK:
-        path = _nonce_store_path()
-        if not _load_persisted_nonces_locked(path, now):
-            return False
-        _prune_seen_nonces_locked(cutoff)
-        if nonce in _SEEN_SIGNATURE_NONCES:
-            return False
-        while len(_SEEN_SIGNATURE_NONCES) >= MAX_SEEN_SIGNATURE_NONCES:
-            oldest = min(_SEEN_SIGNATURE_NONCES, key=_SEEN_SIGNATURE_NONCES.get)
-            _SEEN_SIGNATURE_NONCES.pop(oldest, None)
-        _SEEN_SIGNATURE_NONCES[nonce] = now
-        if not _persist_seen_nonces_locked(path):
-            _SEEN_SIGNATURE_NONCES.pop(nonce, None)
-            return False
-        return True
+    # Back-compat shim retained for callers/tests; delegates to the shared store.
+    return _NONCE_STORE.record_if_unseen(nonce, now)
 
 
 def _is_authorized(headers: Any, raw_body: bytes) -> bool:
-    expected = _broker_token()
-    supplied = str(headers.get(OPERATOR_UPGRADE_BROKER_TOKEN_HEADER) or "").strip()
-    if not (expected and supplied and hmac.compare_digest(expected, supplied)):
-        return False
-    timestamp_raw = str(headers.get(OPERATOR_UPGRADE_BROKER_TIMESTAMP_HEADER) or "").strip()
-    nonce = str(headers.get(OPERATOR_UPGRADE_BROKER_NONCE_HEADER) or "").strip()
-    supplied_signature = str(headers.get(OPERATOR_UPGRADE_BROKER_SIGNATURE_HEADER) or "").strip()
-    if not (timestamp_raw and nonce and supplied_signature):
-        return False
-    try:
-        timestamp = int(timestamp_raw)
-    except (TypeError, ValueError):
-        return False
-    now = time.time()
-    if abs(now - timestamp) > REQUEST_SIGNATURE_TTL_SECONDS:
-        return False
-    if not re.fullmatch(r"[A-Za-z0-9_.~+/=-]{16,160}", nonce):
-        return False
-    body_hash = hashlib.sha256(raw_body).hexdigest()
-    expected_signature = hmac.new(
-        expected.encode("utf-8"),
-        f"{timestamp}\n{nonce}\n{body_hash}".encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    if not hmac.compare_digest(expected_signature, supplied_signature):
-        return False
-    return _record_nonce_if_unseen(nonce, now)
+    # The operator-upgrade broker's clients (enrollment provisioner) have always
+    # signed, so it stays strictly enforcing (require_signed=True) regardless of
+    # the global accept-both rollout flag: a missing/invalid signature or a
+    # replayed nonce is rejected. The signing scheme is now the shared one.
+    ok, _reason = verify_broker_request(
+        _broker_token(),
+        _SignatureHeaderView(headers),
+        raw_body,
+        _NONCE_STORE,
+        bearer_header=OPERATOR_UPGRADE_BROKER_TOKEN_HEADER,
+        require_signed=True,
+    )
+    return ok
+
+
+class _SignatureHeaderView:
+    """Map this broker's request headers onto the shared canonical header names.
+
+    The shared verifier reads canonical X-ArcLink-Broker-* signature headers; the
+    operator-upgrade broker keeps its historical X-ArcLink-Operator-Upgrade-*
+    header names on the wire, so this view translates the lookups.
+    """
+
+    _ALIASES = {
+        signing.TIMESTAMP_HEADER: OPERATOR_UPGRADE_BROKER_TIMESTAMP_HEADER,
+        signing.NONCE_HEADER: OPERATOR_UPGRADE_BROKER_NONCE_HEADER,
+        signing.SIGNATURE_HEADER: OPERATOR_UPGRADE_BROKER_SIGNATURE_HEADER,
+    }
+
+    def __init__(self, headers: Any) -> None:
+        self._headers = headers
+
+    def get(self, name: str, default: Any = None) -> Any:
+        return self._headers.get(self._ALIASES.get(name, name), default)
 
 
 class OperatorUpgradeBrokerHandler(BaseHTTPRequestHandler):

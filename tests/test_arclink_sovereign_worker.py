@@ -1943,6 +1943,98 @@ def test_dashboard_password_hash_sync_only_when_secret_is_new() -> None:
     print("PASS test_dashboard_password_hash_sync_only_when_secret_is_new")
 
 
+def test_sovereign_apply_failed_retry_lost_claim_does_not_abort_pass() -> None:
+    # conc-C2: the failed->queued RETRY transition is a CAS. If a CONCURRENT worker
+    # already advanced the failed job out of 'failed' (won the retry and re-claimed it
+    # to running), this worker's retry CAS returns False. It must HONOR that bool --
+    # skip the retry and report claim_lost -- NOT raise/abort the pass or mis-transition
+    # a job it no longer owns onto another worker's running apply.
+    control = load_module("arclink_control.py", "arclink_control_sovereign_apply_retry_lost")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_apply_retry_lost")
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    job = worker_mod._ensure_apply_job(conn, deployment_id="dep_1")
+    # Drive the job to a retryable 'failed' (attempt_count < max_attempts).
+    control.transition_arclink_provisioning_job(conn, job_id=job["job_id"], status="running")
+    control.transition_arclink_provisioning_job(conn, job_id=job["job_id"], status="failed", error="boom")
+    conn.commit()
+    failed_snapshot = dict(conn.execute("SELECT * FROM arclink_provisioning_jobs WHERE job_id = ?", (job["job_id"],)).fetchone())
+    expect(failed_snapshot["status"] == "failed" and int(failed_snapshot["attempt_count"]) < 3, str(failed_snapshot))
+
+    # A CONCURRENT worker wins the retry first: failed -> queued -> running.
+    expect(control.transition_arclink_provisioning_job(conn, job_id=job["job_id"], status="queued") is True, "competitor must win the retry")
+    expect(control.transition_arclink_provisioning_job(conn, job_id=job["job_id"], status="running") is True, "competitor must re-claim to running")
+    conn.commit()
+    running_attempt_count = int(conn.execute("SELECT attempt_count FROM arclink_provisioning_jobs WHERE job_id = ?", (job["job_id"],)).fetchone()["attempt_count"])
+
+    deployment = dict(conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone())
+    original_ensure = worker_mod._ensure_apply_job
+    try:
+        # This worker reads a STALE 'failed' snapshot (the competitor advanced the row
+        # after this worker's read) and attempts the retry.
+        worker_mod._ensure_apply_job = lambda conn_arg, *, deployment_id: dict(failed_snapshot)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = worker_mod.process_sovereign_deployment(
+                conn,
+                deployment=deployment,
+                worker=worker_config(worker_mod, tmpdir),
+            )
+    finally:
+        worker_mod._ensure_apply_job = original_ensure
+
+    expect(result["status"] == "claim_lost", f"lost retry CAS must report claim_lost, not abort: {result}")
+    # The competitor's running job must be UNTOUCHED -- no re-queue, no extra attempt.
+    after = conn.execute("SELECT status, attempt_count FROM arclink_provisioning_jobs WHERE job_id = ?", (job["job_id"],)).fetchone()
+    expect(after["status"] == "running", f"competitor's running job must survive: {dict(after)}")
+    expect(int(after["attempt_count"]) == running_attempt_count, f"the lost-claim worker must not advance the job: {dict(after)}")
+    event_types = {row["event_type"] for row in conn.execute("SELECT event_type FROM arclink_events").fetchall()}
+    expect("sovereign_apply_retry_claim_lost" in event_types, str(event_types))
+    print("PASS test_sovereign_apply_failed_retry_lost_claim_does_not_abort_pass")
+
+
+def test_sovereign_teardown_failed_retry_lost_claim_does_not_abort_pass() -> None:
+    # conc-C2 mirror for teardown: the failed->queued teardown RETRY CAS returning
+    # False (a concurrent worker already advanced it) must yield claim_lost, not abort.
+    control = load_module("arclink_control.py", "arclink_control_sovereign_teardown_retry_lost")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_teardown_retry_lost")
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    conn.execute("UPDATE arclink_deployments SET status = 'teardown_failed' WHERE deployment_id = 'dep_1'")
+    conn.commit()
+    job = worker_mod._ensure_teardown_job(conn, deployment_id="dep_1")
+    control.transition_arclink_provisioning_job(conn, job_id=job["job_id"], status="running")
+    control.transition_arclink_provisioning_job(conn, job_id=job["job_id"], status="failed", error="boom")
+    conn.commit()
+    failed_snapshot = dict(conn.execute("SELECT * FROM arclink_provisioning_jobs WHERE job_id = ?", (job["job_id"],)).fetchone())
+    expect(failed_snapshot["status"] == "failed" and int(failed_snapshot["attempt_count"]) < 3, str(failed_snapshot))
+
+    expect(control.transition_arclink_provisioning_job(conn, job_id=job["job_id"], status="queued") is True, "competitor must win the teardown retry")
+    expect(control.transition_arclink_provisioning_job(conn, job_id=job["job_id"], status="running") is True, "competitor must re-claim teardown to running")
+    conn.commit()
+    running_attempt_count = int(conn.execute("SELECT attempt_count FROM arclink_provisioning_jobs WHERE job_id = ?", (job["job_id"],)).fetchone()["attempt_count"])
+
+    deployment = dict(conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone())
+    original_ensure = worker_mod._ensure_teardown_job
+    try:
+        worker_mod._ensure_teardown_job = lambda conn_arg, *, deployment_id: dict(failed_snapshot)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = worker_mod.process_sovereign_teardown(
+                conn,
+                deployment=deployment,
+                worker=worker_config(worker_mod, tmpdir),
+            )
+    finally:
+        worker_mod._ensure_teardown_job = original_ensure
+
+    expect(result["status"] == "claim_lost", f"lost teardown retry CAS must report claim_lost: {result}")
+    after = conn.execute("SELECT status, attempt_count FROM arclink_provisioning_jobs WHERE job_id = ?", (job["job_id"],)).fetchone()
+    expect(after["status"] == "running", f"competitor's running teardown must survive: {dict(after)}")
+    expect(int(after["attempt_count"]) == running_attempt_count, f"the lost-claim worker must not advance the teardown: {dict(after)}")
+    event_types = {row["event_type"] for row in conn.execute("SELECT event_type FROM arclink_events").fetchall()}
+    expect("sovereign_teardown_retry_claim_lost" in event_types, str(event_types))
+    print("PASS test_sovereign_teardown_failed_retry_lost_claim_does_not_abort_pass")
+
+
 if __name__ == "__main__":
     test_hermes_home_ready_manifest_requires_dashboard_plugins()
     test_remote_hermes_home_ready_manifest_reads_through_executor()
@@ -1979,4 +2071,6 @@ if __name__ == "__main__":
     test_dashboard_password_secret_is_generated_for_canonical_handoff_store()
     test_compose_secret_materialization_aligns_runtime_owner()
     test_dashboard_password_hash_sync_only_when_secret_is_new()
+    test_sovereign_apply_failed_retry_lost_claim_does_not_abort_pass()
+    test_sovereign_teardown_failed_retry_lost_claim_does_not_abort_pass()
     print("\nAll Sovereign worker tests passed.")

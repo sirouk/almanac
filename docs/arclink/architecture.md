@@ -15,7 +15,7 @@ No capability below should be read as live-proven unless it says so.
 
 ## Module Map
 
-There are **89** `python/arclink_*.py` modules (including helpers and legacy
+There are **90** `python/arclink_*.py` modules (including helpers and legacy
 intake modules). They are grouped below by subsystem. Plugins live under
 `plugins/hermes-agent/`, not `python/` (see the Hermes Workspace Plugins
 section). The schema mechanism is a single idempotent `ensure_schema()` with
@@ -73,6 +73,7 @@ arclink_curator_discord_onboarding.py Curator Discord onboarding wiring
 arclink_operator_raven.py          Operator command surface (read previews + real action queueing)
 arclink_operator_agent.py          Operator's single in-stack Hermes identity + free-form turn bridge
 arclink_operator_upgrade_broker.py Docker-mode operator upgrade broker (operator-upgrade-broker, 8917)
+arclink_broker_signing.py          Shared trusted-host broker request signing (timestamp+nonce+body-HMAC) + accept-both verifier (ARCLINK_BROKER_REQUIRE_SIGNED rollout flag)
 arclink_operator_upgrade_host_runner.py Host-side queue runner for authenticated operator upgrade jobs
 arclink_action_worker.py           Admin/operator action-intent consumer (arclink_action_intents)
 arclink_rollout.py                 Rollout model + ArcPod-update planner/materializer/record-only batch

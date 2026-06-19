@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Protocol
 
+from arclink_broker_signing import sign_broker_request
 from arclink_fleet import fleet_host_ssh_endpoint, fleet_host_ssh_user
 from arclink_secrets_regex import redact_then_truncate
 
@@ -881,12 +882,16 @@ class BrokeredDockerComposeRunner:
             "remove_volumes": remove_volumes,
             "include_all": include_all,
         }
+        body_bytes = json.dumps(body, sort_keys=True).encode("utf-8")
+        # Always attach the additive HMAC signature headers; the broker only
+        # enforces them once ARCLINK_BROKER_REQUIRE_SIGNED is on (lock-step-safe).
         request = urllib.request.Request(
             f"{clean_url}/v1/docker-compose",
-            data=json.dumps(body, sort_keys=True).encode("utf-8"),
+            data=body_bytes,
             headers={
                 "Content-Type": "application/json",
                 DEPLOYMENT_EXEC_BROKER_TOKEN_HEADER: clean_token,
+                **sign_broker_request(clean_token, body_bytes),
             },
             method="POST",
         )

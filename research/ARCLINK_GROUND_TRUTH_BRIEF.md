@@ -88,7 +88,7 @@ operator-internal words. The schema/operator canon keeps the technical names.
 
 ## 3. Full Current Module Map (every `python/arclink_*.py`, grouped by subsystem)
 
-There are **89** `python/arclink_*.py` files (includes helpers/legacy). The canonical
+There are **90** `python/arclink_*.py` files (includes helpers/legacy). The canonical
 `docs/arclink/architecture.md` module map mirrors this inventory, and
 `tests/test_documentation_truths.py` guards both the count and membership. Every doc must treat the
 list below as the authoritative module inventory.
@@ -142,6 +142,8 @@ list below as the authoritative module inventory.
 - `arclink_operator_agent` — the operator's single in-stack Hermes identity + free-form turn bridge.
 - `arclink_operator_upgrade_broker` — Docker-mode operator upgrade broker (`operator-upgrade-broker`,
   8917).
+- `arclink_broker_signing` — shared trusted-host broker request signing (timestamp+nonce+body-HMAC) +
+  accept-both verifier; `ARCLINK_BROKER_REQUIRE_SIGNED` default-off rollout flag.
 - `arclink_operator_upgrade_host_runner` — host-side queue runner for authenticated operator upgrade
   jobs.
 - `arclink_action_worker` — admin/operator action-intent consumer (`arclink_action_intents`).

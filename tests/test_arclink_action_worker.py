@@ -2435,13 +2435,24 @@ def test_poison_row_does_not_crash_batch_loop() -> None:
 
 def test_refund_downgrades_entitlement() -> None:
     # billing-H4: a successful refund must close the entitlement gates locally
-    # (a refund emits no subscription.deleted webhook), moving the user off paid.
+    # (a refund emits no subscription.deleted webhook), moving the user off paid --
+    # BUT only when the refund EXPLICITLY maps to one of the user's active-paid
+    # subscriptions. This exercises the explicit-subscription-target downgrade.
     control = load_module("arclink_control.py", "arclink_control_aw_refund_downgrade")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_refund_downgrade")
     executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_refund_downgrade")
     worker = load_module("arclink_action_worker.py", "arclink_action_worker_refund_downgrade")
     conn = memory_db(control)
     control.upsert_arclink_user(conn, user_id="user_refund_dg", stripe_customer_id="cus_refund_dg", entitlement_state="paid")
+    # The user's active-paid subscription that the refund explicitly targets.
+    control.upsert_arclink_subscription_mirror(
+        conn,
+        subscription_id="sub_refund_dg",
+        user_id="user_refund_dg",
+        status="active",
+        stripe_customer_id="cus_refund_dg",
+        stripe_subscription_id="stripe_sub_refund_dg",
+    )
     control.reserve_arclink_deployment_prefix(
         conn,
         deployment_id="dep_refund_dg",
@@ -2453,7 +2464,13 @@ def test_refund_downgrades_entitlement() -> None:
     before = conn.execute("SELECT entitlement_state FROM arclink_users WHERE user_id = ?", ("user_refund_dg",)).fetchone()
     expect(before["entitlement_state"] == "paid", str(dict(before)))
 
-    _queue_action(dashboard, conn, action_type="refund", target_id="dep_refund_dg")
+    _queue_action(
+        dashboard,
+        conn,
+        action_type="refund",
+        target_kind="subscription",
+        target_id="sub_refund_dg",
+    )
     result = worker.process_next_arclink_action(conn, executor=_fake_executor(executor_mod))
     expect(result["status"] == "succeeded", str(result))
     expect(result["result"].get("entitlement_downgraded") is True, str(result))
@@ -2468,6 +2485,61 @@ def test_refund_downgrades_entitlement() -> None:
     ).fetchone()
     expect(int(event["c"]) == 1, str(dict(event)))
     print("PASS test_refund_downgrades_entitlement")
+
+
+def test_refund_with_no_subscription_link_downgrades_nothing() -> None:
+    # billing-H4 (tightened): a refund of a user/deployment with NO explicit
+    # subscription link must NOT auto-attach the user's latest active subscription
+    # and must cancel NOTHING. A non-subscription refund (a one-off charge) cannot be
+    # allowed to silently cancel an unrelated, still-active subscription.
+    control = load_module("arclink_control.py", "arclink_control_aw_no_sublink")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_no_sublink")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_no_sublink")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_no_sublink")
+    conn = memory_db(control)
+    control.upsert_arclink_user(conn, user_id="user_nolink", stripe_customer_id="cus_nolink", entitlement_state="paid")
+    # The user HAS a latest active subscription -- the OLD auto-attach would have grabbed
+    # this and wrongly cancelled it for a plain deployment refund.
+    control.upsert_arclink_subscription_mirror(
+        conn,
+        subscription_id="sub_nolink_active",
+        user_id="user_nolink",
+        status="active",
+        stripe_customer_id="cus_nolink",
+        stripe_subscription_id="stripe_sub_nolink_active",
+    )
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_nolink",
+        user_id="user_nolink",
+        prefix="nolink",
+        base_domain="example.test",
+        status="provisioning_ready",
+    )
+
+    # A plain deployment refund -- names no subscription, no invoice, not a subscription
+    # target.
+    _queue_action(dashboard, conn, action_type="refund", target_id="dep_nolink")
+    result = worker.process_next_arclink_action(conn, executor=_fake_executor(executor_mod))
+    expect(result["status"] == "succeeded", str(result))
+    expect(
+        result["result"].get("entitlement_downgraded") is False,
+        f"a refund with no subscription link must downgrade nothing: {result}",
+    )
+    expect(
+        result["result"].get("entitlement_downgrade_reason") == "no_explicit_subscription_link",
+        str(result),
+    )
+
+    after = conn.execute("SELECT entitlement_state FROM arclink_users WHERE user_id = ?", ("user_nolink",)).fetchone()
+    expect(after["entitlement_state"] == "paid", f"entitlement must stay paid for a non-subscription refund: {dict(after)}")
+    active = conn.execute("SELECT status FROM arclink_subscriptions WHERE subscription_id = 'sub_nolink_active'").fetchone()
+    expect(active["status"] == "active", f"the unrelated active subscription must survive: {dict(active)}")
+    events = conn.execute(
+        "SELECT COUNT(*) AS c FROM arclink_events WHERE event_type = 'entitlement_downgraded_on_refund'"
+    ).fetchone()
+    expect(int(events["c"]) == 0, f"no downgrade event for a no-subscription-link refund: {dict(events)}")
+    print("PASS test_refund_with_no_subscription_link_downgrades_nothing")
 
 
 def test_old_owner_cannot_overwrite_reclaimed_intent() -> None:
@@ -2507,6 +2579,121 @@ def test_old_owner_cannot_overwrite_reclaimed_intent() -> None:
     row2 = conn.execute("SELECT status FROM arclink_action_intents WHERE action_id = ?", (action_id,)).fetchone()
     expect(row2["status"] == "succeeded", str(dict(row2)))
     print("PASS test_old_owner_cannot_overwrite_reclaimed_intent")
+
+
+def test_exception_path_reports_lease_lost_when_unowned() -> None:
+    # conc-M5: when the dispatch RAISES *and* the worker's lease was lost mid-dispatch
+    # (stale recovery re-queued / a new owner re-claimed the intent), the exception
+    # handler's guarded _update_intent_status returns False. The worker MUST report
+    # lease_lost (the new owner governs) instead of overwriting the re-claimed intent
+    # with 'failed'. This mirrors the success path's lease_lost handling.
+    control = load_module("arclink_control.py", "arclink_control_aw_exc_lease")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_exc_lease")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_exc_lease")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_exc_lease")
+    conn = memory_db(control)
+    intent = _queue_action(dashboard, conn, action_type="restart")
+    action_id = intent["action_id"]
+
+    original_dispatch = worker._dispatch_action
+
+    def stealing_then_raising_dispatch(**kwargs):
+        # Simulate stale recovery taking the row from under the running worker mid-
+        # dispatch: re-queue (clears worker_id/claimed_at) then re-claim under a NEW
+        # owner -- THEN raise so the worker hits the exception path no longer owning it.
+        worker._update_intent_status(conn, action_id=action_id, status="queued")
+        conn.commit()
+        reclaim = worker._claim_next_queued_action(conn, worker_id="exc_new_owner")
+        expect(reclaim is not None and reclaim["worker_id"] == "exc_new_owner", str(reclaim))
+        conn.commit()
+        raise RuntimeError("dispatch blew up after the lease was stolen")
+
+    try:
+        worker._dispatch_action = stealing_then_raising_dispatch
+        result = worker.process_next_arclink_action(conn, executor=_fake_executor(executor_mod), worker_id="exc_old_owner")
+    finally:
+        worker._dispatch_action = original_dispatch
+
+    expect(result is not None, "worker must return a result, not crash")
+    expect(
+        result["status"] == "lease_lost",
+        f"exception path must report lease_lost when the row was re-claimed: {result}",
+    )
+    expect(result.get("error_code") == "action_lease_lost", str(result))
+
+    # The new owner's re-claimed intent must survive -- NOT be clobbered to 'failed'.
+    row = conn.execute("SELECT status, worker_id FROM arclink_action_intents WHERE action_id = ?", (action_id,)).fetchone()
+    expect(
+        row["status"] == "running" and row["worker_id"] == "exc_new_owner",
+        f"the re-claimed intent must still be owned/running by the new owner: {dict(row)}",
+    )
+    lease_lost_events = conn.execute(
+        "SELECT COUNT(*) AS c FROM arclink_events WHERE event_type LIKE 'action_lease_lost_post_dispatch:%'"
+    ).fetchone()
+    expect(int(lease_lost_events["c"]) == 1, f"a post-dispatch lease_lost event must be emitted: {dict(lease_lost_events)}")
+    failed_events = conn.execute(
+        "SELECT COUNT(*) AS c FROM arclink_events WHERE event_type LIKE 'action_failed:%'"
+    ).fetchone()
+    expect(int(failed_events["c"]) == 0, f"no action_failed event when the lease was lost: {dict(failed_events)}")
+    print("PASS test_exception_path_reports_lease_lost_when_unowned")
+
+
+def test_reused_worker_id_cannot_stamp_reclaimed_intent() -> None:
+    # conc-M5b: the intent-status CAS pins the EXACT lease (worker_id AND claimed_at).
+    # A recycled/reused worker_id alone is NOT a unique lease -- without the claimed_at
+    # in the CAS, an OLD attempt (same worker_id, but holding the stale claimed_at)
+    # could stamp a row a FRESH re-claim (same worker_id, new claimed_at) already owns.
+    # The claimed_at guard must reject the old lease and admit only the current one.
+    control = load_module("arclink_control.py", "arclink_control_aw_m5b")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_m5b")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_m5b")
+    conn = memory_db(control)
+    intent = _queue_action(dashboard, conn, action_type="restart")
+    action_id = intent["action_id"]
+
+    # The worker claims the row; capture the EXACT lease it now holds.
+    claim = worker._claim_next_queued_action(conn, worker_id="recycled_worker")
+    expect(claim["worker_id"] == "recycled_worker" and claim["status"] == "running", str(claim))
+    stale_claimed_at = str(claim["claimed_at"])
+    conn.commit()
+
+    # Recovery re-queues, then the SAME worker_id is recycled and re-claims the row,
+    # producing a DISTINCT current lease (new claimed_at). Force a distinct timestamp
+    # so the test is deterministic regardless of second-resolution clocks.
+    worker._update_intent_status(conn, action_id=action_id, status="queued")
+    conn.commit()
+    reclaim = worker._claim_next_queued_action(conn, worker_id="recycled_worker")
+    expect(reclaim is not None and reclaim["worker_id"] == "recycled_worker", str(reclaim))
+    fresh_claimed_at = "2099-01-01T00:00:00+00:00"
+    conn.execute(
+        "UPDATE arclink_action_intents SET claimed_at = ? WHERE action_id = ?",
+        (fresh_claimed_at, action_id),
+    )
+    conn.commit()
+    expect(fresh_claimed_at != stale_claimed_at, "the fresh lease must differ from the stale one")
+
+    # The OLD attempt -- same worker_id but holding the STALE claimed_at -- must be
+    # refused by the CAS (claimed_at mismatch), so it cannot stamp the re-claimed row.
+    wrote_stale = worker._update_intent_status(
+        conn, action_id=action_id, status="succeeded",
+        worker_id="recycled_worker", claimed_at=stale_claimed_at,
+    )
+    expect(wrote_stale is False, "an old lease (stale claimed_at) must NOT stamp a re-claimed row")
+    row = conn.execute("SELECT status, worker_id, claimed_at FROM arclink_action_intents WHERE action_id = ?", (action_id,)).fetchone()
+    expect(
+        row["status"] == "running" and str(row["claimed_at"]) == fresh_claimed_at,
+        f"the current lease's row must be untouched by the stale-lease write: {dict(row)}",
+    )
+
+    # The worker holding the CURRENT lease (same worker_id, fresh claimed_at) CAN write.
+    wrote_fresh = worker._update_intent_status(
+        conn, action_id=action_id, status="succeeded",
+        worker_id="recycled_worker", claimed_at=fresh_claimed_at,
+    )
+    expect(wrote_fresh is True, "the worker holding the exact current lease must be able to write")
+    row2 = conn.execute("SELECT status FROM arclink_action_intents WHERE action_id = ?", (action_id,)).fetchone()
+    expect(row2["status"] == "succeeded", str(dict(row2)))
+    print("PASS test_reused_worker_id_cannot_stamp_reclaimed_intent")
 
 
 def test_refund_of_non_subscription_does_not_cancel_active_subscription() -> None:
@@ -2550,7 +2737,9 @@ def test_refund_of_non_subscription_does_not_cancel_active_subscription() -> Non
     result = worker.process_next_arclink_action(conn, executor=_fake_executor(executor_mod))
     expect(result["status"] == "succeeded", str(result))
     expect(result["result"].get("entitlement_downgraded") is False, f"unrelated refund must not downgrade: {result}")
-    expect(result["result"].get("entitlement_downgrade_reason") == "named_subscription_not_active", str(result))
+    # The refund explicitly TARGETS sub_oneoff_h4, which resolved to a non-active-paid
+    # (cancelled) row -> nothing live to cancel; the user's separate active sub survives.
+    expect(result["result"].get("entitlement_downgrade_reason") == "subscription_target_not_active", str(result))
 
     after = conn.execute("SELECT entitlement_state FROM arclink_users WHERE user_id = ?", ("user_h4",)).fetchone()
     expect(after["entitlement_state"] == "paid", f"active subscriber must keep paid entitlement: {dict(after)}")
@@ -2593,6 +2782,207 @@ def test_refund_of_non_subscription_does_not_cancel_active_subscription() -> Non
     ).fetchone()
     expect(int(downgrade_events["c"]) == 1, f"downgrade event must be emitted exactly once (idempotent): {dict(downgrade_events)}")
     print("PASS test_refund_of_non_subscription_does_not_cancel_active_subscription")
+
+
+def test_refund_metadata_no_sublink_does_not_cancel_latest_active_subscription() -> None:
+    # billing-H4 (round-2, Codex bypass): a user/deployment refund whose metadata names
+    # NO subscription -- but the user HAS a latest active subscription -- must NOT
+    # auto-attach that active sub via the cancel/customer_ref inference and then cancel it.
+    # The latest-active auto-attach populates the working subscription id (for cancel)
+    # but must NEVER drive a refund downgrade. The active sub must SURVIVE, no event.
+    control = load_module("arclink_control.py", "arclink_control_aw_r2_nolink")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_r2_nolink")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_r2_nolink")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_r2_nolink")
+    conn = memory_db(control)
+    control.upsert_arclink_user(conn, user_id="user_r2nl", stripe_customer_id="cus_r2nl", entitlement_state="paid")
+    # The latest active subscription the OLD auto-attach would have wrongly cancelled.
+    control.upsert_arclink_subscription_mirror(
+        conn,
+        subscription_id="sub_r2nl_active",
+        user_id="user_r2nl",
+        status="active",
+        stripe_customer_id="cus_r2nl",
+        stripe_subscription_id="stripe_sub_r2nl_active",
+    )
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_r2nl",
+        user_id="user_r2nl",
+        prefix="r2nl-dep",
+        base_domain="example.test",
+        status="provisioning_ready",
+    )
+
+    # A plain deployment refund with NO subscription metadata at all.
+    _queue_action(dashboard, conn, action_type="refund", target_id="dep_r2nl")
+    result = worker.process_next_arclink_action(conn, executor=_fake_executor(executor_mod))
+    expect(result["status"] == "succeeded", str(result))
+    expect(result["result"].get("entitlement_downgraded") is False, f"no-link refund must downgrade nothing: {result}")
+    expect(result["result"].get("entitlement_downgrade_reason") == "no_explicit_subscription_link", str(result))
+
+    after = conn.execute("SELECT entitlement_state FROM arclink_users WHERE user_id = ?", ("user_r2nl",)).fetchone()
+    expect(after["entitlement_state"] == "paid", f"entitlement must stay paid: {dict(after)}")
+    active = conn.execute("SELECT status FROM arclink_subscriptions WHERE subscription_id = 'sub_r2nl_active'").fetchone()
+    expect(active["status"] == "active", f"the latest active sub must survive: {dict(active)}")
+    events = conn.execute(
+        "SELECT COUNT(*) AS c FROM arclink_events WHERE event_type = 'entitlement_downgraded_on_refund'"
+    ).fetchone()
+    expect(int(events["c"]) == 0, f"no downgrade event for a no-link refund: {dict(events)}")
+    print("PASS test_refund_metadata_no_sublink_does_not_cancel_latest_active_subscription")
+
+
+def test_refund_metadata_names_nonactive_sub_does_not_cancel_active_subscription() -> None:
+    # billing-H4 (round-2, Codex bypass): a refund whose metadata NAMES a sub that is
+    # NOT active (here a non-existent / unknown id) must NOT cause the latest-active sub
+    # to be auto-attached and cancelled. The metadata name marks intent, but the
+    # downgrade decision keys off the EXPLICIT-link identifiers ONLY -- which stay empty
+    # when the named sub does not resolve to a real active row -- so nothing is cancelled.
+    control = load_module("arclink_control.py", "arclink_control_aw_r2_nonactive")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_r2_nonactive")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_r2_nonactive")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_r2_nonactive")
+    conn = memory_db(control)
+    control.upsert_arclink_user(conn, user_id="user_r2na", stripe_customer_id="cus_r2na", entitlement_state="paid")
+    # An unrelated, still-active subscription (the auto-attach would grab the latest).
+    control.upsert_arclink_subscription_mirror(
+        conn,
+        subscription_id="sub_r2na_active",
+        user_id="user_r2na",
+        status="active",
+        stripe_customer_id="cus_r2na",
+        stripe_subscription_id="stripe_sub_r2na_active",
+    )
+    # A separate, already-cancelled sub standing in for the refunded one-off charge.
+    control.upsert_arclink_subscription_mirror(
+        conn,
+        subscription_id="sub_r2na_cancelled",
+        user_id="user_r2na",
+        status="cancelled",
+        stripe_customer_id="cus_r2na",
+        stripe_subscription_id="stripe_sub_r2na_cancelled",
+    )
+
+    # The refund NAMES the cancelled (non-active) subscription in metadata, on a user
+    # target -- the round-1 bypass would still cancel the latest-active sub here.
+    _queue_action(
+        dashboard,
+        conn,
+        action_type="refund",
+        target_kind="user",
+        target_id="user_r2na",
+        metadata={"subscription_id": "sub_r2na_cancelled"},
+    )
+    result = worker.process_next_arclink_action(conn, executor=_fake_executor(executor_mod))
+    expect(result["status"] == "succeeded", str(result))
+    expect(result["result"].get("entitlement_downgraded") is False, f"non-active-named refund must downgrade nothing: {result}")
+    expect(result["result"].get("entitlement_downgrade_reason") == "named_subscription_not_active", str(result))
+
+    after = conn.execute("SELECT entitlement_state FROM arclink_users WHERE user_id = ?", ("user_r2na",)).fetchone()
+    expect(after["entitlement_state"] == "paid", f"entitlement must stay paid: {dict(after)}")
+    active = conn.execute("SELECT status FROM arclink_subscriptions WHERE subscription_id = 'sub_r2na_active'").fetchone()
+    expect(active["status"] == "active", f"the unrelated active sub must survive: {dict(active)}")
+    events = conn.execute(
+        "SELECT COUNT(*) AS c FROM arclink_events WHERE event_type = 'entitlement_downgraded_on_refund'"
+    ).fetchone()
+    expect(int(events["c"]) == 0, f"no downgrade event for a non-active-named refund: {dict(events)}")
+    print("PASS test_refund_metadata_names_nonactive_sub_does_not_cancel_active_subscription")
+
+
+def test_refund_metadata_names_active_sub_downgrades_once_idempotent() -> None:
+    # billing-H4 (round-2): a refund whose metadata names a stripe_subscription_id that
+    # resolves to one of the user's ACTIVE-paid subs is an explicit link -> downgrade
+    # EXACTLY once, and a replay of the same refund must be idempotent (no second event).
+    control = load_module("arclink_control.py", "arclink_control_aw_r2_active")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_r2_active")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_r2_active")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_r2_active")
+    conn = memory_db(control)
+    control.upsert_arclink_user(conn, user_id="user_r2a", stripe_customer_id="cus_r2a", entitlement_state="paid")
+    control.upsert_arclink_subscription_mirror(
+        conn,
+        subscription_id="sub_r2a_active",
+        user_id="user_r2a",
+        status="active",
+        stripe_customer_id="cus_r2a",
+        stripe_subscription_id="stripe_sub_r2a_active",
+    )
+
+    _queue_action(
+        dashboard,
+        conn,
+        action_type="refund",
+        target_kind="user",
+        target_id="user_r2a",
+        metadata={"stripe_subscription_id": "stripe_sub_r2a_active"},
+        key="refund_r2a_a",
+    )
+    result = worker.process_next_arclink_action(conn, executor=_fake_executor(executor_mod))
+    expect(result["status"] == "succeeded", str(result))
+    expect(result["result"].get("entitlement_downgraded") is True, f"explicit active-named refund must downgrade: {result}")
+    expect(result["result"].get("entitlement_downgrade_reason") == "metadata_matches_active_subscription", str(result))
+    after = conn.execute("SELECT entitlement_state FROM arclink_users WHERE user_id = ?", ("user_r2a",)).fetchone()
+    expect(after["entitlement_state"] == "cancelled", f"explicit active refund must downgrade: {dict(after)}")
+
+    # Replay the same refund -> idempotent: succeeds, reports already-downgraded, no 2nd event.
+    _queue_action(
+        dashboard,
+        conn,
+        action_type="refund",
+        target_kind="user",
+        target_id="user_r2a",
+        metadata={"stripe_subscription_id": "stripe_sub_r2a_active"},
+        key="refund_r2a_b",
+    )
+    replay = worker.process_next_arclink_action(conn, executor=_fake_executor(executor_mod))
+    expect(replay["status"] == "succeeded", str(replay))
+    events = conn.execute(
+        "SELECT COUNT(*) AS c FROM arclink_events WHERE event_type = 'entitlement_downgraded_on_refund'"
+    ).fetchone()
+    expect(int(events["c"]) == 1, f"downgrade event must be emitted exactly once (idempotent): {dict(events)}")
+    print("PASS test_refund_metadata_names_active_sub_downgrades_once_idempotent")
+
+
+def test_refund_metadata_invoice_resolves_to_active_sub_downgrades() -> None:
+    # billing-H4 (round-2): a refund whose metadata `invoice` resolves (via the
+    # subscription mirror raw_json) to one of the user's ACTIVE subs is an explicit link
+    # -> downgrade that subscription's entitlement.
+    control = load_module("arclink_control.py", "arclink_control_aw_r2_invoice")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_r2_invoice")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_r2_invoice")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_r2_invoice")
+    conn = memory_db(control)
+    control.upsert_arclink_user(conn, user_id="user_r2i", stripe_customer_id="cus_r2i", entitlement_state="paid")
+    # The active sub the invoice maps to (raw_json carries the invoice id).
+    control.upsert_arclink_subscription_mirror(
+        conn,
+        subscription_id="sub_r2i_active",
+        user_id="user_r2i",
+        status="active",
+        stripe_customer_id="cus_r2i",
+        stripe_subscription_id="stripe_sub_r2i_active",
+        raw={"invoice": "in_r2i_123"},
+    )
+
+    _queue_action(
+        dashboard,
+        conn,
+        action_type="refund",
+        target_kind="user",
+        target_id="user_r2i",
+        metadata={"invoice": "in_r2i_123"},
+    )
+    result = worker.process_next_arclink_action(conn, executor=_fake_executor(executor_mod))
+    expect(result["status"] == "succeeded", str(result))
+    expect(result["result"].get("entitlement_downgraded") is True, f"invoice-resolved refund must downgrade: {result}")
+    expect(result["result"].get("entitlement_downgrade_reason") == "metadata_matches_active_subscription", str(result))
+    after = conn.execute("SELECT entitlement_state FROM arclink_users WHERE user_id = ?", ("user_r2i",)).fetchone()
+    expect(after["entitlement_state"] == "cancelled", f"invoice-resolved refund must downgrade: {dict(after)}")
+    events = conn.execute(
+        "SELECT COUNT(*) AS c FROM arclink_events WHERE event_type = 'entitlement_downgraded_on_refund'"
+    ).fetchone()
+    expect(int(events["c"]) == 1, f"exactly one downgrade event for the invoice-resolved refund: {dict(events)}")
+    print("PASS test_refund_metadata_invoice_resolves_to_active_sub_downgrades")
 
 
 def test_long_reprovision_not_reclaimed_while_migration_heartbeats() -> None:
@@ -2756,8 +3146,15 @@ if __name__ == "__main__":
     test_two_recoveries_cannot_both_reclaim()
     test_poison_row_does_not_crash_batch_loop()
     test_refund_downgrades_entitlement()
+    test_refund_with_no_subscription_link_downgrades_nothing()
     test_old_owner_cannot_overwrite_reclaimed_intent()
+    test_exception_path_reports_lease_lost_when_unowned()
+    test_reused_worker_id_cannot_stamp_reclaimed_intent()
     test_refund_of_non_subscription_does_not_cancel_active_subscription()
+    test_refund_metadata_no_sublink_does_not_cancel_latest_active_subscription()
+    test_refund_metadata_names_nonactive_sub_does_not_cancel_active_subscription()
+    test_refund_metadata_names_active_sub_downgrades_once_idempotent()
+    test_refund_metadata_invoice_resolves_to_active_sub_downgrades()
     test_long_reprovision_not_reclaimed_while_migration_heartbeats()
     test_process_next_survives_poison_row()
-    print(f"\nAll 57 action worker tests passed.")
+    print(f"\nAll 64 action worker tests passed.")

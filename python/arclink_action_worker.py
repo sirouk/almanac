@@ -306,6 +306,41 @@ def _latest_subscription_for_user(conn: sqlite3.Connection, user_id: str) -> sql
     ).fetchone()
 
 
+# Subscription identifier fields that an invoice's raw_json may carry to link it back
+# to its subscription. A refund's `invoice` metadata is an EXPLICIT subscription link
+# only when it resolves to one of the user's tracked subscriptions via these fields.
+_INVOICE_LINK_FIELDS = ("invoice", "latest_invoice", "stripe_invoice_id", "invoice_id")
+
+
+def _subscription_for_invoice(
+    conn: sqlite3.Connection, *, user_id: str, invoice_id: str
+) -> tuple[str, str]:
+    """Resolve a refund `invoice` reference to its subscription identifiers.
+
+    billing-H4: an `invoice` in refund metadata is treated as an EXPLICIT subscription
+    link ONLY when it actually maps to one of the user's tracked subscriptions. There
+    is no invoice column, so we match the invoice id against the subscription mirror's
+    ``raw_json`` (where the webhook stores ``invoice`` / ``latest_invoice`` / etc.). A
+    bare invoice id that resolves to nothing returns ``("", "")`` -> NOT a link, so the
+    refund downgrade is refused. Returns ``(subscription_id, stripe_subscription_id)``.
+    """
+    invoice = str(invoice_id or "").strip()
+    if not invoice or not user_id:
+        return "", ""
+    rows = conn.execute(
+        "SELECT subscription_id, stripe_subscription_id, raw_json FROM arclink_subscriptions WHERE user_id = ?",
+        (user_id,),
+    ).fetchall()
+    for row in rows:
+        raw = json_loads_safe(str(row["raw_json"] or "{}"))
+        if not isinstance(raw, Mapping):
+            continue
+        for field in _INVOICE_LINK_FIELDS:
+            if str(raw.get(field) or "").strip() == invoice:
+                return str(row["subscription_id"] or "").strip(), str(row["stripe_subscription_id"] or "").strip()
+    return "", ""
+
+
 # Subscription statuses that still confer a paid entitlement. A refund must only
 # close the gates if it actually corresponds to one of THESE; refunding an
 # unrelated one-off charge must never cancel one of them.
@@ -332,61 +367,67 @@ def _refund_targets_active_subscription(
 
     A refund emits no ``customer.subscription.deleted`` webhook, so the gates only
     close if the worker downgrades locally. But a refund can target a NON-subscription
-    one-off charge -- doing the downgrade unconditionally would cancel an unrelated,
-    still-ACTIVE subscription. The danger is specifically: the user HAS a tracked active
-    subscription AND this refund demonstrably maps to something OTHER than it.
+    one-off charge -- downgrading on inference would cancel an unrelated, still-ACTIVE
+    subscription.
 
-    We downgrade when:
+    We ONLY downgrade when the refund EXPLICITLY maps to one of the user's active-paid
+    subscriptions, where "explicit" means (set by ``_resolve_stripe_action`` /
+    ``subscription_link_explicit``):
 
-    * the action explicitly targeted a subscription that is still active-paid; or
-    * the refund metadata names a ``stripe_subscription_id`` / ``subscription_id`` that
-      matches one of the user's active-paid subscriptions; or
-    * the user has at most ONE tracked active-paid subscription and the refund does not
-      name a DIFFERENT subscription (the natural "refund my only plan" / no-tracked-sub
-      legacy charge case -- there is no other active subscription to wrongly cancel).
+    * the action targeted a subscription directly (``target_kind == 'subscription'``); or
+    * the refund metadata named a ``stripe_subscription_id`` / ``subscription_id``; or
+    * the refund metadata named an ``invoice`` that resolved to a tracked subscription,
 
-    We do NOT downgrade when:
+    and that named subscription is currently active-paid.
 
-    * the metadata names a subscription that is NOT one of the user's active-paid
-      subscriptions (an unrelated / one-off charge), or
-    * the user has 2+ active-paid subscriptions and the refund names none of them
-      (ambiguous -- refuse to guess and cancel the wrong one).
+    We do NOT downgrade -- and cancel NOTHING -- when:
+
+    * there is NO explicit subscription link (a plain user/deployment refund). The
+      latest-active-subscription is NEVER auto-attached: a non-subscription refund must
+      not cancel an unrelated active sub; or
+    * the explicitly-named subscription is NOT one of the active-paid ones (an unrelated
+      / one-off / already-cancelled charge).
 
     Returns ``(should_downgrade, reason)``.
     """
+    explicit = bool(stripe_metadata.get("subscription_link_explicit"))
+    target_kind = str(stripe_metadata.get("action_target_kind") or "").strip()
+
+    if not explicit:
+        # No explicit subscription link -> this refund does NOT resolve to a
+        # subscription. Never auto-attach the latest active sub and never downgrade;
+        # a non-subscription refund must cancel nothing.
+        return False, "no_explicit_subscription_link"
+
+    # billing-H4 (round-2): match ONLY against the EXPLICIT-link identifiers bound by
+    # _resolve_stripe_action. The plain stripe_subscription_id / subscription_id keys can
+    # carry the latest-active auto-attach (an inference for cancel / customer_ref) -- using
+    # them here would let a refund that merely NAMED a non-existent/non-active sub still
+    # match and cancel the unrelated latest-active subscription. The explicit pair is empty
+    # unless the refund truly resolved to a real subscription, so an unlinked or
+    # non-active-named refund downgrades nothing.
+    explicit_stripe = str(stripe_metadata.get("explicit_stripe_subscription_id") or "").strip()
+    explicit_local = str(stripe_metadata.get("explicit_subscription_id") or "").strip()
+
     active = _active_paid_subscriptions_for_user(conn, user_id)
     active_stripe_ids = {str(r["stripe_subscription_id"] or "").strip() for r in active if str(r["stripe_subscription_id"] or "").strip()}
     active_local_ids = {str(r["subscription_id"] or "").strip() for r in active if str(r["subscription_id"] or "").strip()}
 
-    named_stripe = str(stripe_metadata.get("stripe_subscription_id") or "").strip()
-    named_local = str(stripe_metadata.get("subscription_id") or "").strip()
-    target_kind = str(stripe_metadata.get("action_target_kind") or "").strip()
-    names_a_subscription = bool(named_stripe or named_local)
-    matches_active = (named_stripe in active_stripe_ids) or (named_local in active_local_ids)
+    matches_active = (explicit_stripe in active_stripe_ids) or (explicit_local in active_local_ids)
 
     if matches_active:
         # The refund provably concerns one of the user's active-paid subscriptions.
         return True, "explicit_active_subscription_target" if target_kind == "subscription" else "metadata_matches_active_subscription"
-
-    if names_a_subscription:
-        # Names a specific subscription/charge that is NOT one of the active-paid ones:
-        # an unrelated / one-off refund -- never cancel the active subscription.
-        return False, "named_subscription_not_active"
 
     if target_kind == "subscription":
         # Targeted a subscription by id that resolved to no active-paid row -> nothing
         # live to cancel.
         return False, "subscription_target_not_active"
 
-    if len(active) >= 2:
-        # Multiple active-paid subscriptions and no disambiguating reference: refuse to
-        # guess which one the refund maps to rather than cancel the wrong one.
-        return False, "ambiguous_multiple_active_subscriptions"
-
-    # Zero or exactly one tracked active-paid subscription and the refund names none:
-    # there is no OTHER active subscription that could be wrongly cancelled, so closing
-    # the gate is safe (covers the legacy single-charge / sole-plan refund).
-    return True, "sole_or_untracked_subscription"
+    # An explicit reference (named id or resolved invoice) that is NOT one of the
+    # active-paid subscriptions: an unrelated / one-off / already-cancelled charge --
+    # never cancel a still-active subscription.
+    return False, "named_subscription_not_active"
 
 
 def _validate_explicit_target(metadata: Mapping[str, Any], key: str, resolved: str) -> None:
@@ -486,7 +527,76 @@ def _resolve_stripe_action(
     if user_id and not stripe_customer_id:
         user = conn.execute("SELECT stripe_customer_id FROM arclink_users WHERE user_id = ?", (user_id,)).fetchone()
         stripe_customer_id = str(user["stripe_customer_id"] or "") if user is not None else ""
+
+    # billing-H4 (round-2): bind the EXPLICIT subscription link as its OWN pair of
+    # identifiers, kept strictly separate from the latest-active auto-attach below. An
+    # explicit link is ONLY one of:
+    #   * the action targeted a subscription directly (target_kind == 'subscription'),
+    #     which already populated subscription_id / stripe_subscription_id above; OR
+    #   * the caller's ORIGINAL metadata named a stripe_subscription_id / subscription_id
+    #     that resolves to a real tracked subscription row; OR
+    #   * the metadata named an `invoice` that resolves (via the subscription mirror) to
+    #     a tracked subscription.
+    # The latest-active auto-attach is an INFERENCE -- a convenience so `cancel` has a
+    # working id and the refund customer_ref resolves -- and must NEVER, by itself, make
+    # a refund look like it explicitly concerns a subscription. We therefore record the
+    # explicit pair separately (explicit_subscription_id / explicit_stripe_subscription_id)
+    # so the auto-attach can fill subscription_id / stripe_subscription_id for cancel WITHOUT
+    # contaminating the refund downgrade decision, which keys off the explicit pair ONLY.
+    explicit_subscription_id = ""
+    explicit_stripe_subscription_id = ""
+    if target_kind == "subscription":
+        # The action targeted a subscription directly: the resolved sub IS the explicit link.
+        explicit_subscription_id = subscription_id
+        explicit_stripe_subscription_id = stripe_subscription_id
+
+    named_stripe_sub = str(metadata.get("stripe_subscription_id") or "").strip()
+    named_local_sub = str(metadata.get("subscription_id") or "").strip()
+    if user_id and (named_stripe_sub or named_local_sub):
+        # A named subscription identifier is an explicit link ONLY if it resolves to a
+        # real tracked subscription row for this user. A bare/unknown id that resolves to
+        # nothing is NOT a link and must not auto-attach an unrelated active sub.
+        named_row = None
+        if named_stripe_sub:
+            named_row = conn.execute(
+                "SELECT subscription_id, stripe_subscription_id FROM arclink_subscriptions WHERE user_id = ? AND stripe_subscription_id = ?",
+                (user_id, named_stripe_sub),
+            ).fetchone()
+        if named_row is None and named_local_sub:
+            named_row = conn.execute(
+                "SELECT subscription_id, stripe_subscription_id FROM arclink_subscriptions WHERE user_id = ? AND subscription_id = ?",
+                (user_id, named_local_sub),
+            ).fetchone()
+        if named_row is not None:
+            explicit_subscription_id = explicit_subscription_id or str(named_row["subscription_id"] or "").strip()
+            explicit_stripe_subscription_id = explicit_stripe_subscription_id or str(named_row["stripe_subscription_id"] or "").strip()
+
+    explicit_invoice = str(metadata.get("invoice") or "").strip()
+    invoice_subscription_id = ""
+    invoice_stripe_subscription_id = ""
+    if explicit_invoice:
+        # An `invoice` reference is an explicit link only if it RESOLVES to a tracked
+        # subscription (matching the invoice id stored on the subscription mirror, or
+        # the subscription id Stripe records alongside the invoice in raw_json). A bare
+        # invoice id that resolves to nothing is NOT a subscription link.
+        invoice_subscription_id, invoice_stripe_subscription_id = _subscription_for_invoice(
+            conn, user_id=user_id, invoice_id=explicit_invoice,
+        )
+        explicit_subscription_id = explicit_subscription_id or invoice_subscription_id
+        explicit_stripe_subscription_id = explicit_stripe_subscription_id or invoice_stripe_subscription_id
+
+    subscription_link_explicit = bool(explicit_subscription_id or explicit_stripe_subscription_id)
+
+    if user_id and (not subscription_id or not stripe_subscription_id) and (explicit_subscription_id or explicit_stripe_subscription_id):
+        # An explicit (target/named/invoice-resolved) subscription should drive a cancel
+        # and the refund decision, so bind it onto the working identifiers first.
+        subscription_id = subscription_id or explicit_subscription_id
+        stripe_subscription_id = stripe_subscription_id or explicit_stripe_subscription_id
+
     if user_id and (not subscription_id or not stripe_subscription_id):
+        # INFERENCE-ONLY auto-attach: gives `cancel` a working id and lets the refund
+        # customer_ref resolve. It populates subscription_id / stripe_subscription_id but
+        # NEVER the explicit pair -- a refund with no explicit link downgrades nothing.
         sub = _latest_subscription_for_user(conn, user_id)
         if sub is not None:
             subscription_id = subscription_id or str(sub["subscription_id"] or "")
@@ -514,6 +624,13 @@ def _resolve_stripe_action(
             "subscription_id": subscription_id,
             "stripe_customer_id": stripe_customer_id,
             "stripe_subscription_id": stripe_subscription_id,
+            "subscription_link_explicit": subscription_link_explicit,
+            # billing-H4 (round-2): the explicit-link identifiers, kept distinct from the
+            # auto-attachable stripe_subscription_id / subscription_id above. The refund
+            # downgrade decision matches ONLY against these so the latest-active inference
+            # can never make an unlinked refund cancel an unrelated active subscription.
+            "explicit_subscription_id": explicit_subscription_id,
+            "explicit_stripe_subscription_id": explicit_stripe_subscription_id,
             "target_resolved_by": "control_db",
         }
     )
@@ -583,6 +700,7 @@ def _update_intent_status(
     action_id: str,
     status: str,
     worker_id: str | None = None,
+    claimed_at: str | None = None,
 ) -> bool:
     """Write a terminal/queued intent status; return True iff a row was written.
 
@@ -597,12 +715,33 @@ def _update_intent_status(
     overwrite). ``worker_id`` defaults to None -> the legitimate pre-dispatch callers
     (executor-selection failure, dead-letter cap), which still hold the freshly-claimed
     row, write unconditionally and are unchanged.
+
+    conc-M5b (lease identity, not just worker identity): ``worker_id`` alone is NOT a
+    unique lease -- a recycled / reused worker_id can be re-handed the SAME id, so an
+    OLD attempt could stamp a row a NEW lease (same worker_id, fresh ``claimed_at``)
+    already re-claimed. When ``claimed_at`` is also supplied, the CAS additionally
+    pins the EXACT lease the worker captured at claim time
+    (``AND claimed_at = ?``), so only the worker holding the current lease -- not a
+    same-id predecessor -- can write. (The heartbeat ``_renew_action_lease`` advances
+    ``claimed_at``; the value threaded here is the post-renewal lease the live worker
+    holds.) ``claimed_at`` defaults to None -> behaviour unchanged (worker_id-only or
+    unconditional, per ``worker_id``).
     """
     if status not in ARCLINK_ACTION_INTENT_STATUSES:
         raise ArcLinkActionWorkerError(f"unsupported ArcLink action intent status: {status or 'blank'}")
     guarded = worker_id is not None
+    pin_lease = guarded and claimed_at is not None
     if status == "queued":
-        if guarded:
+        if pin_lease:
+            cursor = conn.execute(
+                """
+                UPDATE arclink_action_intents
+                SET status = ?, worker_id = '', claimed_at = '', updated_at = ?
+                WHERE action_id = ? AND status = 'running' AND worker_id = ? AND claimed_at = ?
+                """,
+                (status, utc_now_iso(), action_id, worker_id, claimed_at),
+            )
+        elif guarded:
             cursor = conn.execute(
                 """
                 UPDATE arclink_action_intents
@@ -621,7 +760,13 @@ def _update_intent_status(
                 (status, utc_now_iso(), action_id),
             )
     else:
-        if guarded:
+        if pin_lease:
+            cursor = conn.execute(
+                "UPDATE arclink_action_intents SET status = ?, updated_at = ? "
+                "WHERE action_id = ? AND status = 'running' AND worker_id = ? AND claimed_at = ?",
+                (status, utc_now_iso(), action_id, worker_id, claimed_at),
+            )
+        elif guarded:
             cursor = conn.execute(
                 "UPDATE arclink_action_intents SET status = ?, updated_at = ? "
                 "WHERE action_id = ? AND status = 'running' AND worker_id = ?",
@@ -1213,7 +1358,8 @@ def _execute_action(
         # owner re-claims); honoring the rowcount means we never overwrite the
         # recovery/new owner's state with our late, now-irrelevant outcome.
         still_owned = _update_intent_status(
-            conn, action_id=action_id, status=intent_status, worker_id=intent_worker_id,
+            conn, action_id=action_id, status=intent_status,
+            worker_id=intent_worker_id, claimed_at=_renewed_claimed_at,
         )
         if not still_owned:
             note = "action lease lost during dispatch (reclaimed by stale recovery); not overwriting re-claimed intent"
@@ -1267,8 +1413,34 @@ def _execute_action(
         _finish_attempt(conn, attempt_id=attempt_id, status="failed", error=error_msg)
         # conc-M5: same ownership CAS on the failure path -- a worker that lost its
         # lease mid-dispatch must not stamp the re-claimed intent 'failed' on top of
-        # the recovery/new owner's state.
-        _update_intent_status(conn, action_id=action_id, status="failed", worker_id=intent_worker_id)
+        # the recovery/new owner's state. Honor the rowcount exactly like the success
+        # path above: when the guarded update returns False (the row is no longer
+        # ours -- stale recovery re-queued / a new owner re-claimed it), report
+        # lease_lost so the recovery/new owner governs, instead of overwriting with
+        # 'failed'.
+        still_owned = _update_intent_status(
+            conn, action_id=action_id, status="failed",
+            worker_id=intent_worker_id, claimed_at=_renewed_claimed_at,
+        )
+        if not still_owned:
+            note = "action lease lost during dispatch (reclaimed by stale recovery); not overwriting re-claimed intent"
+            append_arclink_event(
+                conn,
+                subject_kind=target_kind,
+                subject_id=target_id,
+                event_type=f"action_lease_lost_post_dispatch:{action_type}",
+                metadata={"action_id": action_id, "attempt_id": attempt_id, "dispatch_status": "failed", "error_code": error_code, "error": error_msg, **routing},
+                commit=False,
+            )
+            conn.commit()
+            return {
+                "action_id": action_id,
+                "attempt_id": attempt_id,
+                "status": "lease_lost",
+                "action_type": action_type,
+                "error_code": "action_lease_lost",
+                "error": note,
+            }
         append_arclink_event(
             conn,
             subject_kind=target_kind,

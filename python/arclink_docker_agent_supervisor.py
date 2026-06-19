@@ -13,6 +13,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from arclink_broker_signing import sign_broker_request
 from arclink_control import Config, connect_db, ensure_agent_mcp_bootstrap_token, json_loads
 from arclink_onboarding import default_arclink_agent_profile
 
@@ -342,6 +343,7 @@ def agent_supervisor_broker_request(operation: str, payload: dict[str, Any]) -> 
         )
     request_body = {**payload, "operation": operation}
     data = json.dumps(request_body, sort_keys=True).encode("utf-8")
+    # Always attach the additive HMAC signature headers (lock-step-safe).
     request = urllib.request.Request(
         f"{broker_url}/v1/agent-supervisor",
         data=data,
@@ -349,6 +351,7 @@ def agent_supervisor_broker_request(operation: str, payload: dict[str, Any]) -> 
         headers={
             "Content-Type": "application/json",
             AGENT_SUPERVISOR_BROKER_TOKEN_HEADER: broker_token,
+            **sign_broker_request(broker_token, data),
         },
     )
     try:
@@ -380,6 +383,7 @@ def agent_user_helper_request(operation: str, payload: dict[str, Any]) -> dict[s
         )
     request_body = {**payload, "operation": operation}
     data = json.dumps(request_body, sort_keys=True).encode("utf-8")
+    # Always attach the additive HMAC signature headers (lock-step-safe).
     request = urllib.request.Request(
         f"{helper_url}/v1/agent-user",
         data=data,
@@ -387,6 +391,7 @@ def agent_user_helper_request(operation: str, payload: dict[str, Any]) -> dict[s
         headers={
             "Content-Type": "application/json",
             AGENT_USER_HELPER_TOKEN_HEADER: helper_token,
+            **sign_broker_request(helper_token, data),
         },
     )
     try:
@@ -418,6 +423,7 @@ def agent_process_helper_request(operation: str, payload: dict[str, Any]) -> dic
         )
     request_body = {**payload, "operation": operation}
     data = json.dumps(request_body, sort_keys=True).encode("utf-8")
+    # Always attach the additive HMAC signature headers (lock-step-safe).
     request = urllib.request.Request(
         f"{helper_url}/v1/agent-process",
         data=data,
@@ -425,6 +431,7 @@ def agent_process_helper_request(operation: str, payload: dict[str, Any]) -> dic
         headers={
             "Content-Type": "application/json",
             AGENT_PROCESS_HELPER_TOKEN_HEADER: helper_token,
+            **sign_broker_request(helper_token, data),
         },
     )
     try:

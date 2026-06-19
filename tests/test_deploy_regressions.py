@@ -3113,6 +3113,142 @@ sync_control_upgrade_checkout_from_upstream
     print("PASS test_control_upgrade_fetch_uses_host_authoritative_url_not_git_config")
 
 
+def test_control_upgrade_hardens_build_tree_against_arclink_writable_tamper() -> None:
+    # SECURITY REGRESSION (build-tree escalation): the control node's docker build
+    # uses the repo checkout as its context (compose `context: .` -> Dockerfile
+    # `COPY . /home/arclink/arclink`). That checkout is OWNED/WRITABLE by the
+    # unprivileged arclink service user, so after the host-authoritative fetch the
+    # arclink user can still (a) plant UNTRACKED source files (e.g. python/EVIL.py)
+    # or (b) win a clean-check->build TOCTOU race by editing tracked files, and a
+    # root-run build would COPY that attacker-controlled tree into the image.
+    #
+    # The fix hard-pins the build tree to the VERIFIED upstream commit and strips
+    # untracked tamper immediately before the build:
+    #   git -C "$BOOTSTRAP_DIR" reset --hard "$verified_commit"
+    #   git -C "$BOOTSTRAP_DIR" clean -ffd            (NO -x)
+    # `-x` is deliberately omitted so gitignored arclink-priv/ (config/state/secrets)
+    # SURVIVES. This proves both tamper vectors are wiped while a gitignored
+    # arclink-priv secret + the runtime sqlite db are preserved.
+    text = DEPLOY_SH.read_text(encoding="utf-8")
+
+    # Static guards: the hardening step must reset to the verified commit and clean
+    # untracked files, and must NEVER pass `-x` (which would nuke arclink-priv).
+    harden = extract(text, "harden_control_upgrade_build_tree() {", "sync_control_upgrade_checkout_from_upstream() {")
+    expect('reset --hard "$verified_commit"' in harden, harden)
+    expect("clean -ffd" in harden, harden)
+    expect("clean -ffdx" not in harden and "clean -fdx" not in harden and " -x" not in harden,
+           "control upgrade clean must NOT pass -x; gitignored arclink-priv must survive")
+    # The hardening step must run as part of the sync, before the build returns.
+    sync = extract(text, "sync_control_upgrade_checkout_from_upstream() {", "run_control_install_flow() {")
+    expect('harden_control_upgrade_build_tree "$upstream_commit"' in sync,
+           "sync must pin the build tree to the verified FETCH_HEAD commit before returning")
+    expect(sync.count('harden_control_upgrade_build_tree "$upstream_commit"') >= 2,
+           "both the already-current and fast-forward success paths must harden the build tree")
+    # .dockerignore must keep arclink-priv + .git out of the build image regardless.
+    dockerignore = (REPO / ".dockerignore").read_text(encoding="utf-8")
+    expect("arclink-priv" in dockerignore, ".dockerignore must exclude arclink-priv so secrets are never COPYd")
+    expect("/.git" in dockerignore or ".git" in dockerignore, ".dockerignore must exclude .git from the build context")
+    # arclink-priv must be gitignored so `git clean` (no -x) cannot remove it.
+    gitignore = (REPO / ".gitignore").read_text(encoding="utf-8")
+    expect("arclink-priv" in gitignore, "arclink-priv must be gitignored so the clean step preserves it")
+
+    git = shutil.which("git")
+    if git is None:
+        print("PASS test_control_upgrade_hardens_build_tree_against_arclink_writable_tamper (skipped: git unavailable)")
+        return
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@example.com",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@example.com",
+            "GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"),
+            "GIT_CONFIG_SYSTEM": "/dev/null",
+            "HOME": str(tmp_path),
+        }
+
+        def git_run(args: list[str], cwd: Path) -> None:
+            res = subprocess.run([git, *args], cwd=str(cwd), env=env, text=True, capture_output=True)
+            if res.returncode != 0:
+                raise AssertionError(f"git {' '.join(args)} failed: {res.stderr}")
+
+        # Authoritative upstream the host pins, with a NEW commit so a real
+        # fast-forward (not a no-op) exercises the post-merge hardening path.
+        auth = tmp_path / "authoritative"
+        auth.mkdir()
+        git_run(["init", "-q", "-b", "arclink"], auth)
+        (auth / "python").mkdir()
+        (auth / "python" / "good.py").write_text("real-good\n", encoding="utf-8")
+        (auth / ".gitignore").write_text("/arclink-priv/\n", encoding="utf-8")
+        git_run(["add", "python/good.py", ".gitignore"], auth)
+        git_run(["commit", "-q", "-m", "init"], auth)
+        (auth / "python" / "good.py").write_text("real-good-next\n", encoding="utf-8")
+        git_run(["add", "python/good.py"], auth)
+        git_run(["commit", "-q", "-m", "auth-next"], auth)
+        verified = subprocess.run([git, "rev-parse", "HEAD"], cwd=str(auth), env=env, text=True, capture_output=True).stdout.strip()
+
+        # The control checkout = clone of authoritative's FIRST commit (so the sync
+        # has to fast-forward to the verified tip).
+        checkout = tmp_path / "checkout"
+        git_run(["clone", "-q", "-b", "arclink", str(auth), str(checkout)], tmp_path)
+        git_run(["reset", "-q", "--hard", "HEAD~1"], checkout)
+
+        # --- arclink-user tamper in the writable build tree ---------------------
+        # (a) UNTRACKED malicious source file the COPY . would otherwise pick up.
+        (checkout / "python" / "EVIL.py").write_text("os.system('pwn root')\n", encoding="utf-8")
+        # (b) tracked-file edit (the clean-check->build TOCTOU race outcome).
+        (checkout / "python" / "good.py").write_text("BACKDOORED\n", encoding="utf-8")
+        # (c) untracked malicious directory (nested tamper) the -ffd must remove.
+        (checkout / "evilpkg").mkdir()
+        (checkout / "evilpkg" / "__init__.py").write_text("pwn\n", encoding="utf-8")
+        # (d) gitignored runtime secrets + state that MUST SURVIVE the clean.
+        (checkout / "arclink-priv" / "config").mkdir(parents=True)
+        (checkout / "arclink-priv" / "config" / "arclink.env").write_text("ARCLINK_SECRET=keep-me\n", encoding="utf-8")
+        (checkout / "arclink-priv" / "state").mkdir(parents=True)
+        (checkout / "arclink-priv" / "state" / "arclink-control.sqlite3").write_text("dbdata\n", encoding="utf-8")
+
+        # Splice the real fetch + sync + hardening functions and run the sync.
+        helpers = extract(text, "canonical_arclink_upstream_repo_url() {", "# Read the commit currently deployed")
+        fetch = extract(text, "control_upgrade_fetch_upstream() {", "run_control_install_flow() {")
+        script = f"""
+set -uo pipefail
+BOOTSTRAP_DIR={shlex.quote(str(checkout))}
+{helpers}
+{fetch}
+sync_control_upgrade_checkout_from_upstream
+"""
+        sync_env = {**env, "ARCLINK_UPSTREAM_BRANCH": "arclink", "ARCLINK_UPSTREAM_REPO_URL": str(auth)}
+        res = subprocess.run(["bash", "-lc", script], env=sync_env, text=True, capture_output=True)
+        expect(res.returncode == 0, f"hardened sync should succeed: {res.stdout}\n{res.stderr}")
+
+        # The build tree now matches the verified ref exactly...
+        head = subprocess.run([git, "rev-parse", "HEAD"], cwd=str(checkout), env=env, text=True, capture_output=True).stdout.strip()
+        expect(head == verified, f"build tree HEAD must equal the verified commit; head={head!r} verified={verified!r}")
+        # ...tracked tamper reverted...
+        good = (checkout / "python" / "good.py").read_text(encoding="utf-8")
+        expect(good == "real-good-next\n", f"tracked-file edit must be reverted to the verified content; got {good!r}")
+        # ...untracked tamper (file + directory) wiped...
+        expect(not (checkout / "python" / "EVIL.py").exists(), "untracked malicious file must be wiped before build")
+        expect(not (checkout / "evilpkg").exists(), "untracked malicious directory must be wiped before build")
+        # ...and the working tree is clean of tamper (ignoring the surviving arclink-priv).
+        porcelain = subprocess.run([git, "status", "--porcelain"], cwd=str(checkout), env=env, text=True, capture_output=True).stdout
+        expect(porcelain.strip() == "", f"build tree must be clean after hardening; porcelain={porcelain!r}")
+
+        # The gitignored arclink-priv secret + runtime db MUST SURVIVE.
+        secret_path = checkout / "arclink-priv" / "config" / "arclink.env"
+        expect(secret_path.exists(), "gitignored arclink-priv secret must survive the clean (no -x)")
+        expect(secret_path.read_text(encoding="utf-8") == "ARCLINK_SECRET=keep-me\n", "arclink-priv secret content must be preserved")
+        db_path = checkout / "arclink-priv" / "state" / "arclink-control.sqlite3"
+        expect(db_path.exists(), "gitignored arclink-priv runtime db must survive the clean")
+        # The .git directory must remain intact (clean never touches it).
+        expect((checkout / ".git").is_dir(), ".git directory must remain intact after the clean")
+
+    print("PASS test_control_upgrade_hardens_build_tree_against_arclink_writable_tamper")
+
+
 def test_component_upgrade_reexec_reads_operator_artifact_config_file_key() -> None:
     body = (REPO / "bin" / "component-upgrade.sh").read_text(encoding="utf-8")
     reexec = extract(body, "reexec_upgrade() {", "do_apply() {")
@@ -4854,6 +4990,7 @@ def main() -> int:
         test_control_docker_bootstrap_seeds_session_hash_pepper_and_gateway_broker_token,
         test_control_upgrade_syncs_checkout_from_upstream_before_build,
         test_control_upgrade_fetch_uses_host_authoritative_url_not_git_config,
+        test_control_upgrade_hardens_build_tree_against_arclink_writable_tamper,
         test_component_upgrade_reexec_reads_operator_artifact_config_file_key,
         test_init_bootstrap_defaults_to_canonical_repo_and_safe_printf,
         test_operator_hermes_home_install_lock_has_timeout,

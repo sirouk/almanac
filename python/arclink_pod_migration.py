@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from arclink_boundary import json_dumps_safe, json_loads_safe, reject_secret_material
+from arclink_broker_signing import sign_broker_request
 from arclink_control import (
     append_arclink_audit,
     append_arclink_event,
@@ -764,12 +765,15 @@ def _run_migration_capture_helper(
         timeout = 300
     body = _migration_capture_helper_payload(conn, row)
     body["operation"] = str(operation or "").strip()
+    body_bytes = json.dumps(body, sort_keys=True).encode("utf-8")
+    # Always attach the additive HMAC signature headers (lock-step-safe).
     request = urllib.request.Request(
         f"{url}/v1/migration-capture",
-        data=json.dumps(body, sort_keys=True).encode("utf-8"),
+        data=body_bytes,
         headers={
             "Content-Type": "application/json",
             MIGRATION_CAPTURE_HELPER_TOKEN_HEADER: token,
+            **sign_broker_request(token, body_bytes),
         },
         method="POST",
     )

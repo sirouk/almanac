@@ -14,7 +14,11 @@ from typing import Any, Mapping
 from arclink_control import ARCLINK_ACTION_INTENT_STATUSES, append_arclink_audit, append_arclink_event, get_setting, utc_now_iso
 from arclink_adapters import arclink_access_urls
 from arclink_boundary import json_dumps_safe, json_loads_safe, reject_secret_material, rowdict
-from arclink_chutes import evaluate_chutes_deployment_boundary, renewal_lifecycle_for_billing_state
+from arclink_chutes import (
+    chutes_open_reserved_cents,
+    evaluate_chutes_deployment_boundary,
+    renewal_lifecycle_for_billing_state,
+)
 from arclink_product import primary_provider
 from arclink_wrapped import list_user_wrapped_reports, wrapped_admin_aggregate
 
@@ -1854,12 +1858,15 @@ def read_arclink_user_dashboard(
             "credential_state": "secret_ref_pending",
         }
         if provider == "chutes":
+            # billing-H5: subtract still-open reservations from the settled remaining
+            # so the dashboard's ``available_cents`` matches what the router will allow.
             boundary = evaluate_chutes_deployment_boundary(
                 str(dep["deployment_id"] or ""),
                 str(dep["user_id"] or ""),
                 metadata,
                 env=os.environ,
                 billing_state=str(user["entitlement_state"] or ""),
+                reserved_cents=chutes_open_reserved_cents(conn, str(dep["deployment_id"] or "")),
             )
             public_boundary = boundary.to_public()
             model.update(

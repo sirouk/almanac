@@ -235,6 +235,58 @@ def test_provider_state_demotes_spoofed_unlimited_policy_from_operator_settings(
     print("PASS test_provider_state_demotes_spoofed_unlimited_policy_from_operator_settings")
 
 
+def test_provider_state_available_cents_subtracts_open_reservations() -> None:
+    # billing-H5: settled remaining_cents overstates spendable headroom because the
+    # router subtracts open reservations before allowing new spend. Provider-state
+    # must surface available_cents = max(0, remaining - reserved) so the dashboard
+    # matches what the router enforces.
+    control = load_module("arclink_control.py", "arclink_control_api_auth_available_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_available_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_available_test")
+    conn = memory_db(control)
+    prepared = seed_paid_deployment(control, onboarding, conn)
+    conn.execute(
+        "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
+        (
+            json.dumps(
+                {
+                    "selected_model_id": "model-api",
+                    "chutes": {
+                        "secret_ref": f"secret://arclink/chutes/{prepared['deployment_id']}",
+                        "monthly_budget_cents": 100,
+                        "used_cents": 30,
+                    },
+                },
+                sort_keys=True,
+            ),
+            prepared["deployment_id"],
+        ),
+    )
+    # An open (status='reserved') reservation holds 25c of the 70c settled remaining.
+    conn.execute(
+        """
+        INSERT INTO arclink_llm_budget_reservations (
+          reservation_id, request_id, deployment_id, user_id, reserved_cents, status, created_at
+        ) VALUES ('llmres_open', 'llmreq_open', ?, ?, 25, 'reserved', '2026-06-19T00:00:00+00:00')
+        """,
+        (prepared["deployment_id"], prepared["user_id"]),
+    )
+    conn.commit()
+    session = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_available")
+    result = api.read_provider_state_api(
+        conn,
+        session_id=session["session_id"],
+        session_token=session["session_token"],
+        env={"ARCLINK_PRIMARY_PROVIDER": "chutes"},
+    )
+    expect(result.status == 200, str(result))
+    budget = result.payload["deployment_models"][0]["chutes"]["budget"]
+    expect(budget["remaining_cents"] == 70, str(budget))
+    expect(budget["reserved_cents"] == 25, str(budget))
+    expect(budget["available_cents"] == 45, f"available must subtract open reservations: {budget}")
+    print("PASS test_provider_state_available_cents_subtracts_open_reservations")
+
+
 def test_user_crew_recipe_api_applies_overlay_and_admin_on_behalf_is_audited() -> None:
     control = load_module("arclink_control.py", "arclink_control_api_auth_crew_recipe_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_crew_recipe_test")
@@ -1295,6 +1347,7 @@ def main() -> int:
     test_sessions_store_hashes_and_user_api_is_scoped_to_principal()
     test_user_agent_identity_update_requires_session_and_csrf()
     test_provider_state_demotes_spoofed_unlimited_policy_from_operator_settings()
+    test_provider_state_available_cents_subtracts_open_reservations()
     test_user_crew_recipe_api_applies_overlay_and_admin_on_behalf_is_audited()
     test_public_onboarding_api_rate_limits_and_reuses_shared_contract()
     test_public_onboarding_api_rejects_invalid_channel_before_rate_limit()
@@ -1321,7 +1374,7 @@ def main() -> int:
     test_proof_token_hashes_use_hmac_and_accept_legacy()
     test_share_notifications_escape_cross_tenant_markdown_and_links()
     test_clean_share_path_rejects_markdown_metacharacters()
-    print("PASS all 29 ArcLink API/auth tests")
+    print("PASS all 30 ArcLink API/auth tests")
     return 0
 
 

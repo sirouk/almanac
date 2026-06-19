@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sqlite3
 import sys
 import tempfile
@@ -578,6 +579,170 @@ def test_standard_unit_capacity_summary_uses_asu_available() -> None:
     print("PASS test_standard_unit_capacity_summary_uses_asu_available")
 
 
+def test_h7_register_preserves_gate_against_injected_midflight_gate_write() -> None:
+    """H7: register_fleet_host's read->merge->write is one atomic critical section.
+
+    The lost-update the fix kills: an inventory re-register R (fresh metadata, NO
+    image_sync_* gate key) reads the host metadata, a control image-sync sweep then
+    commits image_sync_state=image_sync_failed, and R finally writes its blind
+    whole-metadata_json blob -- erasing the just-set gate so the host wrongly
+    becomes placement-eligible.
+
+    We make that exact interleaving DETERMINISTIC by injecting a concurrent gate
+    write at the precise read->merge boundary (via the json_loads_safe call R makes
+    on the row it just read). Under the OLD unlocked code R's read is not under a
+    write lock, the injected sweep commits, and R's blind UPDATE drops the gate.
+    Under the fix R holds BEGIN IMMEDIATE across read+write, so the injected sweep
+    cannot commit between them: it is serialized (and times out trying to grab the
+    write lock within its short busy_timeout), R completes from its locked read,
+    and the gate is preserved.
+    """
+    control = load_module("arclink_control.py", "arclink_control_h7_inject")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_h7_inject")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = f"{tmpdir}/control.sqlite3"
+        seed = sqlite3.connect(db_path, timeout=15)
+        seed.row_factory = sqlite3.Row
+        control.ensure_schema(seed)
+        host = fleet.register_fleet_host(
+            seed, hostname="inject.test", capacity_slots=4, metadata={"ssh_host": "10.44.0.9"}
+        )
+        host_id = str(host["host_id"])
+        seed.commit()
+        seed.close()
+
+        original_loads = fleet.json_loads_safe
+        injected = {"done": False}
+
+        def injecting_loads(value):
+            # Fire exactly once, at R's read->merge boundary (the call that parses
+            # the metadata_json R just SELECTed), to model a sweep committing the
+            # gate between R's read and R's write.
+            if not injected["done"]:
+                injected["done"] = True
+                sweep = sqlite3.connect(db_path, timeout=0.5)
+                sweep.execute("PRAGMA busy_timeout = 500")
+                try:
+                    sweep.execute(
+                        "UPDATE arclink_fleet_hosts SET metadata_json = ? WHERE host_id = ?",
+                        (json.dumps({"ssh_host": "10.44.0.9", "image_sync_state": "image_sync_failed"}, sort_keys=True), host_id),
+                    )
+                    sweep.commit()
+                except sqlite3.OperationalError:
+                    # Expected under the fix: R holds the write lock, so the sweep
+                    # cannot commit mid-flight and we fall back to applying the gate
+                    # AFTER R releases (still a committed gate, just serialized).
+                    sweep.rollback()
+                    pending_gate["needed"] = True
+                finally:
+                    sweep.close()
+            return original_loads(value)
+
+        pending_gate = {"needed": False}
+        r = sqlite3.connect(db_path, timeout=15)
+        r.row_factory = sqlite3.Row
+        r.execute("PRAGMA busy_timeout = 15000")
+        fleet.json_loads_safe = injecting_loads
+        try:
+            fleet.register_fleet_host(
+                r, hostname="inject.test", capacity_slots=4, metadata={"ssh_host": "10.44.0.9", "region_note": "moved"}
+            )
+        finally:
+            fleet.json_loads_safe = original_loads
+            r.close()
+
+        if pending_gate["needed"]:
+            # The sweep was correctly serialized behind R's lock; apply the gate now
+            # (post-R) the same way a real serialized sweep would.
+            late = sqlite3.connect(db_path, timeout=15)
+            late.row_factory = sqlite3.Row
+            cur = json.loads(late.execute("SELECT metadata_json FROM arclink_fleet_hosts WHERE host_id = ?", (host_id,)).fetchone()["metadata_json"])
+            cur["image_sync_state"] = "image_sync_failed"
+            late.execute("UPDATE arclink_fleet_hosts SET metadata_json = ? WHERE host_id = ?", (json.dumps(cur, sort_keys=True), host_id))
+            late.commit()
+            late.close()
+
+        check = sqlite3.connect(db_path)
+        check.row_factory = sqlite3.Row
+        meta = json.loads(check.execute("SELECT metadata_json FROM arclink_fleet_hosts WHERE host_id = ?", (host_id,)).fetchone()["metadata_json"])
+        check.close()
+        # The gate survives the concurrent mid-flight sweep -> host stays gated.
+        expect(meta.get("image_sync_state") == "image_sync_failed", f"H7: re-register dropped the concurrently-set image_sync gate: {meta}")
+    print("PASS test_h7_register_preserves_gate_against_injected_midflight_gate_write")
+
+
+def test_m8_reconcile_observed_loads_atomic_under_concurrent_placement() -> None:
+    """M8: reconcile must not erase a placement committing during its read->write.
+
+    The correlated-subquery UPDATE under BEGIN IMMEDIATE means reconcile's COUNT
+    and SET observe the same locked snapshot; a placement committed concurrently is
+    serialized and reflected, never lost.
+    """
+    control = load_module("arclink_control.py", "arclink_control_m8_race")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_m8_race")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = f"{tmpdir}/control.sqlite3"
+        seed = sqlite3.connect(db_path, timeout=15)
+        seed.row_factory = sqlite3.Row
+        control.ensure_schema(seed)
+        host = fleet.register_fleet_host(seed, hostname="recon.test", capacity_slots=8)
+        host_id = str(host["host_id"])
+        # Drift the stored load away from the true active count (0) so reconcile has
+        # work to do on every host.
+        fleet.update_fleet_host(seed, host_id=host_id, observed_load=5)
+        seed.commit()
+        seed.close()
+
+        barrier = threading.Barrier(2)
+        errors: list[str] = []
+        lock = threading.Lock()
+
+        def place() -> None:
+            c = sqlite3.connect(db_path, timeout=15)
+            c.row_factory = sqlite3.Row
+            c.execute("PRAGMA busy_timeout = 15000")
+            try:
+                barrier.wait(timeout=5)
+                fleet.place_deployment(c, deployment_id="dep_m8")
+            except Exception as exc:  # noqa: BLE001
+                with lock:
+                    errors.append(f"place: {exc}")
+            finally:
+                c.close()
+
+        def reconcile() -> None:
+            c = sqlite3.connect(db_path, timeout=15)
+            c.row_factory = sqlite3.Row
+            c.execute("PRAGMA busy_timeout = 15000")
+            try:
+                barrier.wait(timeout=5)
+                fleet.reconcile_fleet_observed_loads(c)
+            except Exception as exc:  # noqa: BLE001
+                with lock:
+                    errors.append(f"reconcile: {exc}")
+            finally:
+                c.close()
+
+        threads = [threading.Thread(target=place), threading.Thread(target=reconcile)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        expect(errors == [], f"concurrent place/reconcile errors: {errors}")
+
+        check = sqlite3.connect(db_path)
+        check.row_factory = sqlite3.Row
+        load = int(check.execute("SELECT observed_load FROM arclink_fleet_hosts WHERE host_id = ?", (host_id,)).fetchone()["observed_load"])
+        active = int(check.execute("SELECT COUNT(*) AS c FROM arclink_deployment_placements WHERE status = 'active'").fetchone()["c"])
+        check.close()
+        expect(active == 1, f"expected one active placement, got {active}")
+        # The placement increment must be reflected: observed_load == active count.
+        # Whether reconcile or place won the race, the final stored load equals the
+        # true active count (1) -- the placement was never erased.
+        expect(load == active, f"observed_load ({load}) must match active placement count ({active})")
+    print("PASS test_m8_reconcile_observed_loads_atomic_under_concurrent_placement")
+
+
 def test_fleet_inventory_orphan_reconciler_reports_without_repairing() -> None:
     control = load_module("arclink_control.py", "arclink_control_fleet_orphan")
     fleet = load_module("arclink_fleet.py", "arclink_fleet_orphan")
@@ -619,7 +784,9 @@ if __name__ == "__main__":
     test_placement_rejects_secret_required_tags()
     test_standard_unit_strategy_uses_inventory_asu_available()
     test_standard_unit_capacity_summary_uses_asu_available()
+    test_h7_register_preserves_gate_against_injected_midflight_gate_write()
+    test_m8_reconcile_observed_loads_atomic_under_concurrent_placement()
     test_fleet_inventory_orphan_reconciler_reports_without_repairing()
     test_register_existing_host_preserves_image_sync_state()
     test_provisioning_readiness_excludes_image_sync_failed_worker()
-    print(f"\nAll 26 fleet tests passed.")
+    print(f"\nAll 28 fleet tests passed.")

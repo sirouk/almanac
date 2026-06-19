@@ -652,6 +652,18 @@ def consume_fleet_enrollment(
         if existing_fp and not hmac.compare_digest(existing_fp, fingerprint):
             raise ArcLinkFleetEnrollmentError("machine fingerprint mismatch; explicit re-attest required")
 
+    # H7: the host+machine enrollment is one read->merge->write critical section.
+    # register_inventory_machine(commit=False) borrows OUR transaction and in turn
+    # calls register_fleet_host(commit=False), whose existence SELECT -> image_sync_*
+    # merge -> whole-metadata_json UPDATE only runs under a write lock if WE hold one.
+    # Without an outer BEGIN IMMEDIATE the merge runs in autocommit and a concurrent
+    # liveness/gate metadata write committing between our read and our write can drop
+    # the image_sync_* placement-gate keys -> a host wrongly becomes placement-eligible.
+    # So we own (begin + commit/rollback) the transaction here whenever we are in
+    # autocommit; a caller that handed us an already-open txn governs the lock itself.
+    own_txn = not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
     try:
         machine = register_inventory_machine(
             conn,
@@ -762,9 +774,13 @@ def consume_fleet_enrollment(
             },
             commit=False,
         )
-        conn.commit()
+        if own_txn:
+            conn.commit()
     except Exception:
-        conn.rollback()
+        # Only roll back the transaction WE own. A caller that handed us an already-open
+        # txn governs its own rollback -- we must not tear down its transaction.
+        if own_txn and conn.in_transaction:
+            conn.rollback()
         raise
     machine = dict(conn.execute("SELECT * FROM arclink_inventory_machines WHERE machine_id = ?", (str(machine["machine_id"]),)).fetchone())
     return {

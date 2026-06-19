@@ -4416,6 +4416,298 @@ def test_generic_run_once_public_agent_turn_write_no_ops_on_worker_owned_row() -
             os.environ.update(old_env)
 
 
+def test_public_agent_bridge_reaper_clears_stale_token_so_row_is_finalizable() -> None:
+    # H1 (STILL-BROKEN): the orphan reaper re-armed next_attempt_at + stamped
+    # reclaimed_at but LEFT the dead worker's recorded
+    # $._public_agent_bridge_worker.token in place. The in-process/non-detached
+    # finalize uses the EMPTY-token guard, which requires the recorded token to be
+    # NULL (arclink_control _notification_token_guard_sql). With a stale token still
+    # on the row, that empty-token finalize NO-OPed -> the reclaimed row could never
+    # be marked delivered in non-detached mode and re-ran every lease cycle. The fix
+    # clears the token in the reclaim UPDATE so a reclaimed row becomes finalizable.
+    control = load_module(CONTROL_PY, "arclink_control_h1_reaper_clears_token_control_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_h1_reaper_clears_token_test")
+    old_env = os.environ.copy()
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            cfg = _delivery_db_config(control, Path(tmp))
+            os.environ["ARCLINK_PUBLIC_AGENT_BRIDGE_ORPHAN_REAPER_SECONDS"] = "60"
+            with control.connect_db(cfg) as conn:
+                nid = control.queue_notification(
+                    conn, target_kind="public-agent-turn", target_id="tg:1",
+                    channel_kind="telegram", message="stalled",
+                    extra={"deployment_id": "arcdep_test"},
+                )
+                # A dead worker holds the lease: record a token + a dead pid + a
+                # missing job_path, and push the lease far into the future. Set the
+                # token via json_set post-insert (a literal `token` key would trip the
+                # queue_notification secret-scanner).
+                conn.execute(
+                    "UPDATE notification_outbox "
+                    "SET extra_json = json_set(COALESCE(extra_json,'{}'), '$._public_agent_bridge_worker', json(?)), "
+                    "    last_attempt_at = ?, next_attempt_at = ? "
+                    "WHERE id = ?",
+                    (
+                        json.dumps({"pid": 99999999, "job_path": "", "token": "stale-token"}),
+                        "2026-01-01T00:00:00+00:00",
+                        "2999-01-01T00:00:00+00:00",
+                        nid,
+                    ),
+                )
+                conn.commit()
+
+                # Precondition: WHILE the stale token is on the row, the in-process
+                # empty-token finalize is a NO-OP (the bug's symptom).
+                expect(
+                    delivery.mark_notification_delivered_if_owned(conn, nid, "") == 0,
+                    "precondition: empty-token finalize must no-op while a stale token is recorded",
+                )
+                token_before = conn.execute(
+                    "SELECT json_extract(COALESCE(extra_json,'{}'), ?) AS t FROM notification_outbox WHERE id = ?",
+                    (delivery.PUBLIC_AGENT_BRIDGE_WORKER_TOKEN_JSON_PATH, nid),
+                ).fetchone()["t"]
+                expect(token_before == "stale-token", f"precondition: token must be present, got {token_before!r}")
+
+            reclaimed = delivery.reap_orphaned_public_agent_bridge_leases(cfg, limit=5)
+            expect(reclaimed == 1, f"expected 1 reclaimed, got {reclaimed}")
+
+            with control.connect_db(cfg) as conn:
+                row = conn.execute(
+                    "SELECT delivery_error, next_attempt_at, "
+                    "json_extract(COALESCE(extra_json,'{}'), ?) AS token, "
+                    "json_extract(COALESCE(extra_json,'{}'), '$._public_agent_bridge_worker.reclaimed_at') AS reclaimed_at "
+                    "FROM notification_outbox WHERE id = ?",
+                    (delivery.PUBLIC_AGENT_BRIDGE_WORKER_TOKEN_JSON_PATH, nid),
+                ).fetchone()
+                # The reclaim happened (reclaimed_at stamped, error noted, lease re-armed).
+                expect("public_agent_bridge_orphan_reclaimed" in str(row["delivery_error"] or ""), dict(row))
+                expect(str(row["reclaimed_at"] or "").strip() != "", dict(row))
+                # H1: the stale token is GONE.
+                expect(row["token"] is None, f"H1: reclaim must clear the stale worker token, got {row['token']!r}")
+                # H1: the in-process empty-token finalize now FINALIZES the row.
+                applied = delivery.mark_notification_delivered_if_owned(conn, nid, "")
+                expect(applied >= 1, f"H1: a reclaimed row must be finalizable by the empty-token path, got {applied}")
+                delivered = conn.execute(
+                    "SELECT delivered_at FROM notification_outbox WHERE id = ?", (nid,)
+                ).fetchone()
+                expect(str(delivered["delivered_at"] or "").strip() != "", dict(delivered))
+            print("PASS test_public_agent_bridge_reaper_clears_stale_token_so_row_is_finalizable")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_non_bridge_run_once_claims_row_before_send_so_concurrent_run_cannot_dup() -> None:
+    # conc-H4 (STILL-BROKEN): the NON-bridge delivery path in run_once used to
+    # send-then-mark with NO lease, so a second concurrent run_once could pick AND
+    # send the SAME row before either marked it delivered (a duplicate platform
+    # message). run_once now takes the atomic CAS claim (_claim_notification_for_delivery)
+    # for every non-bridge sendable row BEFORE deliver_row sends. We prove (a) two
+    # concurrent claims of one non-bridge row -> only ONE wins, and (b) end-to-end a
+    # second run_once after the first claimed the row sends ZERO duplicate messages.
+    control = load_module(CONTROL_PY, "arclink_control_conc_h4_nonbridge_claim_control_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_conc_h4_nonbridge_claim_test")
+    old_env = os.environ.copy()
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            cfg = _delivery_db_config(
+                control, Path(tmp), extra={"TELEGRAM_BOT_TOKEN": "telegram-public-token"}
+            )
+            with control.connect_db(cfg) as conn:
+                nid = control.queue_notification(
+                    conn, target_kind="public-bot-user", target_id="tg:777",
+                    channel_kind="telegram", message="hello user",
+                )
+
+            # (a) Direct CAS proof: two concurrent claims of the SAME non-bridge row
+            # -> exactly one wins.
+            with control.connect_db(cfg) as conn:
+                first = delivery._claim_notification_for_delivery(
+                    conn, nid, lease_seconds=delivery._public_agent_turn_lease_seconds()
+                )
+                second = delivery._claim_notification_for_delivery(
+                    conn, nid, lease_seconds=delivery._public_agent_turn_lease_seconds()
+                )
+            expect(first is True, "the first claim of a due non-bridge row must win")
+            expect(second is False, "the second concurrent claim of the same row must lose (no double-send)")
+
+            # (b) End-to-end through run_once. Count platform sends.
+            sends: list[str] = []
+            delivery._deliver_public_bot_user = lambda *a, **k: sends.append(k.get("target_id") or (a[0] if a else "")) or None
+
+            # Make the row due (clear the lease left by (a)).
+            with control.connect_db(cfg) as conn:
+                conn.execute(
+                    "UPDATE notification_outbox SET next_attempt_at = NULL, last_attempt_at = NULL WHERE id = ?",
+                    (nid,),
+                )
+                conn.commit()
+
+            # Simulate the LOSING side of a race: a competing run_once already grabbed
+            # this row's lease in the window between our fetch and our claim, so OUR
+            # claim CAS returns False. The fix means we then count claimed_elsewhere and
+            # do NOT send. Patch the claim to fail exactly once for this due row.
+            real_claim = delivery._claim_notification_for_delivery
+            calls = {"n": 0}
+
+            def claim_loses_once(conn_arg, notification_id, *, lease_seconds):
+                if int(notification_id) == int(nid) and calls["n"] == 0:
+                    calls["n"] += 1
+                    # Lease it on behalf of the competitor so the state is realistic.
+                    real_claim(conn_arg, notification_id, lease_seconds=lease_seconds)
+                    return False
+                return real_claim(conn_arg, notification_id, lease_seconds=lease_seconds)
+
+            delivery._claim_notification_for_delivery = claim_loses_once
+            try:
+                summary = delivery.run_once(cfg)
+            finally:
+                delivery._claim_notification_for_delivery = real_claim
+            expect(len(sends) == 0, f"conc-H4: a row whose claim was lost must NOT be sent, sends={sends}")
+            expect(summary.get("claimed_elsewhere", 0) >= 1, f"expected claimed_elsewhere>=1, got {summary}")
+            with control.connect_db(cfg) as conn:
+                row = conn.execute(
+                    "SELECT delivered_at FROM notification_outbox WHERE id = ?", (nid,)
+                ).fetchone()
+                expect(not str(row["delivered_at"] or "").strip(), f"unsent row must stay undelivered: {dict(row)}")
+
+            # Finally, with the lease cleared, a single uncontended run_once sends once.
+            with control.connect_db(cfg) as conn:
+                conn.execute(
+                    "UPDATE notification_outbox SET next_attempt_at = NULL, last_attempt_at = NULL WHERE id = ?",
+                    (nid,),
+                )
+                conn.commit()
+            summary2 = delivery.run_once(cfg)
+            expect(len(sends) == 1, f"conc-H4: exactly one send for the single winner, sends={sends}")
+            expect(summary2.get("delivered", 0) == 1, f"expected delivered==1, got {summary2}")
+            print("PASS test_non_bridge_run_once_claims_row_before_send_so_concurrent_run_cannot_dup")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_db_session_closes_connection_and_preserves_commit() -> None:
+    # conc-H3: _db_session must COMMIT on clean exit (bare-idiom semantics) AND CLOSE
+    # the connection (the leak the fix targets), unlike the bare
+    # `with connect_db(cfg) as conn:` which only commits.
+    import sqlite3 as _sqlite3
+
+    control = load_module(CONTROL_PY, "arclink_control_conc_h3_db_session_control_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_conc_h3_db_session_test")
+    old_env = os.environ.copy()
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            cfg = _delivery_db_config(control, Path(tmp))
+            with control.connect_db(cfg) as setup:
+                nid = control.queue_notification(
+                    setup, target_kind="public-bot-user", target_id="tg:1",
+                    channel_kind="telegram", message="x",
+                )
+
+            captured = {}
+            with delivery._db_session(cfg) as conn:
+                captured["conn"] = conn
+                # A write WITHOUT an explicit commit must still be durable after the
+                # session exits (commit-on-clean-exit, exactly like the bare idiom).
+                conn.execute(
+                    "UPDATE notification_outbox SET delivery_error = ? WHERE id = ?",
+                    ("h3-marker", nid),
+                )
+
+            # The connection is CLOSED after the session (the leak fix): any use raises.
+            raised = False
+            try:
+                captured["conn"].execute("SELECT 1")
+            except _sqlite3.ProgrammingError:
+                raised = True
+            expect(raised, "conc-H3: _db_session must CLOSE the connection on exit")
+
+            # The un-explicitly-committed write survived (commit-on-exit preserved).
+            with control.connect_db(cfg) as verify:
+                row = verify.execute(
+                    "SELECT delivery_error FROM notification_outbox WHERE id = ?", (nid,)
+                ).fetchone()
+            expect(str(row["delivery_error"] or "") == "h3-marker", dict(row))
+            print("PASS test_db_session_closes_connection_and_preserves_commit")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_dedicated_public_agent_loop_does_not_count_delivered_on_no_op_write() -> None:
+    # Adjacent (Codex-noted): the dedicated public-agent loop
+    # (run_public_agent_turns_once) used to do summary["delivered"] += 1 even when the
+    # empty-token guarded delivered-write NO-OPed (a row a detached worker owns). The
+    # fix counts delivered ONLY when the guarded write actually finalized (rowcount>=1),
+    # mirroring the generic run_once fix.
+    control = load_module(CONTROL_PY, "arclink_control_adjacent_dedicated_loop_control_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_adjacent_dedicated_loop_test")
+    old_env = os.environ.copy()
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            cfg = _delivery_db_config(control, Path(tmp))
+            with control.connect_db(cfg) as conn:
+                owned = control.queue_notification(
+                    conn, target_kind="public-agent-turn", target_id="tg:1",
+                    channel_kind="telegram", message="owned turn",
+                    extra={"deployment_id": "arcdep_test", "prefix": "arc-pod"},
+                )
+                # A DIFFERENT detached worker owns this row (records token-B).
+                conn.execute(
+                    "UPDATE notification_outbox SET extra_json = json_set(COALESCE(extra_json,'{}'), ?, ?) WHERE id = ?",
+                    (delivery.PUBLIC_AGENT_BRIDGE_WORKER_TOKEN_JSON_PATH, "token-B", owned),
+                )
+                conn.commit()
+                # Arm an Operator alert under this row's bridge-hiccup key so we can
+                # prove resolve-on-delivery does NOT run on the no-op path.
+                hiccup_key = delivery._public_agent_bridge_hiccup_key(owned)
+                control.append_arclink_audit(
+                    conn,
+                    action=f"{control.OPERATOR_HICCUP_AUDIT_PREFIX}{hiccup_key}",
+                    actor_id="system:public_agent_bridge",
+                    target_kind="operator-hiccup",
+                    target_id=hiccup_key,
+                    reason="prior terminal attempt paged the operator",
+                )
+                conn.commit()
+                expect(
+                    control._operator_hiccup_already_armed(conn, key=hiccup_key),
+                    "precondition: hiccup must be armed before the loop runs",
+                )
+
+            # The bridge reports a SUCCESSFUL (non-deferred) turn, so the dedicated loop
+            # reaches the delivered-write path -- where the empty-token guard converts
+            # the write to a no-op because token-B (a detached worker) owns the row.
+            calls: list[dict[str, object]] = []
+
+            def fake_gateway_turn(**kwargs):
+                calls.append(kwargs)
+                return True, None  # bridged=True, no error => deliver returns None
+
+            delivery._run_public_agent_gateway_turn = fake_gateway_turn
+            summary = delivery.run_public_agent_turns_once(cfg)
+
+            expect(len(calls) == 1, str(calls))
+            # Adjacent fix: the no-op delivered-write must NOT be counted.
+            expect(summary["delivered"] == 0, f"no-op write must not count delivered: {summary}")
+            expect(summary["errors"] == 0, str(summary))
+            with control.connect_db(cfg) as conn:
+                row = conn.execute(
+                    "SELECT delivered_at FROM notification_outbox WHERE id = ?", (owned,)
+                ).fetchone()
+                expect(not str(row["delivered_at"] or "").strip(), dict(row))
+                # resolve-on-delivery must NOT have run on the no-op path.
+                expect(
+                    control._operator_hiccup_already_armed(conn, key=hiccup_key),
+                    "resolve must NOT have run on the no-op path (alert still armed)",
+                )
+            print("PASS test_dedicated_public_agent_loop_does_not_count_delivered_on_no_op_write")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_discord_operator_delivery_supports_channel_ids()
     test_public_bot_user_delivery_supports_telegram_and_discord_dm()
@@ -4476,6 +4768,10 @@ def main() -> int:
     test_public_agent_bridge_album_persist_failure_leaves_siblings_undelivered()
     test_public_agent_bridge_broker_failure_error_includes_context()
     test_generic_run_once_public_agent_turn_write_no_ops_on_worker_owned_row()
+    test_public_agent_bridge_reaper_clears_stale_token_so_row_is_finalizable()
+    test_non_bridge_run_once_claims_row_before_send_so_concurrent_run_cannot_dup()
+    test_db_session_closes_connection_and_preserves_commit()
+    test_dedicated_public_agent_loop_does_not_count_delivered_on_no_op_write()
     print("PASS all notification delivery regression tests")
     return 0
 

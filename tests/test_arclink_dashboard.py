@@ -269,6 +269,51 @@ def test_user_dashboard_uses_deployment_provider_metadata_for_model_card() -> No
     print("PASS test_user_dashboard_uses_deployment_provider_metadata_for_model_card")
 
 
+def test_user_dashboard_chutes_budget_available_cents_subtracts_open_reservations() -> None:
+    # billing-H5: the dashboard chutes inference-provider budget card must expose available_cents
+    # = max(0, remaining - open reservations) so the displayed headroom matches
+    # what the router will allow, not the settled-only remaining_cents.
+    control = load_module("arclink_control.py", "arclink_control_dashboard_available_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_available_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_available_test")
+    conn = memory_db(control)
+    prepared = seed_dashboard(control, onboarding, conn)
+    conn.execute(
+        "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
+        (
+            json.dumps(
+                {
+                    "selected_model_id": "model-default",
+                    "chutes": {  # inference provider budget block
+                        "secret_ref": f"secret://arclink/chutes/{prepared['deployment_id']}",
+                        "monthly_budget_cents": 100,
+                        "used_cents": 30,
+                    },
+                },
+                sort_keys=True,
+            ),
+            prepared["deployment_id"],
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO arclink_llm_budget_reservations (
+          reservation_id, request_id, deployment_id, user_id, reserved_cents, status, created_at
+        ) VALUES ('llmres_open', 'llmreq_open', ?, ?, 25, 'reserved', '2026-06-19T00:00:00+00:00')
+        """,
+        (prepared["deployment_id"], prepared["user_id"]),
+    )
+    conn.commit()
+
+    with temp_env({"ARCLINK_PRIMARY_PROVIDER": "chutes"}):
+        view = dashboard.read_arclink_user_dashboard(conn, user_id=prepared["user_id"])
+    budget = view["deployments"][0]["model"]["budget"]
+    expect(budget["remaining_cents"] == 70, str(budget))
+    expect(budget["reserved_cents"] == 25, str(budget))
+    expect(budget["available_cents"] == 45, f"available must subtract open reservations: {budget}")
+    print("PASS test_user_dashboard_chutes_budget_available_cents_subtracts_open_reservations")
+
+
 def test_user_dashboard_projects_staged_academy_review_status() -> None:
     control = load_module("arclink_control.py", "arclink_control_dashboard_academy_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_academy_test")
@@ -1187,6 +1232,7 @@ def test_admin_dashboard_counts_only_unrevoked_unexpired_active_sessions() -> No
 def main() -> int:
     test_user_dashboard_read_model_projects_safe_operational_summary()
     test_user_dashboard_uses_deployment_provider_metadata_for_model_card()
+    test_user_dashboard_chutes_budget_available_cents_subtracts_open_reservations()
     test_user_dashboard_projects_staged_academy_review_status()
     test_dashboard_exposes_academy_weekly_and_graduation_status()
     test_user_dashboard_share_inbox_counts_pending_owner_and_recipient_grants()

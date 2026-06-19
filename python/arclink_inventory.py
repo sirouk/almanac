@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
-import math
 import os
 import re
 import secrets
@@ -179,7 +178,20 @@ def register_inventory_machine(
     if tags is not None:
         _safe_json(tags)
 
-    wrote = False
+    # H7: the host+machine registration is one read->merge->write critical section.
+    # We call register_fleet_host(commit=False) so it borrows OUR transaction rather
+    # than owning its own -- but that means register_fleet_host's existence
+    # SELECT -> image_sync_* merge -> whole-metadata_json UPDATE only runs under a
+    # write lock if WE hold one. Without an outer BEGIN IMMEDIATE the merge runs in
+    # autocommit and a concurrent liveness metadata patch (or another re-register)
+    # racing between our read and our write can drop image_sync_* gate keys -> a host
+    # wrongly becomes placement-eligible. So we own (begin + commit/rollback) the
+    # transaction here whenever we are both in autocommit AND asked to commit; a
+    # commit=False caller is borrowing our writes into ITS txn and governs the lock.
+    own_txn = commit and not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
+    wrote = own_txn
     try:
         if not host_link and clean_capacity_slots is not None:
             wrote = True
@@ -274,10 +286,14 @@ def register_inventory_machine(
             metadata={"provider": clean_provider, "hostname": clean_hostname, "machine_host_link": host_link},
             commit=False,
         )
-        if commit:
+        if own_txn:
             conn.commit()
     except Exception:
-        if wrote:
+        # Only roll back the transaction WE own. A commit=False caller (or one that
+        # handed us an already-open txn) governs its own rollback -- we must not tear
+        # down its transaction. `wrote` is seeded to own_txn so an error that fires
+        # after BEGIN IMMEDIATE but before any write still closes our open lock.
+        if own_txn and wrote and conn.in_transaction:
             conn.rollback()
         raise
     return dict(conn.execute("SELECT * FROM arclink_inventory_machines WHERE machine_id = ?", (machine_id,)).fetchone())
@@ -514,7 +530,6 @@ def probe_inventory_machine(
         hardware = parse_probe_output(completed.stdout)
         asu_capacity = compute_asu(hardware)
         consumed = current_load(str(machine["machine_id"]), conn)
-        observed_load = max(0, int(math.ceil(float(consumed))))
     except (ArcLinkInventoryError, ArcLinkASUError) as exc:
         message = redact_then_truncate(str(exc), limit=240)
         _mark_probe_degraded(conn, machine_id=str(machine["machine_id"]), message=message)
@@ -538,7 +553,16 @@ def probe_inventory_machine(
         ),
     )
     if machine.get("machine_host_link"):
-        update_fleet_host(conn, host_id=str(machine["machine_host_link"]), status="active", observed_load=observed_load)
+        # H5: NEVER write observed_load from a probe. observed_load is the live
+        # placement counter owned exclusively by place_deployment (atomic
+        # observed_load = observed_load + 1), remove_placement, and
+        # reconcile_fleet_observed_loads. current_load() above returns the active
+        # placement COUNT read OUTSIDE any write lock; writing it back as an
+        # absolute observed_load races a placement increment that committed between
+        # our read and our write -- erasing it, so the host looks emptier than it is
+        # -> over-placement past capacity. We refresh only the host status here and
+        # leave the counter to the placement/reconcile writers.
+        update_fleet_host(conn, host_id=str(machine["machine_host_link"]), status="active")
     append_arclink_audit(
         conn,
         action="inventory_machine_probed",

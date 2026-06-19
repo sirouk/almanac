@@ -74,6 +74,8 @@ class ChutesDeploymentBoundary:
     monthly_budget_cents: int
     used_cents: int
     remaining_cents: int
+    reserved_cents: int
+    available_cents: int
     warning_threshold_percent: float
     hard_limit_percent: float
     usage_percent: float
@@ -102,6 +104,12 @@ class ChutesDeploymentBoundary:
                 "monthly_cents": self.monthly_budget_cents,
                 "used_cents": self.used_cents,
                 "remaining_cents": self.remaining_cents,
+                # billing-H5: ``remaining_cents`` is SETTLED-only, but the router
+                # subtracts still-open reservations before allowing new spend.
+                # Surface the open reservation total and the router-enforced
+                # ``available_cents`` so the UI never overstates spendable headroom.
+                "reserved_cents": self.reserved_cents,
+                "available_cents": self.available_cents,
                 "usage_percent": self.usage_percent,
                 "warning_threshold_percent": self.warning_threshold_percent,
                 "hard_limit_percent": self.hard_limit_percent,
@@ -671,6 +679,7 @@ def evaluate_chutes_deployment_boundary(
     env: Mapping[str, str] | None = None,
     billing_state: str = "",
     observe_unlimited_authorized: bool = False,
+    reserved_cents: int = 0,
 ) -> ChutesDeploymentBoundary:
     """Evaluate local Chutes credential and budget state without exposing keys.
 
@@ -762,9 +771,14 @@ def evaluate_chutes_deployment_boundary(
     else:
         isolation_mode = "missing_secret_ref"
 
+    open_reserved_cents = max(0, _clean_int(reserved_cents))
     budget_limit_cents = int(monthly_budget_cents * (hard_limit_percent / 100.0)) if monthly_budget_cents else 0
     warning_limit_cents = int(monthly_budget_cents * (warning_threshold_percent / 100.0)) if monthly_budget_cents else 0
     remaining_cents = max(0, budget_limit_cents - used_cents) if budget_limit_cents else 0
+    # billing-H5: the router subtracts still-open reservations from the settled
+    # remaining before allowing new spend, so the displayed "available" headroom
+    # must do the same or the UI overstates what the router will actually permit.
+    available_cents = max(0, remaining_cents - open_reserved_cents)
     usage_percent = round((used_cents / monthly_budget_cents) * 100.0, 2) if monthly_budget_cents else 0.0
 
     if unlimited_budget:
@@ -773,6 +787,7 @@ def evaluate_chutes_deployment_boundary(
         # effectively limitless while used_cents is still recorded for observability.
         budget_status = "unlimited"
         remaining_cents = OBSERVE_UNLIMITED_REMAINING_CENTS
+        available_cents = max(0, remaining_cents - open_reserved_cents)
     elif monthly_budget_cents <= 0:
         budget_status = "unconfigured"
     elif used_cents >= budget_limit_cents:
@@ -832,6 +847,8 @@ def evaluate_chutes_deployment_boundary(
         monthly_budget_cents=monthly_budget_cents,
         used_cents=used_cents,
         remaining_cents=remaining_cents,
+        reserved_cents=open_reserved_cents,
+        available_cents=available_cents,
         warning_threshold_percent=warning_threshold_percent,
         hard_limit_percent=hard_limit_percent,
         usage_percent=usage_percent,
@@ -841,6 +858,37 @@ def evaluate_chutes_deployment_boundary(
         billing_state=str(lifecycle.get("payment_state") or ""),
         billing_lifecycle=lifecycle,
     )
+
+
+def chutes_open_reserved_cents(conn: sqlite3.Connection, deployment_id: str) -> int:
+    """Sum of still-open (status='reserved') LLM-router reservations for a Pod.
+
+    billing-H5: settled ``remaining_cents`` ignores in-flight requests that each
+    hold an OPEN reservation not yet charged. Boundary callers pass this into
+    :func:`evaluate_chutes_deployment_boundary` so the displayed ``available_cents``
+    matches the headroom the router actually enforces. Returns 0 when the
+    reservations table is absent (e.g. router not provisioned).
+    """
+    clean_deployment_id = _clean_text(deployment_id)
+    if not clean_deployment_id:
+        return 0
+    try:
+        row = conn.execute(
+            """
+            SELECT COALESCE(SUM(reserved_cents), 0) AS reserved
+            FROM arclink_llm_budget_reservations
+            WHERE deployment_id = ? AND status = 'reserved'
+            """,
+            (clean_deployment_id,),
+        ).fetchone()
+    except sqlite3.Error:
+        return 0
+    if row is None:
+        return 0
+    try:
+        return max(0, int(row["reserved"] or 0))
+    except (KeyError, IndexError, TypeError, ValueError):
+        return 0
 
 
 def chutes_unlimited_budget_policy(metadata: Mapping[str, Any] | None = None) -> str:
@@ -909,6 +957,52 @@ def record_chutes_usage_event(
     clean_deployment_id = _clean_text(deployment_id)
     if not clean_deployment_id:
         raise ValueError("deployment_id is required")
+    # conc-C1 settlement atomicity: ``used_cents`` is read here, incremented by
+    # ``delta_cents``, and the whole metadata blob is written back. Two concurrent
+    # settlements for one deployment could read the same ``used_cents_before`` and
+    # clobber each other's delta. Take an IMMEDIATE write lock BEFORE the read so
+    # the read-modify-write is serialized (own_txn pattern: only begin our own
+    # transaction when the caller has not already opened one -- the llm_router
+    # settlement path is already inside a write transaction and provides the lock).
+    # Only manage our own transaction when the caller asked us to ``commit`` -- a
+    # ``commit=False`` caller owns the transaction lifecycle, so we must neither
+    # open nor commit one (otherwise we'd commit their in-progress batch early).
+    own_txn = commit and not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        return _record_chutes_usage_event_locked(
+            conn,
+            clean_deployment_id=clean_deployment_id,
+            usage_event=usage_event,
+            user_id=user_id,
+            env=env,
+            billing_state=billing_state,
+            commit=commit,
+            own_txn=own_txn,
+        )
+    except Exception:
+        if own_txn:
+            conn.rollback()
+        raise
+
+
+def _record_chutes_usage_event_locked(
+    conn: sqlite3.Connection,
+    *,
+    clean_deployment_id: str,
+    usage_event: Mapping[str, Any],
+    user_id: str = "",
+    env: Mapping[str, str] | None = None,
+    billing_state: str = "",
+    commit: bool = True,
+    own_txn: bool = False,
+) -> ChutesUsageIngestionResult:
+    """Read-modify-write body of :func:`record_chutes_usage_event`.
+
+    Runs under the IMMEDIATE write lock its caller took so the ``used_cents``
+    read and the metadata write are serialized against concurrent settlements.
+    """
     row = conn.execute(
         "SELECT user_id, metadata_json FROM arclink_deployments WHERE deployment_id = ?",
         (clean_deployment_id,),
@@ -950,7 +1044,7 @@ def record_chutes_usage_event(
             billing_state=billing_state,
             observe_unlimited_authorized=observe_authorized,
         )
-        if commit:
+        if commit or own_txn:
             conn.commit()
         return ChutesUsageIngestionResult(
             deployment_id=clean_deployment_id,
@@ -1029,7 +1123,7 @@ def record_chutes_usage_event(
             billing_state=billing_state,
             observe_unlimited_authorized=observe_authorized,
         )
-        if commit:
+        if commit or own_txn:
             conn.commit()
         return ChutesUsageIngestionResult(
             deployment_id=clean_deployment_id,
@@ -1041,7 +1135,7 @@ def record_chutes_usage_event(
             used_cents_after=used_cents_current,
             boundary=boundary,
         )
-    if commit:
+    if commit or own_txn:
         conn.commit()
     boundary = evaluate_chutes_deployment_boundary(
         clean_deployment_id,

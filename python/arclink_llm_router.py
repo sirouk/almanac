@@ -458,6 +458,11 @@ def _authenticate_request(config: RouterConfig, request: Request) -> tuple[dict[
             conn.close()
     except sqlite3.Error:
         return None, _router_error(503, "router_db_unavailable", "ArcLink LLM router key database is unavailable.")
+    except ValueError:
+        # regr-M5: the fail-closed router-key pepper guard raises ValueError when a
+        # real pepper is required (or in a prod domain) but unconfigured. Treat that
+        # as a clean 503 misconfiguration instead of letting it surface as a 500.
+        return None, _router_error(503, "router_misconfigured", "ArcLink LLM router key verification is misconfigured.")
     if record is None:
         return None, _router_error(401, "invalid_router_key", "ArcLink LLM router key is invalid or inactive.")
     return record, None
@@ -1113,6 +1118,54 @@ def _usage_from_sse_chunk(chunk: bytes) -> tuple[int, int, int] | None:
         if isinstance(payload, Mapping) and isinstance(payload.get("usage"), Mapping):
             return _usage_from_payload(payload, fallback_input_tokens=0, fallback_output_tokens=0)[:3]
     return None
+
+
+def _emitted_output_chars_from_sse_chunk(chunk: bytes) -> int:
+    """Length of the assistant text actually emitted in one streamed SSE chunk.
+
+    billing-H2: a stream that FAILS mid-flight after emitting chunks has still
+    been billed by the provider for the tokens it produced, but no terminal usage
+    block arrives. Summing the ``delta.content`` text across the emitted chunks
+    gives a local floor (converted to tokens) so the partial output is settled
+    instead of charging $0. Counts every completion's delta for n>1 fan-out.
+    """
+    try:
+        text = chunk.decode("utf-8")
+    except UnicodeDecodeError:
+        return 0
+    total = 0
+    for line in text.splitlines():
+        clean = line.strip()
+        if not clean.startswith("data:"):
+            continue
+        data = clean.removeprefix("data:").strip()
+        if not data or data == "[DONE]":
+            continue
+        try:
+            import json
+
+            payload = json.loads(data)
+        except Exception:
+            continue
+        if not isinstance(payload, Mapping):
+            continue
+        for choice in payload.get("choices") or []:
+            if not isinstance(choice, Mapping):
+                continue
+            delta = choice.get("delta")
+            message = choice.get("message")
+            content = None
+            if isinstance(delta, Mapping):
+                content = delta.get("content")
+            if content is None and isinstance(message, Mapping):
+                content = message.get("content")
+            if isinstance(content, str):
+                total += len(content)
+            elif isinstance(content, list):
+                for part in content:
+                    if isinstance(part, Mapping) and isinstance(part.get("text"), str):
+                        total += len(part["text"])
+    return total
 
 
 def _check_rate_limit(conn: sqlite3.Connection, *, scope: str, subject: str, limit: int) -> JSONResponse | None:
@@ -1941,11 +1994,24 @@ def _record_router_usage(
     error_summary: str = "",
     fallback_attempts: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]] = (),
     streaming_fallback: str = "",
+    settle_partial_output_tokens: int = 0,
 ) -> int:
     reservation_pricing_entry = reservation.get("reservation_model_pricing") if isinstance(reservation.get("reservation_model_pricing"), Mapping) else None
     usage_pricing_entry = get_model_catalog_entry(conn, provider="chutes", model_id=model)
     pricing_entry = usage_pricing_entry if usage_pricing_entry is not None else None
-    actual_cents = _estimate_usage_cents(config, input_tokens, output_tokens, pricing_entry) if status == "succeeded" else 0
+    partial_output_floor = max(0, int(settle_partial_output_tokens))
+    if status == "succeeded":
+        actual_cents = _estimate_usage_cents(config, input_tokens, output_tokens, pricing_entry)
+    elif partial_output_floor > 0:
+        # billing-H2: the stream failed after emitting output the provider already
+        # billed. Settle the input plus the partial output actually emitted instead
+        # of charging $0; the request status remains "failed" for analytics, but the
+        # recorded output/total tokens reflect the emitted floor for observability.
+        actual_cents = _estimate_usage_cents(config, input_tokens, partial_output_floor, pricing_entry)
+        output_tokens = partial_output_floor
+        total_tokens = max(0, int(input_tokens)) + partial_output_floor
+    else:
+        actual_cents = 0
     estimated_cents = int(reservation.get("reserved_cents") or 0)
     now = _utc_now_iso()
     usage_id = f"llmuse_{uuid.uuid4().hex[:24]}"
@@ -2015,7 +2081,11 @@ def _record_router_usage(
         ),
     )
     usage_result = None
-    if status == "succeeded":
+    # billing-H2: also settle when a FAILED stream emitted partial output the
+    # provider already billed (actual_cents > 0). The recorded request status stays
+    # "failed", but the partial cents are still charged against the deployment budget.
+    if status == "succeeded" or actual_cents > 0:
+        settled_output_tokens = max(0, int(output_tokens)) if status == "succeeded" else partial_output_floor
         conn.execute("SAVEPOINT llm_router_chutes_usage")
         try:
             usage_result = record_chutes_usage_event(
@@ -2029,8 +2099,8 @@ def _record_router_usage(
                     "source": "llm-router",
                     "observed_at": now,
                     "input_tokens": max(0, int(input_tokens)),
-                    "output_tokens": max(0, int(output_tokens)),
-                    "total_tokens": max(0, int(total_tokens)),
+                    "output_tokens": settled_output_tokens,
+                    "total_tokens": max(0, int(input_tokens)) + settled_output_tokens,
                     "delta_cents": actual_cents,
                 },
                 env={
@@ -2300,6 +2370,10 @@ async def _stream_upstream_response(
     fallback_attempts: list[dict[str, Any]] = []
     streaming_fallback = ""
     yielded_any = False
+    # billing-H2: accumulate the assistant text actually streamed so a mid-stream
+    # failure (no terminal usage block) can settle the emitted output as a floor
+    # instead of charging $0 for tokens the provider already billed.
+    emitted_output_chars = 0
     try:
         client = _upstream_client(config, request.app.state)
         for index, candidate_model in enumerate(candidates):
@@ -2386,6 +2460,10 @@ async def _stream_upstream_response(
                         if usage is not None:
                             input_tokens, output_tokens, total_tokens = usage
                             source_kind = "provider_usage"
+                        else:
+                            # billing-H2: count emitted assistant text as a local
+                            # floor in case the stream fails before any usage block.
+                            emitted_output_chars += _emitted_output_chars_from_sse_chunk(chunk)
                         yielded_any = True
                         # C2: a long stream legitimately outlives the per-chunk
                         # read timeout; refresh the reservation heartbeat (throttled)
@@ -2437,9 +2515,24 @@ async def _stream_upstream_response(
                 )
                 return
     finally:
+        settle_partial_output_tokens = 0
         if source_kind == "fallback_estimate" and status == "succeeded":
-            output_tokens = int(reservation.get("output_token_estimate") or 0)
+            # regr-M6: ``output_token_estimate`` is the PER-COMPLETION cap; an n>1
+            # request sampled the output ``effective_completions`` times, so the
+            # no-usage fallback must scale by the completion count or it under-charges
+            # an n-way stream by a factor of n.
+            per_completion_output = int(reservation.get("output_token_estimate") or 0)
+            effective_completions = max(1, int(reservation.get("effective_completions") or 1))
+            output_tokens = per_completion_output * effective_completions
             total_tokens = input_tokens + output_tokens
+        elif status != "succeeded" and yielded_any and output_tokens <= 0:
+            # billing-H2: the stream failed after emitting output. The provider has
+            # already billed the tokens it produced, so settle the partial output
+            # actually emitted (local floor) instead of charging $0. Summing the
+            # streamed assistant text covers the n>1 fan-out (every completion's
+            # delta is counted) without scaling separately. The request status stays
+            # "failed" for analytics; only the settlement floor is applied.
+            settle_partial_output_tokens = max(0, emitted_output_chars) // 4
         conn = _open_control_conn(config)
         try:
             _record_router_usage(
@@ -2450,6 +2543,7 @@ async def _stream_upstream_response(
                 model=final_model,
                 stream=True,
                 status=status,
+                settle_partial_output_tokens=settle_partial_output_tokens,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,

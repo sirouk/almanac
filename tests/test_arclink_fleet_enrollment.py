@@ -451,6 +451,134 @@ def test_attestation_accepts_valid_ipv6_wireguard_defaults() -> None:
     print("PASS test_attestation_accepts_valid_ipv6_wireguard_defaults")
 
 
+def test_consume_fleet_enrollment_preserves_image_sync_under_concurrent_gate_write() -> None:
+    # H7 (worker enrollment path): consume_fleet_enrollment must open BEGIN IMMEDIATE
+    # around the host+machine read->merge->write unit BEFORE the
+    # register_inventory_machine(commit=False) -> register_fleet_host(commit=False)
+    # chain. register_fleet_host(commit=False) only DEFERS to the caller's lock -- so if
+    # consume runs unlocked, register_fleet_host's existence SELECT -> image_sync_* merge
+    # -> whole-metadata_json UPDATE runs in autocommit, and a NEW gate value committed by
+    # a concurrent writer BETWEEN that SELECT and UPDATE is silently lost (the merge is
+    # recomputed from the stale pre-write row) -- a host can lose its image_sync_failed
+    # gate and become wrongly placement-eligible.
+    #
+    # We expose the lost-update window deterministically: interpose register_fleet_host's
+    # host existence SELECT so that, the instant it reads the host row, a SECOND
+    # connection commits a brand-new image_sync_state value. Under the fix consume holds
+    # BEGIN IMMEDIATE, so that second write BLOCKS until consume commits and lands AFTER
+    # (its value wins, unharmed). Without the lock the second write commits immediately
+    # and consume's stale-read UPDATE clobbers it.
+    import sqlite3 as _sqlite3
+    import tempfile
+
+    control = load_module("arclink_control.py", "arclink_control_consume_gate_race")
+    enrollment = load_module("arclink_fleet_enrollment.py", "arclink_fleet_enrollment_consume_gate_race")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_consume_gate_race")
+
+    hostname = "worker-consume-gate.example.test"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = f"{tmpdir}/control.sqlite3"
+        seed = _sqlite3.connect(db_path, timeout=15)
+        seed.row_factory = _sqlite3.Row
+        control.ensure_schema(seed)
+        # Pre-existing fleet host carrying the placement gate keys. The enrollment will
+        # re-register the SAME hostname (no matching inventory machine yet), so
+        # register_fleet_host takes its existing-host carryover path -- the incoming
+        # enrollment metadata sets no image_sync_* keys.
+        host = fleet.register_fleet_host(
+            seed,
+            hostname=hostname,
+            capacity_slots=4,
+            metadata={"image_sync_state": "failed", "image_sync_digest": "sha256:" + ("b" * 64)},
+        )
+        host_id = host["host_id"]
+        minted = enrollment.mint_fleet_enrollment(
+            seed,
+            created_by_user_id="operator-1",
+            secret=SECRET,
+            enrollment_id="flenr_consume_gate_race",
+        )
+        seed.commit()
+        seed.close()
+
+        import threading
+        import time as _time
+
+        state = {"fired": False, "competed": False}
+        writer_thread = {"t": None}
+
+        # The competing writer commits the AUTHORITATIVE new gate value (image_sync just
+        # succeeded). It runs on its own connection with a long busy_timeout so that if
+        # consume holds the write lock it cleanly serializes behind it; if consume does
+        # NOT hold the lock it commits immediately and is then clobbered.
+        def competing_gate_write() -> None:
+            c = _sqlite3.connect(db_path, timeout=15)
+            c.row_factory = _sqlite3.Row
+            c.execute("PRAGMA busy_timeout = 8000")
+            try:
+                import json as _json
+                cur = c.execute("SELECT metadata_json FROM arclink_fleet_hosts WHERE host_id = ?", (host_id,)).fetchone()
+                meta = _json.loads(cur["metadata_json"])
+                meta["image_sync_state"] = "ok"
+                # This UPDATE blocks until consume's BEGIN IMMEDIATE commits (fix) or
+                # commits immediately into the gap (bug).
+                c.execute("UPDATE arclink_fleet_hosts SET metadata_json = ? WHERE host_id = ?", (_json.dumps(meta), host_id))
+                c.commit()
+                state["competed"] = True
+            finally:
+                c.close()
+
+        # sqlite3.Connection.execute is read-only, so interpose via a Connection
+        # subclass: the first time register_fleet_host reads arclink_fleet_hosts by
+        # hostname, kick off the competing writer and give it a moment to attempt its
+        # write -- precisely the lost-update window between the SELECT and the UPDATE.
+        class _InterposingConnection(_sqlite3.Connection):
+            def execute(self, sql, *params):  # type: ignore[override]
+                cursor = super().execute(sql, *params)
+                if (
+                    not state["fired"]
+                    and isinstance(sql, str)
+                    and "FROM arclink_fleet_hosts" in sql
+                    and "LOWER(hostname)" in sql
+                ):
+                    state["fired"] = True
+                    t = threading.Thread(target=competing_gate_write)
+                    t.start()
+                    writer_thread["t"] = t
+                    _time.sleep(0.3)  # let the competing writer reach its UPDATE/commit
+                return cursor
+
+        reg = _sqlite3.connect(db_path, timeout=15, factory=_InterposingConnection)
+        reg.row_factory = _sqlite3.Row
+        try:
+            enrollment.consume_fleet_enrollment(
+                reg,
+                token=minted["token"],
+                payload=_attestation_payload(hostname),
+                secret=SECRET,
+            )
+        finally:
+            reg.close()
+            if writer_thread["t"] is not None:
+                writer_thread["t"].join(timeout=10)
+
+        expect(state["fired"], "interposer never saw the host existence SELECT")
+        expect(state["competed"], "competing gate writer never committed")
+
+        check = _sqlite3.connect(db_path)
+        check.row_factory = _sqlite3.Row
+        meta = json.loads(check.execute("SELECT metadata_json FROM arclink_fleet_hosts WHERE host_id = ?", (host_id,)).fetchone()["metadata_json"])
+        check.close()
+        # Under the fix the competing writer was serialized AFTER consume's locked
+        # read-merge-write, so its authoritative new value ('ok') survives. The digest
+        # gate key (set by neither writer's incoming metadata) is preserved by the
+        # carryover throughout.
+        expect(meta.get("image_sync_state") == "ok", f"concurrent gate write was lost (H7 lost-update): {meta}")
+        expect(meta.get("image_sync_digest") == "sha256:" + ("b" * 64), f"image_sync_digest gate key dropped: {meta}")
+    print("PASS test_consume_fleet_enrollment_preserves_image_sync_under_concurrent_gate_write")
+
+
 def test_fingerprint_mismatch_requires_explicit_reattest() -> None:
     control = load_module("arclink_control.py", "arclink_control_fleet_enrollment_fp_test")
     inventory = load_module("arclink_inventory.py", "arclink_inventory_fleet_enrollment_fp_test")
@@ -782,6 +910,7 @@ def main() -> int:
     test_attestation_capacity_is_capped_until_control_probe()
     test_attestation_rejects_unsafe_network_identity_values()
     test_attestation_accepts_valid_ipv6_wireguard_defaults()
+    test_consume_fleet_enrollment_preserves_image_sync_under_concurrent_gate_write()
     test_fingerprint_mismatch_requires_explicit_reattest()
     test_failed_consume_guard_rolls_back_inventory_side_effects()
     test_audit_chain_tampering_notifies_operator()
@@ -790,7 +919,7 @@ def main() -> int:
     test_hmac_root_rotation_revokes_pending_tokens_without_rendering_secret()
     test_inventory_health_verifies_chain_and_notifies_expired_enrollments()
     test_explicit_reattest_updates_fingerprint_without_rendering_it()
-    print("PASS all 18 ArcLink fleet enrollment tests")
+    print("PASS all 19 ArcLink fleet enrollment tests")
     return 0
 
 

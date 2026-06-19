@@ -43,6 +43,20 @@ UPSTREAM_ENV_KEYS = (
     "ARCLINK_UPSTREAM_DEPLOY_KEY_PATH",
     "ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE",
 )
+# Upstream env keys that name a host filesystem path which deploy.sh would read
+# as ROOT. These must be confined to private state exactly as the broker confines
+# them (arclink_operator_upgrade_broker._require_private_upstream_path).
+UPSTREAM_PRIVATE_PATH_ENV_KEYS = {
+    "ARCLINK_UPSTREAM_DEPLOY_KEY_PATH",
+    "ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE",
+}
+UPSTREAM_DEPLOY_KEY_ENABLED_DISABLED = {"", "0", "false", "no", "off"}
+# deploy.sh's compiled-in canonical upstream (bin/deploy.sh canonical_arclink_upstream_repo_url).
+# The host runner keeps an independent copy of the SAME value so that, even when no host
+# operator env names an upstream, there is still a host-immutable authority to (a) accept the
+# legitimate broker upgrade against and (b) PIN deploy.sh to -- never letting it derive the
+# upstream from the arclink-writable git origin remote.
+CANONICAL_UPSTREAM_REPO_URL = "https://github.com/sirouk/arclink.git"
 BASE_CHILD_ENV_KEYS = (
     "HOME",
     "PATH",
@@ -158,6 +172,200 @@ def _require_repo_script(repo_dir: Path, relative: str) -> Path:
     return path
 
 
+def _require_private_upstream_path(value: str, *, label: str, private_dir: Path) -> str:
+    """Confine an upstream host path to private state with no symlink components.
+
+    This independently mirrors arclink_operator_upgrade_broker._require_private_upstream_path
+    so a queue file written directly by the arclink service user (bypassing the broker
+    HMAC) still cannot point deploy.sh -- running as ROOT -- at a key/known_hosts file
+    outside private state or through a symlink.
+    """
+    path = Path(value)
+    if not path.is_absolute():
+        raise ValueError(f"operator upgrade host runner upstream {label} must be an absolute private-state path")
+    private_root = private_dir.resolve(strict=False)
+    resolved = path.resolve(strict=False)
+    try:
+        resolved.relative_to(private_root)
+    except ValueError:
+        raise ValueError(f"operator upgrade host runner upstream {label} must stay under private state") from None
+    try:
+        rel_path = path.relative_to(private_dir)
+    except ValueError:
+        raise ValueError(f"operator upgrade host runner upstream {label} must stay under private state") from None
+    try:
+        root_stat = private_dir.lstat()
+    except OSError:
+        raise ValueError("operator upgrade host runner upstream private state root is unavailable") from None
+    if stat.S_ISLNK(root_stat.st_mode):
+        raise ValueError("operator upgrade host runner upstream private state root must not be a symlink")
+    current = private_dir
+    for index, part in enumerate(rel_path.parts):
+        if part in ("", ".") or part == "..":
+            raise ValueError(f"operator upgrade host runner upstream {label} must stay under private state")
+        current = current / part
+        try:
+            item_stat = current.lstat()
+        except OSError:
+            if index < len(rel_path.parts) - 1:
+                raise ValueError(f"operator upgrade host runner upstream {label} parent path is unavailable") from None
+            break
+        if stat.S_ISLNK(item_stat.st_mode):
+            raise ValueError(f"operator upgrade host runner upstream {label} must not be a symlink")
+        if index < len(rel_path.parts) - 1 and not stat.S_ISDIR(item_stat.st_mode):
+            raise ValueError(f"operator upgrade host runner upstream {label} parent is not a directory")
+    return value
+
+
+def _trusted_deploy_key_uids() -> set[int]:
+    """UIDs allowed to OWN an enabled upstream deploy key.
+
+    Root (0) and the host runner's own effective uid (it runs as root via the systemd
+    oneshot) are always trusted. An operator may extend the set with a HOST-IMMUTABLE
+    process env. The arclink service account is deliberately NOT in this set, so a key the
+    unprivileged caller plants in (arclink-writable) private state is rejected.
+    """
+    trusted: set[int] = {0}
+    try:
+        trusted.add(os.geteuid())
+    except AttributeError:  # pragma: no cover - non-POSIX
+        pass
+    configured = str(os.environ.get("ARCLINK_OPERATOR_UPGRADE_HOST_DEPLOY_KEY_TRUSTED_UIDS") or "")
+    for chunk in re.split(r"[,\s]+", configured):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            trusted.add(int(chunk))
+        except ValueError:
+            continue
+    return trusted
+
+
+def _require_existing_trusted_deploy_key(value: str) -> None:
+    """Require an enabled upstream deploy key to EXIST as a trusted-owned regular file.
+
+    The private-state dir is arclink-writable, so DEPLOY_KEY_ENABLED + a confined path is not
+    enough on its own: an attacker could plant a key there. This requires the leaf to (a) exist,
+    (b) be a regular file (not a symlink/dir/dev node), (c) be owned by a trusted uid (root /
+    the runner's own uid / an operator-configured uid -- never the arclink account), and (d)
+    not be group/world writable. Defense-in-depth once the URL is pinned to the canonical
+    upstream (an attacker key then only authenticates to the REAL public repo), but tightened
+    regardless to deny an arclink-plantable key and reject a non-existent path outright.
+    """
+    path = Path(value)
+    try:
+        leaf_stat = path.lstat()
+    except OSError:
+        raise ValueError("operator upgrade host runner upstream deploy key file does not exist") from None
+    if stat.S_ISLNK(leaf_stat.st_mode):
+        raise ValueError("operator upgrade host runner upstream deploy key must not be a symlink")
+    if not stat.S_ISREG(leaf_stat.st_mode):
+        raise ValueError("operator upgrade host runner upstream deploy key is not a regular file")
+    if leaf_stat.st_uid not in _trusted_deploy_key_uids():
+        raise ValueError(
+            "operator upgrade host runner upstream deploy key is not owned by a trusted account"
+        )
+    if leaf_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise ValueError("operator upgrade host runner upstream deploy key is group/world writable")
+
+
+def _normalize_repo_url(value: str) -> str:
+    clean = str(value or "").strip()
+    if clean.endswith(".git"):
+        clean = clean[:-4]
+    return clean.rstrip("/")
+
+
+def _allowlisted_upstream_repo_urls() -> set[str]:
+    """Resolve the canonical upstream repo URL(s) from HOST-IMMUTABLE sources only.
+
+    The queue writer (arclink service user) MUST NOT be able to influence any of these.
+    Earlier code derived an allowed URL from `git -C <repo> remote get-url origin`, but the
+    arclink user OWNS the checkout and can rewrite .git/config to poison `origin`; that source
+    is therefore REMOVED here. The only authorities trusted now are ones the unprivileged caller
+    cannot write:
+      * the host runner's ARCLINK_OPERATOR_UPGRADE_HOST_UPSTREAM_REPO_URL_ALLOWLIST process env,
+      * the host runner's ARCLINK_UPSTREAM_REPO_URL process env (set in the systemd unit), and
+      * the compiled-in canonical default (mirrors deploy.sh's own compiled-in default).
+    The compiled-in default guarantees the allowlist is never empty, so a queued override is only
+    ever accepted when it matches the real upstream and the legitimate broker upgrade still passes.
+    Anything the queue file requests must match one of these, normalized.
+    """
+    allow: set[str] = set()
+    explicit = str(os.environ.get("ARCLINK_OPERATOR_UPGRADE_HOST_UPSTREAM_REPO_URL_ALLOWLIST") or "")
+    for chunk in re.split(r"[,\n]", explicit):
+        normalized = _normalize_repo_url(chunk)
+        if normalized:
+            allow.add(normalized)
+    host_configured = _normalize_repo_url(os.environ.get("ARCLINK_UPSTREAM_REPO_URL") or "")
+    if host_configured:
+        allow.add(host_configured)
+    canonical = _normalize_repo_url(CANONICAL_UPSTREAM_REPO_URL)
+    if canonical:
+        allow.add(canonical)
+    return allow
+
+
+def _host_pinned_upstream_repo_url() -> str:
+    """The single HOST-IMMUTABLE upstream URL deploy.sh must be PINNED to.
+
+    When a request omits ARCLINK_UPSTREAM_REPO_URL we do NOT let deploy.sh fall through to its
+    own default (which reads the arclink-writable git origin remote). Instead the host runner
+    pins this value into the child env. Precedence is host-immutable only: the host runner's
+    ARCLINK_UPSTREAM_REPO_URL process env (systemd unit), else the compiled-in canonical default.
+    The explicit allowlist env is deliberately NOT used for pinning because it may enumerate
+    several URLs with no single authoritative choice.
+    """
+    host_configured = str(os.environ.get("ARCLINK_UPSTREAM_REPO_URL") or "").strip()
+    if host_configured:
+        return host_configured
+    return CANONICAL_UPSTREAM_REPO_URL
+
+
+def _validated_upstream(upstream: Any, *, priv_dir: Path) -> dict[str, str]:
+    """Independently re-validate the queue file's upstream env before it reaches deploy.sh.
+
+    deploy.sh runs as ROOT in run_operator_upgrade mode and will git-clone+run the
+    ARCLINK_UPSTREAM_REPO_URL when DEPLOY_KEY_ENABLED=1. The host runner must therefore
+    NOT trust the queued upstream blindly (the old code only passed it through
+    _single_line). This load-bearing confinement holds even for a direct queue write
+    that never went through the broker HMAC.
+    """
+    normalized: dict[str, str] = {}
+    if not isinstance(upstream, dict):
+        return normalized
+    for key in UPSTREAM_ENV_KEYS:
+        value = _single_line(upstream.get(key), label=key, allow_blank=True, max_chars=4096)
+        if not value:
+            continue
+        if key in UPSTREAM_PRIVATE_PATH_ENV_KEYS:
+            value = _require_private_upstream_path(value, label=key, private_dir=priv_dir)
+        normalized[key] = value
+    repo_url = normalized.get("ARCLINK_UPSTREAM_REPO_URL")
+    if repo_url:
+        allow = _allowlisted_upstream_repo_urls()
+        # `allow` always contains at least the compiled-in canonical default, so it is never
+        # empty; a queued URL is honored only when it matches a HOST-IMMUTABLE authority. A
+        # poisoned git origin no longer feeds this set.
+        if _normalize_repo_url(repo_url) not in allow:
+            raise ValueError("operator upgrade host runner upstream repo URL is not allowlisted")
+    enabled = str(normalized.get("ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED") or "").strip().lower()
+    if enabled not in UPSTREAM_DEPLOY_KEY_ENABLED_DISABLED:
+        # An enabled deploy key is the path deploy.sh uses to authenticate the clone as
+        # root; only honor it when a confined (private-state, no-symlink) key path is set
+        # AND the key file actually exists. The private-state dir is arclink-writable, so an
+        # attacker could otherwise toggle DEPLOY_KEY_ENABLED with a path to a key they plant;
+        # requiring existence + root/trusted ownership rejects an arclink-plantable key.
+        key_path = normalized.get("ARCLINK_UPSTREAM_DEPLOY_KEY_PATH")
+        if not key_path:
+            raise ValueError(
+                "operator upgrade host runner upstream deploy key enabled without a private-state key path"
+            )
+        _require_existing_trusted_deploy_key(key_path)
+    return normalized
+
+
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
@@ -175,8 +383,11 @@ def _operator_timeout(request_body: dict[str, Any]) -> int:
 
 def _request_expiry(request_body: dict[str, Any], *, timeout_seconds: int) -> int:
     raw_created_at = request_body.get("created_at")
+    # M1: a queued request MUST carry created_at. A direct queue write that omits
+    # it would otherwise never expire (the old "blank -> no-expiry" path). The
+    # legitimate broker always stamps created_at (see broker _run_host_runner_request).
     if raw_created_at in (None, ""):
-        return 0
+        raise ValueError("operator upgrade host runner created_at is required")
     try:
         created_at = int(str(raw_created_at).strip())
     except (TypeError, ValueError):
@@ -225,12 +436,22 @@ def _operator_env(request_body: dict[str, Any], *, repo_dir: Path, priv_dir: Pat
         if value:
             env[key] = value
     env.setdefault("RUNTIME_DIR", "/opt/arclink/runtime")
+    # request_body here is the NORMALIZED request whose "upstream" already passed
+    # _validated_upstream (allowlisted repo URL, confined+existing key path). Re-confirm the
+    # single-line shape defensively before it reaches root deploy.sh.
     upstream = request_body.get("upstream")
     if isinstance(upstream, dict):
         for key in UPSTREAM_ENV_KEYS:
             value = _single_line(upstream.get(key), label=key, allow_blank=True, max_chars=4096)
             if value:
                 env[key] = value
+    # PIN the upstream repo URL to a HOST-IMMUTABLE value whenever the request did not carry an
+    # (allowlisted) one. Without this, root deploy.sh would derive its default from
+    # `git -C <repo> remote get-url origin`, which the arclink service user can poison by
+    # rewriting .git/config. Pinning the canonical URL means an omitted-upstream request can
+    # never steer the root clone at an attacker remote.
+    if not env.get("ARCLINK_UPSTREAM_REPO_URL"):
+        env["ARCLINK_UPSTREAM_REPO_URL"] = _host_pinned_upstream_repo_url()
     return env
 
 
@@ -346,14 +567,9 @@ def _validate_request(request_body: dict[str, Any], *, repo_dir: Path, priv_dir:
         "container_priv_dir": _container_priv_dir_value(request_body),
         "upstream": {},
     }
-    upstream = request_body.get("upstream")
-    if isinstance(upstream, dict):
-        normalized_upstream: dict[str, str] = {}
-        for key in UPSTREAM_ENV_KEYS:
-            value = _single_line(upstream.get(key), label=key, allow_blank=True, max_chars=4096)
-            if value:
-                normalized_upstream[key] = value
-        normalized["upstream"] = normalized_upstream
+    normalized["upstream"] = _validated_upstream(
+        request_body.get("upstream"), priv_dir=priv_dir
+    )
     if operation == "run_pin_upgrade":
         install_items = request_body.get("install_items")
         if not isinstance(install_items, list) or not install_items:

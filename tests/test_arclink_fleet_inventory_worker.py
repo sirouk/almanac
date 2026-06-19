@@ -249,6 +249,7 @@ def test_worker_uses_fleet_host_metadata_ssh_endpoint_without_inventory_machine(
         )
         """
     )
+    conn.commit()
     seen: list[tuple[str, str]] = []
 
     def runner(host_row, kind):
@@ -328,6 +329,7 @@ def test_worker_uses_container_safe_probe_for_docker_local_starter() -> None:
         )
         """
     )
+    conn.commit()
     previous = os.environ.get("ARCLINK_DOCKER_MODE")
     os.environ["ARCLINK_DOCKER_MODE"] = "1"
     try:
@@ -367,6 +369,7 @@ def test_worker_uses_container_safe_probe_for_legacy_control_reserve() -> None:
         )
         """
     )
+    conn.commit()
     previous = os.environ.get("ARCLINK_DOCKER_MODE")
     os.environ["ARCLINK_DOCKER_MODE"] = "1"
     try:

@@ -34,6 +34,7 @@ from arclink_control import (
     utc_now_iso,
 )
 from arclink_executor import (
+    _SUBPROCESS_LONG_TIMEOUT as _EXECUTOR_LONG_OP_TIMEOUT_SECONDS,
     ArcLinkExecutor,
     DockerComposeApplyRequest,
     DockerComposeLifecycleRequest,
@@ -49,7 +50,37 @@ DEFAULT_GC_DAYS = 7
 # refused). Recovery rolls it back to a terminal failed state and releases the
 # idempotency row so the deployment can be migrated again.
 MIGRATION_RUNNING_LEASE_SECONDS_ENV = "ARCLINK_POD_MIGRATION_RUNNING_LEASE_SECONDS"
-DEFAULT_MIGRATION_RUNNING_LEASE_SECONDS = 3600
+# Round 3 / FIX 2 (lease > max-uninterrupted-op duration). The heartbeat
+# (_beat_or_abort) only fires AT STEP BOUNDARIES, never DURING a single executor
+# call. A single migration step -- most importantly docker_compose_apply -- can
+# legitimately run for far longer than one _SUBPROCESS_LONG_TIMEOUT: the SSH
+# Docker runner chains mkdir (short) + rsync of the whole deployment root
+# (_SUBPROCESS_LONG_TIMEOUT) + bind prepare + `docker compose up` (a SECOND
+# _SUBPROCESS_LONG_TIMEOUT) + remote secret cleanup, all without a heartbeat in
+# between. If the stale/recovery lease were shorter than that worst case, a
+# genuinely-alive worker sitting inside one apply could be declared stale and
+# recovered while it is still applying -- exactly the Docker-flapping window this
+# round closes (mirrors the LLM reaper TTL > read_timeout fix).
+#
+# So the FLOOR for the lease is: the longest a single migration step can run
+# WITHOUT beating the heartbeat. We model the apply as up to TWO back-to-back
+# long executor ops (rsync + compose up) plus headroom for the short ops and the
+# migration-capture helper (its own ARCLINK_MIGRATION_CAPTURE_HELPER_TIMEOUT_SECONDS,
+# default 300). The default lease (1h) already exceeds this floor with margin;
+# the floor is enforced so an operator who SHORTENS the lease via env can never
+# push it below the point where an in-flight apply would be falsely recovered.
+# The relationship that must always hold:
+#     lease_seconds >= (2 * _SUBPROCESS_LONG_TIMEOUT) + margin
+# i.e. a worker actively inside ONE migration step can never cross the lease
+# before that step returns and the next heartbeat fires.
+_MAX_UNINTERRUPTED_MIGRATION_OP_SECONDS = 2 * int(_EXECUTOR_LONG_OP_TIMEOUT_SECONDS)
+_MIGRATION_LEASE_SAFETY_MARGIN_SECONDS = 600
+MINIMUM_MIGRATION_RUNNING_LEASE_SECONDS = (
+    _MAX_UNINTERRUPTED_MIGRATION_OP_SECONDS + _MIGRATION_LEASE_SAFETY_MARGIN_SECONDS
+)
+# Default lease stays generous and is clamped up to the floor above so the default
+# is always heartbeat-safe even if the executor timeout grows.
+DEFAULT_MIGRATION_RUNNING_LEASE_SECONDS = max(3600, MINIMUM_MIGRATION_RUNNING_LEASE_SECONDS)
 ROOT_CAPTURE_OPT_IN_ENV = "ARCLINK_ACTION_WORKER_ALLOW_ROOT_MIGRATION_CAPTURE"
 MIGRATION_CAPTURE_HELPER_URL_ENV = "ARCLINK_MIGRATION_CAPTURE_HELPER_URL"
 MIGRATION_CAPTURE_HELPER_TOKEN_ENV = "ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN"
@@ -67,6 +98,36 @@ Verifier = Callable[[sqlite3.Connection, Mapping[str, Any], Mapping[str, Any]], 
 
 def _migration_id() -> str:
     return f"mig_{secrets.token_hex(12)}"
+
+
+# C2: per-attempt ownership nonce. The token lives inside rollback_metadata_json
+# under this key so no schema change is needed. A worker "owns" a running
+# migration only while the DB row carries the token it stamped. The recovery path
+# ROTATES the token to a fresh value in the same atomic CAS that claims a stale
+# row, which instantly revokes the original (possibly-still-alive) live worker's
+# ownership: that worker's _mark_success / _mark_rollback / heartbeat all guard on
+# the token and so begin to fail (rowcount 0 == ownership lost) instead of
+# continuing to drive Docker lifecycle work or land a terminal status under a row
+# another worker is recovering.
+# NOTE: the key deliberately avoids the substrings "token"/"key"/"secret" because
+# the boundary secret-material guard (path_requires_secret_ref) would otherwise
+# reject this non-secret ownership nonce as plaintext secret material. "_owner_nonce"
+# is an opaque per-attempt id, not a credential.
+OWNER_TOKEN_KEY = "_owner_nonce"
+# JSON path of the nonce inside rollback_metadata_json, used by the SQL guards.
+_OWNER_TOKEN_JSON_PATH = f"$.{OWNER_TOKEN_KEY}"
+
+
+def _owner_token() -> str:
+    return f"own_{secrets.token_hex(16)}"
+
+
+def _row_owner_token(row: Mapping[str, Any]) -> str:
+    """Read the ownership token a worker holds for ``row`` (empty if none)."""
+    meta = json_loads_safe(str(row.get("rollback_metadata_json") or "{}"))
+    if isinstance(meta, Mapping):
+        return str(meta.get(OWNER_TOKEN_KEY) or "")
+    return ""
 
 
 def _placement_id() -> str:
@@ -265,15 +326,17 @@ def _active_live_migration(
     return None
 
 
-def _stranded_running_migration(conn: sqlite3.Connection, *, deployment_id: str) -> dict[str, Any] | None:
-    """Return a non-dry-run migration of this deployment still stuck in 'running'.
+def _stranded_running_migrations(conn: sqlite3.Connection, *, deployment_id: str) -> list[dict[str, Any]]:
+    """Return ALL non-dry-run migrations of this deployment still stuck in 'running'.
 
     Lease-expiry filtering is left to _recover_stale_running_migration; this only
-    surfaces the candidate row.
+    surfaces the candidate rows. M4: a crashed worker can strand more than one row
+    over time, so recovery loops over every stale 'running' row, not just the
+    oldest one.
     """
     clean = str(deployment_id or "").strip()
     if not clean:
-        return None
+        return []
     rows = conn.execute(
         """
         SELECT *
@@ -284,12 +347,17 @@ def _stranded_running_migration(conn: sqlite3.Connection, *, deployment_id: str)
         """,
         (clean,),
     ).fetchall()
-    for raw in rows:
-        row = dict(raw)
-        if _row_is_dry_run(row):
-            continue
-        return row
-    return None
+    return [dict(raw) for raw in rows if not _row_is_dry_run(dict(raw))]
+
+
+def _stranded_running_migration(conn: sqlite3.Connection, *, deployment_id: str) -> dict[str, Any] | None:
+    """Return the oldest non-dry-run migration of this deployment stuck in 'running'.
+
+    Retained for callers/tests that only need a single candidate; recovery in
+    migrate_pod loops over _stranded_running_migrations.
+    """
+    candidates = _stranded_running_migrations(conn, deployment_id=deployment_id)
+    return candidates[0] if candidates else None
 
 
 def _resolve_target_host(
@@ -568,9 +636,46 @@ def _copy_capture(source_root: Path, capture_dir: Path) -> dict[str, Any]:
     return {"files": files, "file_count": len(files)}
 
 
+def _recover_orphan_prev_backup(target_root: Path) -> bool:
+    """M3: restore a same-root materialize that crashed between its two os.replace calls.
+
+    The same-root path does ``os.replace(target_root, backup_root)`` then
+    ``os.replace(tmp_root, target_root)``. A crash between the two leaves
+    target_root MISSING and an orphan ``.{name}.arclink-prev-<pid>`` backup that
+    nothing garbage-collects, so the deployment's live data is sitting in a hidden
+    sibling. On the next materialize, if target_root is gone, scan the parent for
+    that backup and move it back into place. Returns True when a backup was
+    restored.
+    """
+    if target_root.exists() or target_root.is_symlink():
+        return False
+    parent = target_root.parent
+    if not parent.exists():
+        return False
+    prefix = f".{target_root.name}.arclink-prev-"
+    backups = sorted(p for p in parent.iterdir() if p.name.startswith(prefix))
+    if not backups:
+        return False
+    # Restore the first backup; any extras are stale leftovers and are removed.
+    restore = backups[0]
+    os.replace(restore, target_root)
+    for extra in backups[1:]:
+        if extra.is_symlink() or extra.is_file():
+            extra.unlink()
+        else:
+            shutil.rmtree(extra, ignore_errors=True)
+    return True
+
+
 def _materialize_capture(capture_dir: Path, target_root: Path, *, source_root: Path | None = None) -> None:
     staged_root = capture_dir / "source-root"
     target_root.parent.mkdir(parents=True, exist_ok=True)
+
+    # M3: if a previous same-root materialize crashed between its two os.replace
+    # calls, target_root is missing and the live data is in an orphan
+    # .arclink-prev-* backup. Restore it before deciding how to materialize so we
+    # never treat a recoverable crash as "target absent" and lose the backup.
+    _recover_orphan_prev_backup(target_root)
 
     # H4: when the migration target root IS the live source root (a "current"
     # in-place migration), the data already lives at target_root. The old
@@ -950,12 +1055,73 @@ def _mark_rollback(
     verification: Mapping[str, Any],
     error: str,
     lifecycle_metadata: Mapping[str, Any] | None = None,
-) -> None:
+) -> bool:
+    """Roll a 'running' migration back to terminal 'rolled_back'.
+
+    C1/C2 fencing: the migration-row flip is conditional on ``status = 'running'``
+    AND the caller's ownership token, and is claimed BEFORE any placement mutation
+    or capture cleanup. If the fenced claim does not match exactly one row --
+    because another worker already drove this migration to a terminal state
+    (succeeded / failed / rolled_back), a slow-but-alive run committed
+    ``succeeded`` first, or a recovery rotated the ownership token out from under
+    this worker -- this is a no-op: no placements are touched, no capture is
+    removed, and the live serving target is never clobbered. Returns True when the
+    rollback was applied, False on no-op.
+
+    Atomicity (C2): the claim, EVERY placement mutation, and the final terminal
+    UPDATE all run inside ONE ``BEGIN IMMEDIATE`` transaction. The claim is NOT
+    committed up front (an earlier version did, which let a concurrent
+    ``succeeded`` land between the claim and the placement mutations and produce a
+    half-rolled-back state). Holding the write lock through the DB work means a
+    success can never interleave, and the final guarded UPDATE re-asserts the claim
+    so a lost claim aborts the whole rollback rather than half-applying it.
+
+    FIX 3 (write-lock vs filesystem cleanup): the SLOW capture-dir ``rmtree`` is
+    NO LONGER performed under that write lock. The DB claim + placement mutation +
+    terminal UPDATE COMMIT FIRST (a short writer lock that no longer contends with
+    place_deployment across a multi-second/minute filesystem delete); only then is
+    the capture rmtree run, OUTSIDE the lock, with its actual result recorded in a
+    short follow-up UPDATE. The row is already terminal and ownership-fenced by
+    then, so the deferred cleanup cannot race a concurrent terminal transition.
+    """
     now = utc_now_iso()
+    owner_token = _row_owner_token(row)
+    # Fence first, inside a single immediate transaction that we hold through the
+    # placement mutations: claim the migration row only while it is still 'running'
+    # and still owned by this worker. The final row UPDATE repeats this guard, but
+    # claiming the status flip up front under a held write lock means a loser of the
+    # race never mutates placements or deletes a capture that a concurrent terminal
+    # transition is relying on.
+    own_txn = _begin_immediate_if_needed(conn)
+    try:
+        claimed = conn.execute(
+            "UPDATE arclink_pod_migrations SET updated_at = ? "
+            "WHERE migration_id = ? AND status = 'running' "
+            "AND COALESCE(json_extract(rollback_metadata_json, ?), '') = ?",
+            (now, str(row["migration_id"]), _OWNER_TOKEN_JSON_PATH, owner_token),
+        )
+        if claimed.rowcount != 1:
+            # The row is no longer 'running' (terminal already, or another worker
+            # won the recovery race / rotated the token). Do nothing destructive.
+            if own_txn and conn.in_transaction:
+                conn.rollback()
+            return False
+        # NOTE: intentionally NOT committing here -- the write lock is held through
+        # every placement mutation below and the final terminal UPDATE.
+    except Exception:
+        if own_txn and conn.in_transaction:
+            conn.rollback()
+        raise
     rollback_metadata = json_loads_safe(str(row.get("rollback_metadata_json") or "{}"))
     if not isinstance(rollback_metadata, Mapping):
         rollback_metadata = {}
-    capture_cleanup = _cleanup_rolled_back_capture(row)
+    # FIX 3: plan the capture cleanup (fast, stat-only) under the lock; the slow
+    # rmtree is deferred until AFTER the terminal commit so the SQLite writer lock
+    # is not held across the filesystem delete (which contends with place_deployment
+    # and other writers). ``capture_path_to_remove`` is the directory to rmtree once
+    # the row is committed terminal; ``capture_cleanup`` is the optimistic result we
+    # record now and confirm/overwrite in a short follow-up UPDATE after the rmtree.
+    capture_cleanup, capture_path_to_remove = _plan_rolled_back_capture_cleanup(row)
     rollback_payload = dict(rollback_metadata)
     rollback_payload.update(
         {
@@ -1022,7 +1188,12 @@ def _mark_rollback(
             "UPDATE arclink_deployment_placements SET status = 'active', removed_at = '' WHERE placement_id = ?",
             (str(row["source_placement_id"]),),
         )
-    conn.execute(
+    # Preserve the ownership token in the terminal payload so the row's recorded
+    # owner stays consistent (the row is terminal now, so it is no longer load-
+    # bearing, but keeping it avoids surprising a reader of rollback_metadata_json).
+    if owner_token:
+        rollback_payload[OWNER_TOKEN_KEY] = owner_token
+    finalize = conn.execute(
         """
         UPDATE arclink_pod_migrations
         SET status = 'rolled_back',
@@ -1032,18 +1203,34 @@ def _mark_rollback(
             source_garbage_collected_at = ?,
             updated_at = ?,
             completed_at = ?
-        WHERE migration_id = ?
+        WHERE migration_id = ? AND status = 'running'
+          AND COALESCE(json_extract(rollback_metadata_json, ?), '') = ?
         """,
         (
             _json_dumps(verification),
             _json_dumps(rollback_payload),
             error[:1000],
-            now if capture_cleanup.get("removed") or capture_cleanup.get("missing") else "",
+            # FIX 3: only stamp source_garbage_collected_at under the lock when the
+            # capture is already gone (missing, nothing to remove). When we still
+            # have to rmtree (capture_path_to_remove is set) leave it blank here and
+            # stamp it in the post-commit follow-up UPDATE once the rmtree succeeds,
+            # so a deferred-rmtree failure never falsely marks the source GC'd.
+            now if (capture_path_to_remove is None and (capture_cleanup.get("removed") or capture_cleanup.get("missing"))) else "",
             now,
             now,
             str(row["migration_id"]),
+            _OWNER_TOKEN_JSON_PATH,
+            owner_token,
         ),
     )
+    if finalize.rowcount != 1:
+        # The claim no longer holds at finalize time. Because the whole rollback
+        # ran under one held write lock this should be impossible, but if it ever
+        # happens, abort the entire rollback (placement mutations included) rather
+        # than leave a half-rolled-back state behind.
+        if own_txn and conn.in_transaction:
+            conn.rollback()
+        return False
     append_arclink_event(
         conn,
         subject_kind="deployment",
@@ -1062,23 +1249,78 @@ def _mark_rollback(
         metadata={"migration_id": str(row["migration_id"])},
         commit=False,
     )
+    # FIX 3: COMMIT the claim + placement mutations + terminal UPDATE now, releasing
+    # the SQLite writer lock. The row is already terminal ('rolled_back') and fenced
+    # by the ownership token, so the deferred filesystem cleanup below cannot race a
+    # concurrent terminal transition. This shortens the writer-lock hold to the DB
+    # work only -- the slow rmtree no longer blocks place_deployment et al.
     conn.commit()
 
+    # Now perform the slow capture rmtree OUTSIDE the write lock, then record its
+    # actual result in a short follow-up UPDATE (the in-row metadata was committed
+    # optimistically above). The row is terminal, so this update is unguarded by the
+    # ownership token; it only refines capture_cleanup / source_garbage_collected_at.
+    if capture_path_to_remove is not None:
+        actual_cleanup = _perform_capture_rmtree(capture_path_to_remove)
+        rollback_payload["capture_cleanup"] = actual_cleanup
+        cleanup_done = bool(actual_cleanup.get("removed") or actual_cleanup.get("missing"))
+        conn.execute(
+            "UPDATE arclink_pod_migrations "
+            "SET rollback_metadata_json = ?, source_garbage_collected_at = ?, updated_at = ? "
+            "WHERE migration_id = ? AND status = 'rolled_back'",
+            (
+                _json_dumps(rollback_payload),
+                utc_now_iso() if cleanup_done else "",
+                utc_now_iso(),
+                str(row["migration_id"]),
+            ),
+        )
+        conn.commit()
+    return True
 
-def _cleanup_rolled_back_capture(row: Mapping[str, Any]) -> dict[str, Any]:
+
+def _plan_rolled_back_capture_cleanup(row: Mapping[str, Any]) -> tuple[dict[str, Any], Path | None]:
+    """FAST capture-cleanup planning: validate the path and check existence only.
+
+    Round 3 / FIX 3: the slow ``rmtree`` is no longer performed under the
+    ``_mark_rollback`` write lock. This split does the cheap stat-only work (path
+    safety + existence) and returns ``(plan, path_to_remove)``:
+      * ``path_to_remove`` is the directory to ``rmtree`` OUTSIDE the lock, or
+        None when there is nothing safe/present to remove.
+      * ``plan`` is the optimistic cleanup result recorded in the terminal row's
+        rollback_metadata under the lock. For the ``removed`` case it records
+        ``{"removed": True}`` optimistically; the post-commit ``rmtree`` then
+        confirms (or overwrites with an error) via a short follow-up UPDATE.
+    """
     raw = str(row.get("capture_dir") or "").strip()
     if not raw:
-        return {"removed": False, "reason": "no_capture_dir"}
+        return {"removed": False, "reason": "no_capture_dir"}, None
     path = Path(raw)
     if ".migrations" not in path.parts:
-        return {"removed": False, "reason": "unsafe_capture_dir"}
+        return {"removed": False, "reason": "unsafe_capture_dir"}, None
     if not path.exists():
-        return {"removed": False, "missing": True}
+        return {"removed": False, "missing": True}, None
+    return {"removed": True}, path
+
+
+def _perform_capture_rmtree(path: Path) -> dict[str, Any]:
+    """SLOW capture cleanup: the actual filesystem ``rmtree``, run OUTSIDE any DB
+    write lock (Round 3 / FIX 3)."""
     try:
         shutil.rmtree(path)
     except OSError as exc:
         return {"removed": False, "error": str(exc)[:240]}
     return {"removed": True}
+
+
+def _cleanup_rolled_back_capture(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Combined plan+rmtree, retained for callers/tests that want the old one-shot
+    behavior. _mark_rollback no longer uses this (it splits the slow rmtree out of
+    the write lock); kept so the cleanup logic has a single tested entry point."""
+    plan, path = _plan_rolled_back_capture_cleanup(row)
+    if path is None:
+        return plan
+    return _perform_capture_rmtree(path)
 
 
 def _record_pod_migration_health(conn: sqlite3.Connection, *, row: Mapping[str, Any], checked_at: str) -> None:
@@ -1129,9 +1371,19 @@ def _mark_migration_started(
             )
         _require_target_host_available(_host(conn, str(current["target_host_id"])))
         now = utc_now_iso()
+        # C2: stamp a fresh ownership token into rollback_metadata_json in the SAME
+        # atomic UPDATE that flips planned -> running. This worker now exclusively
+        # owns the running row; every long-running step and terminal mark guards on
+        # this token, so a stale-lease recovery that later rotates the token out can
+        # be detected as "ownership lost".
+        token = _owner_token()
         conn.execute(
-            "UPDATE arclink_pod_migrations SET status = 'running', updated_at = ? WHERE migration_id = ? AND status = 'planned'",
-            (now, str(current["migration_id"])),
+            "UPDATE arclink_pod_migrations "
+            "SET status = 'running', "
+            "    rollback_metadata_json = json_set(COALESCE(NULLIF(rollback_metadata_json, ''), '{}'), ?, ?), "
+            "    updated_at = ? "
+            "WHERE migration_id = ? AND status = 'planned'",
+            (_OWNER_TOKEN_JSON_PATH, token, now, str(current["migration_id"])),
         )
         append_arclink_event(
             conn,
@@ -1157,6 +1409,55 @@ def _mark_migration_started(
         if started_txn and conn.in_transaction:
             conn.rollback()
         raise
+
+
+def _heartbeat_running_migration(
+    conn: sqlite3.Connection,
+    migration_id: str,
+    *,
+    owner_token: str = "",
+) -> tuple[str, bool]:
+    """Touch updated_at on a still-owned 'running' migration; report ownership.
+
+    C1 (heartbeat): the long capture / materialize / docker-apply steps can each
+    run for many minutes. Staleness recovery is driven purely by wall-clock age of
+    updated_at, so without a periodic touch a live-but-slow migration would be
+    declared stale by a concurrent worker, rolled back mid-flight, and could then
+    race the success commit. Beating the lease before each long step keeps an
+    alive worker's row from ever crossing the lease threshold. The update is
+    guarded on status='running' so a heartbeat can never resurrect a terminal row.
+
+    C2 (ownership): the heartbeat ALSO guards on the caller's ownership token, so a
+    worker whose stale row was recovered out from under it (the recovery rotated
+    the token) sees rowcount 0 and learns it no longer owns the row. Returns
+    ``(updated_at, still_owned)``; callers ABORT their Docker lifecycle work when
+    ``still_owned`` is False so a recovered-away worker stops mutating live state.
+    An empty ``owner_token`` keeps the legacy status-only guard (used where no
+    token was ever stamped).
+    """
+    now = utc_now_iso()
+    own_txn = _begin_immediate_if_needed(conn)
+    try:
+        if owner_token:
+            cur = conn.execute(
+                "UPDATE arclink_pod_migrations SET updated_at = ? "
+                "WHERE migration_id = ? AND status = 'running' "
+                "AND COALESCE(json_extract(rollback_metadata_json, ?), '') = ?",
+                (now, str(migration_id), _OWNER_TOKEN_JSON_PATH, owner_token),
+            )
+        else:
+            cur = conn.execute(
+                "UPDATE arclink_pod_migrations SET updated_at = ? WHERE migration_id = ? AND status = 'running'",
+                (now, str(migration_id)),
+            )
+        still_owned = cur.rowcount >= 1
+        if own_txn:
+            conn.commit()
+    except Exception:
+        if own_txn and conn.in_transaction:
+            conn.rollback()
+        raise
+    return now, still_owned
 
 
 def _retention_days_from_config(retention_days: int | None, env: Mapping[str, str] | None) -> int:
@@ -1199,6 +1500,27 @@ def _mark_success(
     retention_until = _iso(now_dt + timedelta(days=max(0, int(retention_days))))
     source_placement_id = str(row["source_placement_id"])
     target_placement_id = str(row["target_placement_id"])
+    owner_token = _row_owner_token(row)
+    # C1/C2 fencing: claim the migration row only while it is still 'running' AND
+    # this worker still owns it (token unchanged), BEFORE mutating any placements.
+    # If a concurrent stale-lease recovery already rolled this migration back to a
+    # terminal state OR rotated the ownership token (claiming the still-'running'
+    # row for recovery), this claim matches zero rows and we raise so the caller's
+    # transaction rolls back -- a terminal 'rolled_back' row is never clobbered back
+    # to 'succeeded', and the live serving placement set is never re-flipped under a
+    # row that another worker is recovering / already tore down.
+    claimed = conn.execute(
+        "UPDATE arclink_pod_migrations SET updated_at = ? "
+        "WHERE migration_id = ? AND status = 'running' "
+        "AND COALESCE(json_extract(rollback_metadata_json, ?), '') = ?",
+        (now, str(row["migration_id"]), _OWNER_TOKEN_JSON_PATH, owner_token),
+    )
+    if claimed.rowcount != 1:
+        raise ArcLinkPodMigrationError(
+            "ArcLink Pod migration cannot mark succeeded: row is no longer 'running' "
+            "or ownership was lost to a concurrent recovery: "
+            f"{row['migration_id']}"
+        )
     if target_placement_id and target_placement_id != source_placement_id:
         conn.execute(
             "UPDATE arclink_deployment_placements SET status = 'removed', removed_at = ? WHERE placement_id = ?",
@@ -1244,7 +1566,7 @@ def _mark_success(
             source_retention_until = ?,
             updated_at = ?,
             completed_at = ?
-        WHERE migration_id = ?
+        WHERE migration_id = ? AND status = 'running'
         """,
         (
             _json_dumps(capture_manifest),
@@ -1310,7 +1632,12 @@ def _migration_running_lease_seconds(env: Mapping[str, str] | None) -> int:
         value = int(raw)
     except (TypeError, ValueError):
         return DEFAULT_MIGRATION_RUNNING_LEASE_SECONDS
-    return max(60, value)
+    # FIX 2: clamp UP to MINIMUM_MIGRATION_RUNNING_LEASE_SECONDS (not the old 60s
+    # floor). The lease must always exceed the longest a single migration step can
+    # run without a heartbeat (see the constant's comment), otherwise a worker
+    # actively inside one docker_compose_apply could be declared stale and
+    # recovered while it is still applying -- reopening the Docker-flapping window.
+    return max(MINIMUM_MIGRATION_RUNNING_LEASE_SECONDS, value)
 
 
 def _recover_stale_running_migration(
@@ -1334,12 +1661,61 @@ def _recover_stale_running_migration(
     """
     if str(row.get("status") or "") != "running":
         return None
-    last_seen = _parse_iso(str(row.get("updated_at") or row.get("created_at") or ""))
+    observed_updated_at = str(row.get("updated_at") or "")
+    last_seen = _parse_iso(observed_updated_at or str(row.get("created_at") or ""))
     if last_seen is None:
         return None
     age_seconds = (_utc() - last_seen).total_seconds()
     if age_seconds < _migration_running_lease_seconds(env):
         return None
+    # C1/C2 fencing: claim this stranded row BEFORE any Docker lifecycle work so two
+    # workers can never both restart the source / tear down the target for the SAME
+    # stranded migration. The claim is an atomic compare-and-swap on
+    # (status='running', updated_at=<observed stale value>) under BEGIN IMMEDIATE --
+    # exactly one worker matches; the loser's CAS matches zero rows (the winner
+    # moved updated_at forward) and it bails out, leaving the winner to drive the
+    # rollback. A None updated_at can't be claimed safely, so require a concrete
+    # observed value.
+    #
+    # C2 (exclusive ownership vs the ORIGINAL live worker): the same atomic UPDATE
+    # ALSO ROTATES the ownership token to a fresh recovery nonce. This is the
+    # "transition OUT of running" mechanism -- it cannot use a literal sentinel
+    # status because the schema CHECK constraint forbids one, but rotating the
+    # token achieves the same exclusivity: the original live worker (which may
+    # still be alive and slow) loses ownership the instant the token changes, so
+    # its _mark_success / _mark_rollback / heartbeat all start matching zero rows
+    # and abort, while the recovery proceeds under the NEW token. The recovery then
+    # drives the rollback lifecycle and sets the terminal status itself.
+    if not observed_updated_at:
+        return None
+    claim_ts = utc_now_iso()
+    recovery_token = _owner_token()
+    own_txn = _begin_immediate_if_needed(conn)
+    try:
+        claimed = conn.execute(
+            "UPDATE arclink_pod_migrations SET updated_at = ?, "
+            "rollback_metadata_json = json_set(COALESCE(NULLIF(rollback_metadata_json, ''), '{}'), ?, ?) "
+            "WHERE migration_id = ? AND status = 'running' AND updated_at = ?",
+            (claim_ts, _OWNER_TOKEN_JSON_PATH, recovery_token, str(row["migration_id"]), observed_updated_at),
+        )
+        won = claimed.rowcount == 1
+        if own_txn:
+            conn.commit()
+    except Exception:
+        if own_txn and conn.in_transaction:
+            conn.rollback()
+        raise
+    if not won:
+        # Another worker already claimed (or the row left 'running'); re-read to be
+        # sure we don't proceed against a stale snapshot.
+        return None
+    # Work on a snapshot whose updated_at AND ownership token match the claim so the
+    # downstream _mark_rollback fence (status='running' AND token) sees an owned,
+    # still-'running' row. Re-read rollback_metadata_json from the DB so the token
+    # we just rotated in is present in the snapshot.
+    refreshed = _migration_row(conn, str(row["migration_id"]))
+    base = dict(refreshed) if refreshed is not None else dict(row)
+    row = {**base, "updated_at": claim_ts}
     error = f"ArcLink Pod migration lease expired after {int(age_seconds)}s in 'running' (stale worker recovery)"
     # H6 (round 2): a stranded run may have already brought the target partway up
     # before crashing. _rollback_lifecycle only tears the target down when it is
@@ -1404,6 +1780,26 @@ def _recover_stale_running_migration(
     return recovered
 
 
+def _still_owns_running_row(
+    conn: sqlite3.Connection, *, migration_id: str, owner_token: str
+) -> bool:
+    """Re-read the row and report whether THIS worker still owns a running migration.
+
+    Round 3 / FIX 1: ownership is otherwise only verified at heartbeat STEP
+    BOUNDARIES. Before either rollback path runs its Docker lifecycle work
+    (source restart / target teardown) we re-confirm against the LIVE DB row that
+    a concurrent stale-lease recovery has not rotated our token out -- if it has,
+    the recovery owns the rollback and we must NOT run _rollback_lifecycle (which
+    would double the Docker work) nor _mark_rollback.
+    """
+    current = _migration_row(conn, str(migration_id))
+    if current is None:
+        return False
+    if str(current.get("status") or "") not in {"planned", "running"}:
+        return False
+    return _row_owner_token(current) == owner_token
+
+
 def migrate_pod(
     conn: sqlite3.Connection,
     *,
@@ -1425,8 +1821,16 @@ def migrate_pod(
         # row blocks every future migration (either as "already running" for the
         # same id, or as the active-migration blocker for a fresh id) -- the
         # deployment can never be migrated again until manual intervention.
-        stranded = _stranded_running_migration(conn, deployment_id=str(deployment_id or "").strip())
-        if stranded is not None:
+        #
+        # M4: a crashed worker can strand more than one row over time, so loop over
+        # EVERY stale 'running' row, not just the oldest. Recovery returns None for
+        # a row whose lease has NOT expired (a live, in-flight migration) or one
+        # that another worker just claimed -- in either case we must NOT fall
+        # through into the migration body, which would trip "already running" or
+        # hit the generic exception path and ROLL BACK a fresh, healthy live
+        # migration (H6 NEW-BUG, round 2). Bail out cleanly and do nothing
+        # destructive; only proceed once all stale rows are terminal.
+        for stranded in _stranded_running_migrations(conn, deployment_id=str(deployment_id or "").strip()):
             recovered = _recover_stale_running_migration(
                 conn,
                 row=stranded,
@@ -1435,14 +1839,6 @@ def migrate_pod(
                 executor=executor,
                 env=env,
             )
-            # H6 NEW-BUG (round 2): recovery returns None when the running
-            # migration is NOT stale (its lease has not expired) -- i.e. another
-            # worker is actively migrating this deployment right now. We must NOT
-            # fall through into the migration body: re-entering would either trip
-            # "already running" (for the same id) or hit the generic exception
-            # path and ROLL BACK the fresh, healthy live migration. Bail out
-            # cleanly and do nothing destructive; only proceed once a stale row
-            # has actually been cleared to a terminal state.
             if recovered is None:
                 return _result_from_row(stranded, idempotent_replay=True, dry_run=dry_run)
     existing = _migration_row(conn, str(migration_id or "").strip()) if str(migration_id or "").strip() else None
@@ -1549,10 +1945,35 @@ def migrate_pod(
     if str(row.get("status") or "") in TERMINAL_MIGRATION_STATUSES:
         return _result_from_row(row, idempotent_replay=True, dry_run=dry_run)
 
+    # C2: the token _mark_migration_started stamped is THIS worker's exclusive
+    # ownership of the running row. Every heartbeat below re-asserts it; if a
+    # concurrent stale-lease recovery rotates the token, the heartbeat reports lost
+    # ownership and we ABORT before doing any further Docker lifecycle work, so a
+    # recovered-away worker never keeps materializing / applying / restarting.
+    owner_token = _row_owner_token(row)
+
+    def _beat_or_abort() -> None:
+        _ts, still_owned = _heartbeat_running_migration(
+            conn, str(row["migration_id"]), owner_token=owner_token
+        )
+        if not still_owned:
+            raise ArcLinkPodMigrationError(
+                "ArcLink Pod migration lost ownership of its running row to a "
+                f"concurrent stale-lease recovery: {row['migration_id']}"
+            )
+
     capture_manifest: dict[str, Any] = {}
     source_stopped = False
     target_intent: dict[str, Any] | None = None
     try:
+        # Round 3 / FIX 1: re-check ownership IMMEDIATELY BEFORE the very first live
+        # Docker action (the source stop). _mark_migration_started stamped our token
+        # and committed, but a concurrent stale-lease recovery could have rotated it
+        # out between that commit and here (the prior code's first heartbeat came
+        # only AFTER the stop). If we no longer own the row, the recovery owns the
+        # lifecycle -- bail BEFORE stopping the source so a recovered-away worker can
+        # never take a live deployment down out from under the recovery.
+        _beat_or_abort()
         deployment_id_for_lifecycle, env_file, compose_file = _deployment_lifecycle_files(row)
         executor.docker_compose_lifecycle(
             DockerComposeLifecycleRequest(
@@ -1565,10 +1986,15 @@ def migrate_pod(
         )
         source_stopped = True
 
+        # C1 heartbeat / C2 ownership: keep the lease fresh AND confirm we still own
+        # the row before the long file capture.
+        _beat_or_abort()
         capture_manifest = _capture_files(conn, row=row, env=env)
         conn.execute(
-            "UPDATE arclink_pod_migrations SET capture_manifest_json = ?, updated_at = ? WHERE migration_id = ?",
-            (_json_dumps(capture_manifest), utc_now_iso(), str(row["migration_id"])),
+            "UPDATE arclink_pod_migrations SET capture_manifest_json = ?, updated_at = ? "
+            "WHERE migration_id = ? AND status = 'running' "
+            "AND COALESCE(json_extract(rollback_metadata_json, ?), '') = ?",
+            (_json_dumps(capture_manifest), utc_now_iso(), str(row["migration_id"]), _OWNER_TOKEN_JSON_PATH, owner_token),
         )
         conn.commit()
 
@@ -1583,7 +2009,14 @@ def migrate_pod(
             env=env,
         )
         _ensure_llm_router_key_for_intent(conn, deployment=deployment, intent=target_intent, env=env)
+        # C1 heartbeat / C2 ownership: beat + re-check ownership before the long
+        # materialize + docker apply so a recovered-away worker stops here.
+        _beat_or_abort()
         _materialize_files(conn, row=row, target_root=str(target_intent["state_roots"]["root"]), env=env)
+        # C1 heartbeat / C2 ownership: final beat + ownership re-check before the
+        # docker apply -- the last point we can cheaply bail before mutating the
+        # target compose project.
+        _beat_or_abort()
         docker_result = executor.docker_compose_apply(
             DockerComposeApplyRequest(
                 deployment_id=str(row["deployment_id"]),
@@ -1595,14 +2028,25 @@ def migrate_pod(
         verification = _apply_docker_status_gate(verification, str(docker_result.status))
         if not bool(verification.get("healthy")):
             error = "ArcLink Pod migration verification failed"
-            lifecycle_metadata = _rollback_lifecycle(
-                executor=executor,
-                row=row,
-                operation_key=operation_key,
-                target_intent=target_intent,
-                source_stopped=source_stopped,
-            )
-            _mark_rollback(conn, row=row, verification=verification, error=error, lifecycle_metadata=lifecycle_metadata)
+            # Round 3 / FIX 1: re-check ownership IMMEDIATELY BEFORE _rollback_lifecycle.
+            # docker_compose_apply can run for many minutes; a concurrent stale-lease
+            # recovery could have rotated our token out during it. If we no longer own
+            # the row, that recovery owns the rollback -- running our own
+            # _rollback_lifecycle here would DOUBLE the source-restart / target-teardown
+            # Docker work (the residual flapping window Codex flagged). Skip the Docker
+            # lifecycle AND _mark_rollback (which would no-op on the token mismatch
+            # anyway) and let the recovery's outcome stand.
+            if _still_owns_running_row(
+                conn, migration_id=str(row["migration_id"]), owner_token=owner_token
+            ):
+                lifecycle_metadata = _rollback_lifecycle(
+                    executor=executor,
+                    row=row,
+                    operation_key=operation_key,
+                    target_intent=target_intent,
+                    source_stopped=source_stopped,
+                )
+                _mark_rollback(conn, row=row, verification=verification, error=error, lifecycle_metadata=lifecycle_metadata)
             failed_row = _migration_row(conn, str(row["migration_id"])) or row
             fail_arclink_operation_idempotency(
                 conn,
@@ -1643,7 +2087,17 @@ def migrate_pod(
     except Exception as exc:
         error = str(exc)[:1000]
         current = _migration_row(conn, str(row["migration_id"])) or row
-        if str(current.get("status") or "") not in {"rolled_back", "succeeded"}:
+        # C2 / Round 3 FIX 1: if a concurrent stale-lease recovery rotated the
+        # ownership token out from under us, that recovery now exclusively owns the
+        # rollback lifecycle. Doing our own _rollback_lifecycle here would DOUBLE the
+        # source-restart / target-teardown Docker work, so only perform rollback
+        # while we STILL OWN a still-'running' row (re-read fresh from the DB via the
+        # shared ownership check). _mark_rollback itself also no-ops on a token
+        # mismatch, but we must skip _rollback_lifecycle (the actual Docker mutation)
+        # too -- hence the explicit ownership gate before any Docker lifecycle work.
+        if _still_owns_running_row(
+            conn, migration_id=str(row["migration_id"]), owner_token=owner_token
+        ):
             lifecycle_metadata = _rollback_lifecycle(
                 executor=executor,
                 row=row,

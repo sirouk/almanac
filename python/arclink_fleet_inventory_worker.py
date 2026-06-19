@@ -311,8 +311,11 @@ def _apply_liveness_state(
         host_params.append(host_id)
         conn.execute(f"UPDATE arclink_fleet_hosts SET {', '.join(host_sets)} WHERE host_id = ?", host_params)
         if machine_id:
+            # H6: guard with `status != 'removed'` so a stale-snapshot liveness
+            # probe cannot resurrect a machine removed after the caller's snapshot
+            # back to status='ready'.
             conn.execute(
-                "UPDATE arclink_inventory_machines SET status = 'ready', connectivity_summary_json = ?, last_probed_at = ? WHERE machine_id = ?",
+                "UPDATE arclink_inventory_machines SET status = 'ready', connectivity_summary_json = ?, last_probed_at = ? WHERE machine_id = ? AND status != 'removed'",
                 (_redacted_json({"ok": True}), now, machine_id),
             )
         if notify and previous_state not in {"", "active"}:
@@ -334,20 +337,14 @@ def _apply_liveness_state(
         (next_status, next_state, now, host_id),
     )
     if machine_id and next_state in {"degraded", "unreachable"}:
+        # H6: guard with `status != 'removed'` so a stale-snapshot probe-apply
+        # never re-writes a removed machine's status.
         conn.execute(
-            "UPDATE arclink_inventory_machines SET status = 'degraded', connectivity_summary_json = ?, last_probed_at = ? WHERE machine_id = ?",
+            "UPDATE arclink_inventory_machines SET status = 'degraded', connectivity_summary_json = ?, last_probed_at = ? WHERE machine_id = ? AND status != 'removed'",
             (_redacted_json({"ok": False, "error": result.error, "health_state": next_state}), now, machine_id),
         )
     if notify and next_state in {"degraded", "unreachable"}:
         _notify_transition(conn, host_id=host_id, hostname=hostname, state=next_state, previous=previous_state)
-
-
-def _active_placement_count(conn: sqlite3.Connection, host_id: str) -> int:
-    row = conn.execute(
-        "SELECT COUNT(*) AS count FROM arclink_deployment_placements WHERE host_id = ? AND status = 'active'",
-        (host_id,),
-    ).fetchone()
-    return int(row["count"] or 0)
 
 
 def _apply_capacity_or_inventory(
@@ -365,18 +362,37 @@ def _apply_capacity_or_inventory(
         _max_probed_capacity_slots(),
         max(1, int(payload.get("capacity_slots") or hardware.get("vcpu_cores") or host.get("capacity_slots") or 1)),
     )
-    observed_load = int(payload.get("observed_load") or _active_placement_count(conn, str(host["host_id"])))
     now = utc_now_iso()
+    # H5: NEVER write observed_load from the probe payload. observed_load is the
+    # live placement counter owned exclusively by place_deployment (atomic
+    # observed_load = observed_load + 1), remove_placement, and
+    # reconcile_fleet_observed_loads. The probe payload is latency-stale (~20s old)
+    # and writing an absolute value here races a committed placement increment,
+    # erasing it -> the host looks emptier than it is -> over-placement past
+    # capacity. We update ONLY capacity_slots from the probe and leave the counter
+    # untouched.
     conn.execute(
         """
         UPDATE arclink_fleet_hosts
-        SET capacity_slots = ?, observed_load = ?, updated_at = ?
+        SET capacity_slots = ?, updated_at = ?
         WHERE host_id = ?
         """,
-        (max(1, capacity_slots), max(0, observed_load), now, str(host["host_id"])),
+        (max(1, capacity_slots), now, str(host["host_id"])),
     )
     machine_id = _linked_machine_id(host)
     if not machine_id:
+        return
+    # H6: re-read the linked machine row INSIDE the BEGIN IMMEDIATE lock (mirroring
+    # the host re-read record_host_probe already does) and guard every UPDATE with
+    # `status != 'removed'`. The caller iterates a single bulk snapshot taken
+    # outside any txn; without a freshness re-read a probe applied to a stale
+    # snapshot could resurrect a machine that was removed after the snapshot back
+    # to status='ready'.
+    machine_row = conn.execute(
+        "SELECT status FROM arclink_inventory_machines WHERE machine_id = ?",
+        (machine_id,),
+    ).fetchone()
+    if machine_row is None or str(machine_row["status"] or "") == "removed":
         return
     try:
         asu_capacity = compute_asu(hardware) if hardware else float(capacity_slots)
@@ -392,9 +408,18 @@ def _apply_capacity_or_inventory(
             "SELECT asu_capacity, status FROM arclink_inventory_machines WHERE machine_id = ?",
             (machine_id,),
         ).fetchone()
+        if prior is None or str((prior["status"] if prior is not None else "") or "") == "removed":
+            # H6: the machine was removed between the caller's snapshot and this
+            # locked re-read. Never resurrect/touch a removed machine.
+            return
         prior_capacity = float((prior["asu_capacity"] if prior is not None else 0) or 0)
         prior_status = str((prior["status"] if prior is not None else "") or "")
-        if prior_capacity > 0 and prior_status == "ready":
+        # regr-M8 (ASU preservation): preserve a prior known-good nonzero capacity
+        # not only for a 'ready' machine but also for a 'degraded' one. A degraded
+        # machine whose next probe is partial must keep its last good asu_capacity
+        # so it stays schedulable once liveness recovers; otherwise a partial probe
+        # would pin it at ASU 0 (unschedulable under standard_unit) indefinitely.
+        if prior_capacity > 0 and prior_status in {"ready", "degraded"}:
             # We have a prior KNOWN-GOOD nonzero capacity from an earlier full
             # probe. A later partial probe must not erase it: keep the machine
             # ready on the preserved capacity so it stays schedulable, and never
@@ -403,7 +428,7 @@ def _apply_capacity_or_inventory(
                 """
                 UPDATE arclink_inventory_machines
                 SET asu_capacity = ?, connectivity_summary_json = ?, last_probed_at = ?
-                WHERE machine_id = ?
+                WHERE machine_id = ? AND status != 'removed'
                 """,
                 (
                     prior_capacity,
@@ -428,7 +453,7 @@ def _apply_capacity_or_inventory(
             """
             UPDATE arclink_inventory_machines
             SET status = 'degraded', connectivity_summary_json = ?, last_probed_at = ?
-            WHERE machine_id = ?
+            WHERE machine_id = ? AND status != 'removed'
             """,
             (
                 _redacted_json(
@@ -464,7 +489,10 @@ def _apply_capacity_or_inventory(
         sets.append("machine_fingerprint = CASE WHEN machine_fingerprint = '' THEN ? ELSE machine_fingerprint END")
         params.append(redact_secret_material(str(payload.get("machine_fingerprint") or "")))
     params.append(machine_id)
-    conn.execute(f"UPDATE arclink_inventory_machines SET {', '.join(sets)} WHERE machine_id = ?", params)
+    # H6: guard with `status != 'removed'` so a stale-snapshot probe-apply can
+    # never write status='ready' back onto a machine that was removed after the
+    # caller's bulk snapshot (resurrecting it into the schedulable pool).
+    conn.execute(f"UPDATE arclink_inventory_machines SET {', '.join(sets)} WHERE machine_id = ? AND status != 'removed'", params)
 
 
 def record_host_probe(
@@ -567,8 +595,15 @@ def prune_host_probes(conn: sqlite3.Connection, *, retention_per_host_kind: int 
         (keep,),
     )
     deleted = conn.total_changes - before
+    # The DELETE above opens an implicit write transaction even when it matches no
+    # rows. Always close it: commit if we pruned, otherwise rollback so we never
+    # leave a dangling open transaction holding a write lock (which would later
+    # trip process_due_hosts's regr-M7 `not conn.in_transaction` guard and collapse
+    # per-host BEGIN IMMEDIATE isolation on the next pass).
     if deleted:
         conn.commit()
+    elif conn.in_transaction:
+        conn.rollback()
     return int(deleted)
 
 
@@ -582,6 +617,17 @@ def process_due_hosts(
     notify: bool = True,
     retention_per_host_kind: int = DEFAULT_RETENTION,
 ) -> dict[str, Any]:
+    # regr-M7: process_due_hosts depends on record_host_probe owning its own
+    # BEGIN IMMEDIATE per host (`own_txn = not conn.in_transaction`). If a future
+    # caller hands us a connection with an already-open transaction, every host's
+    # state transition would silently share one outer txn -- collapsing per-host
+    # isolation (one bad row rolls back the whole pass; no per-host commit point).
+    # Fail loudly instead of silently degrading the concurrency model.
+    if conn.in_transaction:
+        raise ArcLinkFleetInventoryWorkerError(
+            "process_due_hosts requires a connection with no open transaction "
+            "(per-host BEGIN IMMEDIATE isolation depends on it)"
+        )
     clean_now = now_iso or utc_now_iso()
     effective_cadences = {**DEFAULT_CADENCES, **dict(cadences or {})}
     probe_runner = runner or SshProbeRunner(

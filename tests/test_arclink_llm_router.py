@@ -3167,6 +3167,246 @@ def test_multi_completion_n_reserves_and_clamps_against_single_output_cap() -> N
     print("PASS test_multi_completion_n_reserves_and_clamps_against_single_output_cap")
 
 
+def test_settlement_is_atomic_across_sequential_events_so_used_cents_accumulates() -> None:
+    # conc-C1: settlement reads metadata.chutes.used_cents, adds the delta, and
+    # writes the whole metadata blob back. The read-modify-write must be serialized
+    # (BEGIN IMMEDIATE) so two settlements for one deployment both land instead of
+    # the second clobbering the first. Two sequential events must accumulate.
+    chutes = load_module("arclink_chutes.py", "arclink_chutes_settlement_atomicity_test")
+    control = load_module("arclink_control.py", "arclink_control_settlement_atomicity_test")
+    tmp, db_path = temp_router_db()
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            control.ensure_schema(conn)
+            control.upsert_arclink_user(conn, user_id="user_1", email="person@example.test", entitlement_state="paid")
+            control.reserve_arclink_deployment_prefix(
+                conn,
+                deployment_id="dep_1",
+                user_id="user_1",
+                prefix="amber-vault-1a2b",
+                base_domain="example.test",
+                status="active",
+                metadata={"chutes": {"secret_ref": "secret://arclink/chutes/dep_1/user_1", "monthly_budget_cents": 100000, "used_cents": 0}},
+            )
+            conn.commit()
+
+            first = chutes.record_chutes_usage_event(
+                conn,
+                deployment_id="dep_1",
+                user_id="user_1",
+                usage_event={"usage_event_id": "ev_1", "request_id": "req_1", "delta_cents": 12, "observed_at": "2026-06-19T00:00:00+00:00"},
+                commit=True,
+            )
+            second = chutes.record_chutes_usage_event(
+                conn,
+                deployment_id="dep_1",
+                user_id="user_1",
+                usage_event={"usage_event_id": "ev_2", "request_id": "req_2", "delta_cents": 7, "observed_at": "2026-06-19T00:00:01+00:00"},
+                commit=True,
+            )
+            expect(first.recorded and first.used_cents_after == 12, str(first))
+            # The second settlement must read the FIRST's committed used_cents (12)
+            # and accumulate, not clobber it back to its own before+delta.
+            expect(second.recorded and second.used_cents_before == 12, str(second))
+            expect(second.used_cents_after == 19, f"used_cents must accumulate to 19, got {second.used_cents_after}")
+            persisted = json.loads(
+                conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()["metadata_json"]
+            )
+            expect(int(persisted["chutes"]["used_cents"]) == 19, f"persisted used_cents must be 19: {persisted}")
+        finally:
+            conn.close()
+    finally:
+        tmp.cleanup()
+    print("PASS test_settlement_is_atomic_across_sequential_events_so_used_cents_accumulates")
+
+
+def test_boundary_available_cents_subtracts_open_reservations() -> None:
+    # billing-H5: boundary.remaining_cents is SETTLED-only, but the router subtracts
+    # open reservations before allowing new spend. The boundary/dashboard must expose
+    # available_cents = max(0, remaining - reserved) so the UI matches enforcement.
+    chutes = load_module("arclink_chutes.py", "arclink_chutes_available_cents_test")
+    metadata = {"chutes": {"secret_ref": "secret://arclink/chutes/dep_1/user_1", "monthly_budget_cents": 100, "used_cents": 30}}
+
+    # No reservations: available == remaining (70).
+    base = chutes.evaluate_chutes_deployment_boundary("dep_1", "user_1", metadata)
+    expect(base.remaining_cents == 70, str(base))
+    expect(base.reserved_cents == 0 and base.available_cents == 70, str(base))
+
+    # 25c of open reservations: remaining still 70, but available drops to 45.
+    held = chutes.evaluate_chutes_deployment_boundary("dep_1", "user_1", metadata, reserved_cents=25)
+    expect(held.remaining_cents == 70, f"settled remaining is unchanged: {held.remaining_cents}")
+    expect(held.reserved_cents == 25, str(held))
+    expect(held.available_cents == 45, f"available must subtract open reservations: {held.available_cents}")
+    public = held.to_public()
+    expect(public["budget"]["reserved_cents"] == 25, str(public["budget"]))
+    expect(public["budget"]["available_cents"] == 45, str(public["budget"]))
+    expect(public["budget"]["remaining_cents"] == 70, str(public["budget"]))
+
+    # Reservations exceeding remaining floor available at 0 (never negative).
+    drained = chutes.evaluate_chutes_deployment_boundary("dep_1", "user_1", metadata, reserved_cents=200)
+    expect(drained.available_cents == 0, f"available must floor at 0: {drained.available_cents}")
+    print("PASS test_boundary_available_cents_subtracts_open_reservations")
+
+
+def test_partial_stream_failure_settles_emitted_output_not_zero() -> None:
+    # billing-H2: when a stream fails AFTER yielding output, the provider has already
+    # billed the emitted tokens. Settlement must charge the partial output actually
+    # emitted (local floor) instead of forcing actual_cents=0. The recorded request
+    # status stays "failed" but settled_cents/actual_cents must be > 0.
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(
+            db_path,
+            deployment_metadata={"chutes": {"monthly_budget_cents": 100000, "used_cents": 0}},
+        )
+        # A multi-token assistant delta, then the socket dies before any usage block.
+        long_text = "the quick brown fox jumps over the lazy dog " * 8
+        first_chunk = (
+            'data: {"id":"chunk_1","choices":[{"delta":{"content":"' + long_text + '"}}]}\n\n'
+        ).encode("utf-8")
+        upstream = fake_broken_stream_transport(first_chunk, "socket reset mid-stream")
+        client = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+            },
+            upstream_transport=upstream,
+        )
+        with client.stream(
+            "POST",
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "model-a", "stream": True, "messages": [{"role": "user", "content": "hi"}]},
+        ) as response:
+            body = b"".join(response.iter_bytes())
+        expect(response.status_code == 200, body.decode("utf-8"))
+        expect(first_chunk in body, body.decode("utf-8"))
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            usage = conn.execute("SELECT * FROM arclink_llm_usage_events").fetchone()
+            persisted = json.loads(
+                conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()["metadata_json"]
+            )
+            open_reservations = conn.execute(
+                "SELECT COUNT(*) AS count FROM arclink_llm_budget_reservations WHERE status = 'reserved'"
+            ).fetchone()["count"]
+        finally:
+            conn.close()
+        # Status remains failed for analytics; the partial charge is still settled.
+        expect(usage["status"] == "failed" and usage["stream"] == 1, dict(usage))
+        expect(int(usage["actual_cents"]) > 0, f"partial stream must settle > 0 cents: {dict(usage)}")
+        expect(int(usage["output_tokens"]) > 0, f"emitted output tokens must be counted: {dict(usage)}")
+        expect(int(persisted["chutes"]["used_cents"]) > 0, f"used_cents must reflect partial charge: {persisted}")
+        expect(open_reservations == 0, f"reservation must be released, found {open_reservations}")
+    finally:
+        tmp.cleanup()
+    print("PASS test_partial_stream_failure_settles_emitted_output_not_zero")
+
+
+def test_router_pepper_misconfig_returns_clean_503_not_500() -> None:
+    # regr-M5: the fail-closed router-key pepper guard raises ValueError when a real
+    # pepper is required but unconfigured. _authenticate_request must catch it and
+    # return a clean 503 router_misconfigured instead of letting it surface as 500.
+    router = load_module("arclink_llm_router.py", "arclink_llm_router_pepper_misconfig_test")
+    tmp, db_path = temp_router_db()
+    try:
+        # Real DB so _open_control_conn succeeds; the pepper guard inside
+        # verify_llm_router_key is what raises ValueError (simulated here).
+        sqlite3.connect(db_path).close()
+        config = router.load_router_config(
+            {"ARCLINK_DB_PATH": db_path, "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "k"}
+        )
+
+        def _raising_verify(_conn: Any, _raw: str):
+            raise ValueError("ArcLink LLM router key hash pepper is not configured")
+
+        original = router.verify_llm_router_key
+        router.verify_llm_router_key = _raising_verify
+        try:
+            class _Req:
+                headers = {"authorization": "Bearer arclink_router_key_example"}
+
+            record, error = router._authenticate_request(config, _Req())
+            expect(record is None, "no auth record on misconfig")
+            expect(error is not None, "an error response must be returned")
+            expect(error.status_code == 503, f"pepper misconfig must be 503, got {error.status_code}")
+            body = json.loads(bytes(error.body).decode("utf-8"))
+            expect(body["error"]["code"] == "router_misconfigured", str(body))
+        finally:
+            router.verify_llm_router_key = original
+    finally:
+        tmp.cleanup()
+    print("PASS test_router_pepper_misconfig_returns_clean_503_not_500")
+
+
+def test_streaming_n_gt_1_no_usage_fallback_scales_settlement_by_completions() -> None:
+    # regr-M6: when stream + n>1 + provider omits usage, the no-usage fallback
+    # estimate must scale the per-completion output cap by effective_completions or
+    # an n-way stream under-charges by a factor of n.
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(
+            db_path,
+            deployment_metadata={"chutes": {"monthly_budget_cents": 100000000, "used_cents": 0}},
+        )
+        base_env = {
+            "ARCLINK_DB_PATH": db_path,
+            "ARCLINK_LLM_ROUTER_ENABLED": "1",
+            "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+            "ARCLINK_LLM_ROUTER_MAX_TOKENS_CAP": "100000",
+            "ARCLINK_LLM_ROUTER_MAX_COMPLETIONS": "4",
+        }
+        # A stream with content chunks but NO terminal usage block -> the router falls
+        # back to its reserved output estimate at settlement.
+        no_usage_chunks = [
+            b'data: {"id":"c1","choices":[{"delta":{"content":"hello"}}]}\n\n',
+            b"data: [DONE]\n\n",
+        ]
+
+        def _settle_output_tokens(n_value: int | None) -> int:
+            upstream = fake_stream_transport(list(no_usage_chunks), [])
+            client = _client_for(base_env, upstream_transport=upstream)
+            payload: dict[str, Any] = {"model": "model-a", "stream": True, "max_tokens": 500, "messages": [{"role": "user", "content": "hi"}]}
+            if n_value is not None:
+                payload["n"] = n_value
+            with client.stream(
+                "POST",
+                "/v1/chat/completions",
+                headers={"Authorization": f"Bearer {raw_key}"},
+                json=payload,
+            ) as response:
+                b"".join(response.iter_bytes())
+                expect(response.status_code == 200, "stream must start ok")
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            try:
+                row = conn.execute(
+                    "SELECT output_tokens, actual_cents FROM arclink_llm_usage_events ORDER BY started_at DESC LIMIT 1"
+                ).fetchone()
+                conn.execute("DELETE FROM arclink_llm_usage_events")
+                conn.execute("DELETE FROM arclink_llm_budget_reservations")
+                conn.execute("UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = 'dep_1'",
+                             (json.dumps({"chutes": {"monthly_budget_cents": 100000000, "used_cents": 0}}),))
+                conn.commit()
+            finally:
+                conn.close()
+            return int(row["output_tokens"])
+
+        single = _settle_output_tokens(None)
+        multi = _settle_output_tokens(3)
+        expect(single > 0, f"single-completion fallback output must be > 0: {single}")
+        # n=3 settles ~3x the single-completion fallback estimate.
+        expect(multi == single * 3, f"n=3 fallback output must be 3x single ({single}), got {multi}")
+    finally:
+        tmp.cleanup()
+    print("PASS test_streaming_n_gt_1_no_usage_fallback_scales_settlement_by_completions")
+
+
 def main() -> int:
     test_router_metadata_json_rejects_plaintext_secret_material()
     test_read_json_body_rejects_chunked_body_before_buffering_past_limit()
@@ -3211,7 +3451,12 @@ def main() -> int:
     test_allow_list_collapse_alert_rearms_after_recovery()
     test_pre_response_retries_keep_live_reservation_heartbeated_across_windows()
     test_multi_completion_n_reserves_and_clamps_against_single_output_cap()
-    print("PASS all 43 ArcLink LLM router tests")
+    test_settlement_is_atomic_across_sequential_events_so_used_cents_accumulates()
+    test_boundary_available_cents_subtracts_open_reservations()
+    test_partial_stream_failure_settles_emitted_output_not_zero()
+    test_router_pepper_misconfig_returns_clean_503_not_500()
+    test_streaming_n_gt_1_no_usage_fallback_scales_settlement_by_completions()
+    print("PASS all 48 ArcLink LLM router tests")
     return 0
 
 

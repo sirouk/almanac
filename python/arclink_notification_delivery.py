@@ -12,6 +12,7 @@ so it drops out of the undelivered queue but remains readable via
 from __future__ import annotations
 
 import argparse
+import contextlib
 import secrets
 import json
 import os
@@ -23,7 +24,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 from arclink_control import (
     Config,
@@ -48,6 +49,45 @@ from arclink_control import _notification_token_guard_sql
 from arclink_discord import discord_create_dm_channel, discord_edit_message, discord_send_message
 from arclink_http import http_request
 from arclink_telegram import telegram_edit_message_text, telegram_send_message
+
+
+@contextlib.contextmanager
+def _db_session(cfg: Config) -> Iterator[Any]:
+    """conc-H3: a connect_db() session that is CLOSED, not just committed, on exit.
+
+    ``connect_db`` returns a bare ``sqlite3.Connection``. The bare
+    ``with connect_db(cfg) as conn:`` idiom relies on ``Connection.__enter__/__exit__``,
+    which COMMITS (or rolls back) the open transaction but NEVER closes the
+    connection -- so every such block leaks an open SQLite handle (and, under WAL, a
+    reader) until garbage collection. In the tight loops (album-leader, the detached
+    worker's per-outcome blocks) and the long-lived ``run_once`` session held across
+    platform sends, those leaked handles pile up and keep WAL/journal state pinned.
+
+    This wrapper preserves the EXACT transaction semantics of the bare idiom --
+    commit on clean exit, rollback on exception (it enters ``connect_db(cfg)`` as a
+    context manager, exactly as the bare idiom does) -- and additionally CLOSES the
+    entered object in a ``finally`` so the handle is released promptly. It delegates
+    the open to the module-level ``connect_db`` so existing monkeypatches of
+    ``connect_db`` (the tests, which return a wrapping context manager) keep working:
+    the production path's ``sqlite3.Connection`` is its own context manager (``__enter__``
+    returns self) and exposes ``close``; a patched wrapper yields its proxy conn and
+    that proxy forwards ``close`` to the real connection.
+    """
+    cm = connect_db(cfg)
+    entered: Any = None
+    try:
+        with cm as conn:
+            entered = conn
+            yield conn
+    finally:
+        # Close AFTER the ``with cm`` block has committed/rolled back (the bare-idiom
+        # transaction semantics), so we never close out from under that commit.
+        closer = getattr(entered, "close", None)
+        if callable(closer):
+            try:
+                closer()
+            except Exception:  # noqa: BLE001 - close failures must never break delivery.
+                pass
 
 
 def _http_post_json(url: str, payload: dict, headers: dict[str, str] | None = None, timeout: int = 10) -> tuple[int, str]:
@@ -1949,7 +1989,7 @@ def _record_public_agent_bridge_worker(
         return
     try:
         cfg = Config.from_env()
-        with connect_db(cfg) as conn:
+        with _db_session(cfg) as conn:
             # BUG #1 fix -- MERGE-SAFE write. This metadata write happens AFTER the
             # detached child is already running (see _spawn_public_agent_gateway_bridge:
             # Popen() precedes this call), so the child may have already reset/bumped
@@ -2040,7 +2080,7 @@ def reap_orphaned_public_agent_bridge_leases(cfg: Config, *, limit: int = 50) ->
     now_iso = utc_now_iso()
     stale_cutoff = utc_now().timestamp() - _public_agent_bridge_worker_stale_seconds()
     reclaimed = 0
-    with connect_db(cfg) as conn:
+    with _db_session(cfg) as conn:
         rows = conn.execute(
             """
             SELECT id, extra_json, last_attempt_at, next_attempt_at
@@ -2096,15 +2136,29 @@ def reap_orphaned_public_agent_bridge_leases(cfg: Config, *, limit: int = 50) ->
             # concurrent counter reset/bump on the same row. Touching just the
             # ``$._public_agent_bridge_worker.reclaimed_at`` path keeps the
             # consecutive-terminal-failure counter (and any other key) intact.
+            #
+            # H1 fix -- CLEAR THE STALE LEASE TOKEN: the dead worker's recorded
+            # ``$._public_agent_bridge_worker.token`` is removed (merge-safe
+            # ``json_remove`` wrapping the ``json_set``) in the SAME statement. The
+            # empty-token (in-process claim-holder) guard requires the recorded token
+            # to be NULL (arclink_control _notification_token_guard_sql), so leaving a
+            # stale token here would make the reclaimed row un-finalisable by the
+            # in-process / non-detached terminal writes -- it would re-run every lease
+            # cycle and never mark delivered. Removing the token makes the reclaimed
+            # row finalisable again; a fresh detached spawn re-stamps its own token
+            # before its worker runs, so re-leasing is unaffected.
             cursor = conn.execute(
                 """
                 UPDATE notification_outbox
                 SET next_attempt_at = ?,
                     delivery_error = ?,
-                    extra_json = json_set(
-                        COALESCE(extra_json, '{}'),
-                        '$._public_agent_bridge_worker.reclaimed_at',
-                        ?
+                    extra_json = json_remove(
+                        json_set(
+                            COALESCE(extra_json, '{}'),
+                            '$._public_agent_bridge_worker.reclaimed_at',
+                            ?
+                        ),
+                        '$._public_agent_bridge_worker.token'
                     )
                 WHERE id = ?
                   AND delivered_at IS NULL
@@ -2163,7 +2217,7 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
             )
             ok, error = _run_gateway_exec_broker_request(gateway_exec_request)
             if ok:
-                with connect_db(cfg) as conn:
+                with _db_session(cfg) as conn:
                     # Resolve-on-delivery is folded into the guarded helper.
                     owned = _worker_mark_notification_delivered(conn, notification_id, worker_token)
                 _append_public_agent_bridge_log(
@@ -2178,7 +2232,7 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
                 )
                 return 0
             if _is_public_agent_bridge_unconfirmed(error):
-                with connect_db(cfg) as conn:
+                with _db_session(cfg) as conn:
                     _worker_mark_public_agent_bridge_unconfirmed(conn, notification_id, error, worker_token)
                 _append_public_agent_bridge_log(
                     json.dumps(
@@ -2202,7 +2256,7 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
                 project_name=project_name,
                 include_log_tail=not str(error or "").strip(),
             )
-            with connect_db(cfg) as conn:
+            with _db_session(cfg) as conn:
                 if _worker_mark_notification_error(conn, notification_id, broker_error, worker_token):
                     _maybe_report_public_agent_bridge_hiccup(conn, notification_id, error=broker_error)
             _append_public_agent_bridge_log(
@@ -2220,7 +2274,7 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
             raise RuntimeError("public Agent bridge job is missing cmd")
         valid, command_kind, reason = _validate_public_agent_bridge_cmd(cmd, project_name=project_name)
         if not valid:
-            with connect_db(cfg) as conn:
+            with _db_session(cfg) as conn:
                 if _worker_mark_notification_error(
                     conn, notification_id, f"Hermes public gateway bridge rejected command: {reason}", worker_token
                 ):
@@ -2265,7 +2319,7 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
                 project_name=project_name,
                 include_log_tail=False,
             )
-            with connect_db(cfg) as conn:
+            with _db_session(cfg) as conn:
                 if _worker_mark_notification_error(conn, notification_id, timeout_error, worker_token):
                     _maybe_report_public_agent_bridge_hiccup(conn, notification_id, error=timeout_error)
             _append_public_agent_bridge_log(
@@ -2288,7 +2342,7 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
                 project_name=project_name,
                 include_log_tail=not (proc.stderr or proc.stdout or "").strip(),
             )
-            with connect_db(cfg) as conn:
+            with _db_session(cfg) as conn:
                 if _worker_mark_notification_error(conn, notification_id, failure_error, worker_token):
                     _maybe_report_public_agent_bridge_hiccup(conn, notification_id, error=failure_error)
             _append_public_agent_bridge_log(
@@ -2308,7 +2362,7 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
             payload_out = {}
         result = public_agent_bridge_delivery_result(payload_out)
         if result.get("delivered") is True:
-            with connect_db(cfg) as conn:
+            with _db_session(cfg) as conn:
                 owned = _worker_mark_notification_delivered(conn, notification_id, worker_token)
             _append_public_agent_bridge_log(
                 json.dumps(
@@ -2324,7 +2378,7 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
             return 0
         if result.get("ok") is True and _public_agent_bridge_should_hold_for_reconciliation(result):
             reason = _public_agent_bridge_unconfirmed_error(result)
-            with connect_db(cfg) as conn:
+            with _db_session(cfg) as conn:
                 _worker_mark_public_agent_bridge_unconfirmed(conn, notification_id, reason, worker_token)
             _append_public_agent_bridge_log(
                 json.dumps(
@@ -2345,7 +2399,7 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
                 project_name=project_name,
                 include_log_tail=False,
             )
-            with connect_db(cfg) as conn:
+            with _db_session(cfg) as conn:
                 if _worker_mark_notification_error(conn, notification_id, failure_error, worker_token):
                     _maybe_report_public_agent_bridge_hiccup(conn, notification_id, error=failure_error)
             _append_public_agent_bridge_log(
@@ -2365,7 +2419,7 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
             project_name=project_name,
             include_log_tail=not str(result.get("error") or "").strip(),
         )
-        with connect_db(cfg) as conn:
+        with _db_session(cfg) as conn:
             if _worker_mark_notification_error(conn, notification_id, no_ok_error, worker_token):
                 _maybe_report_public_agent_bridge_hiccup(conn, notification_id, error=no_ok_error)
         _append_public_agent_bridge_log(
@@ -2419,7 +2473,7 @@ def _spawn_public_agent_gateway_bridge(
         # be reaped and risk a duplicate send). If the stamp fails (or matches no
         # undelivered row), ABORT the spawn so a tokenless worker never runs.
         try:
-            with connect_db(Config.from_env()) as conn:
+            with _db_session(Config.from_env()) as conn:
                 cursor = conn.execute(
                     """
                     UPDATE notification_outbox
@@ -2671,7 +2725,7 @@ def _resolve_captain_wrapped_public_channel(cfg: Config, *, user_id: str) -> tup
     if not clean_user_id:
         return "", ""
     try:
-        with connect_db(cfg) as conn:
+        with _db_session(cfg) as conn:
             row = conn.execute(
                 """
                 SELECT channel, channel_identity, status
@@ -2777,7 +2831,7 @@ def _absorb_telegram_album_siblings(
         return group
 
     while True:
-        with connect_db(cfg) as conn:
+        with _db_session(cfg) as conn:
             group = _group_rows(conn)
             if not group:
                 return None
@@ -3032,7 +3086,7 @@ def run_public_agent_turns_once(
         where.append("target_id = ?")
         params.append(clean_target)
     params.append(max(1, int(limit)))
-    with connect_db(cfg) as conn:
+    with _db_session(cfg) as conn:
         rows = conn.execute(
             f"""
             SELECT id, target_kind, target_id, channel_kind, message, extra_json, created_at, delivery_error,
@@ -3089,11 +3143,18 @@ def run_public_agent_turns_once(
                 if verbose:
                     sys.stderr.write(f"[deliver-public-agent] id={row['id']} error={error}\n")
                 continue
+            # Adjacent fix (mirrors the generic run_once fix): only resolve and count
+            # the turn as delivered when THIS empty-token guarded write actually
+            # finalised the row (rowcount>=1). If a detached worker owns the row the
+            # write is a no-op, so leave the resolve-on-delivery and the delivered
+            # tally to that owning worker -- counting it here would over-report
+            # delivered and clear an Operator alert on a row another owner is
+            # authoritative for.
             if mark_notification_delivered_if_owned(conn, int(row["id"]), "") >= 1:
                 # Resolve-on-delivery: this loop only handles public-agent-turn rows,
                 # so a delivered row clears any prior terminal-attempt alert (BUG #1).
                 _resolve_public_agent_bridge_hiccup(conn, int(row["id"]))
-            summary["delivered"] += 1
+                summary["delivered"] += 1
     return summary
 
 
@@ -3249,7 +3310,7 @@ def run_once(cfg: Config, *, limit: int = 50, verbose: bool = False) -> dict[str
         "claimed_elsewhere": 0,
         "deferred_during_deploy": 0,
     }
-    with connect_db(cfg) as conn:
+    with _db_session(cfg) as conn:
         if has_pending_curator_brief_fanout(conn):
             fanout = consume_curator_brief_fanout(conn, cfg)
             summary["curator_fanout_batches"] += 1
@@ -3273,7 +3334,8 @@ def run_once(cfg: Config, *, limit: int = 50, verbose: bool = False) -> dict[str
             if not _notification_due_now(row):
                 continue
             summary["processed"] += 1
-            if str(row.get("target_kind") or "").lower() == "public-agent-turn" and not (
+            row_kind = str(row.get("target_kind") or "").strip().lower()
+            if row_kind == "public-agent-turn" and not (
                 _claim_notification_for_delivery(
                     conn,
                     int(row["id"]),
@@ -3289,6 +3351,26 @@ def run_once(cfg: Config, *, limit: int = 50, verbose: bool = False) -> dict[str
                         f"[deliver] id={row['id']} deferred during "
                         f"{deploy_operation.get('operation', 'deploy')}\n"
                     )
+                continue
+            # conc-H4 fix: the NON-bridge delivery path used to send-then-mark with NO
+            # lease, so a second concurrent run_once racing this one could pick AND send
+            # the same row (a duplicate platform message) before either marked it
+            # delivered. Bridge (public-agent-turn) rows are already leased above; for
+            # every OTHER sendable kind (operator / public-bot-user / captain-wrapped)
+            # we now take the same atomic CAS claim BEFORE deliver_row sends. The claim
+            # is a single ``UPDATE ... WHERE id=? AND delivered_at IS NULL AND
+            # (next_attempt_at due)`` whose rowcount==1 means we won; a concurrent
+            # run_once that loses the race gets rowcount 0, counts it claimed_elsewhere,
+            # and does NOT send. Single-instance behaviour is unchanged: the only
+            # instance always wins its own claim. (The leader-skipped deploy-deferral
+            # check above stays unclaimed so a deferred row keeps its existing
+            # next_attempt_at for a later retry.)
+            if row_kind != "public-agent-turn" and not _claim_notification_for_delivery(
+                conn,
+                int(row["id"]),
+                lease_seconds=_public_agent_turn_lease_seconds(),
+            ):
+                summary["claimed_elsewhere"] += 1
                 continue
             try:
                 error = deliver_row(cfg, row, conn=conn)

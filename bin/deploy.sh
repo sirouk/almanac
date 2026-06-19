@@ -2844,6 +2844,33 @@ require_main_upstream_branch_for_upgrade() {
   return 1
 }
 
+# Compare two git remote URLs for equality after stripping one trailing ".git"
+# and any trailing "/" from each side. Used to verify that a checkout's
+# configured remote matches a HOST-CONTROLLED authoritative upstream URL.
+normalize_git_remote_url() {
+  local url="${1:-}"
+  url="${url%/}"
+  url="${url%.git}"
+  url="${url%/}"
+  printf '%s\n' "$url"
+}
+
+# Resolve the HOST-CONTROLLED authoritative upstream URL for a control upgrade.
+# This MUST NOT be derived from the checkout's own .git/config (the checkout dir
+# is owned/writable by the unprivileged arclink service user, so its `origin`
+# remote / `@{u}` can be poisoned to redirect a root-run fetch at attacker code).
+# Authorities, in order: the process-env ARCLINK_UPSTREAM_REPO_URL (the operator
+# upgrade host-runner pins this in the root runner's env, which arclink cannot
+# write), then deploy.sh's compiled-in canonical default.
+control_upgrade_authoritative_upstream_url() {
+  local url="${ARCLINK_UPSTREAM_REPO_URL:-}"
+  if [[ -n "$url" ]] && ! is_placeholder_arclink_upstream_repo_url "$url"; then
+    printf '%s\n' "$url"
+    return 0
+  fi
+  canonical_arclink_upstream_repo_url
+}
+
 # Read the commit currently deployed at $ARCLINK_REPO_DIR. Prefer that repo's
 # git HEAD; fall back to deployed_commit recorded in arclink-release.json.
 currently_deployed_commit() {
@@ -11765,35 +11792,42 @@ verify_control_upgrade_checkout_clean() {
 }
 
 control_upgrade_fetch_upstream() {
-  local remote="$1"
-  local remote_url="" ssh_command=""
+  # Fetch the authoritative upstream URL+branch DIRECTLY (not via a named remote
+  # whose URL the unprivileged arclink user could repoint in .git/config). The
+  # caller resolves $auth_url from HOST-CONTROLLED sources and has already forced
+  # the checkout's `origin` to it; fetching the URL itself means a later
+  # .git/config rewrite cannot redirect this root-run fetch. The result lands in
+  # FETCH_HEAD, which the caller reads back as the upgrade target.
+  local auth_url="$1"
+  local branch="$2"
+  local ssh_command=""
 
   if [[ "${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" == "1" ]]; then
     configure_upstream_git_for_repo "$BOOTSTRAP_DIR"
   fi
 
-  remote_url="$(git -C "$BOOTSTRAP_DIR" remote get-url "$remote" 2>/dev/null || true)"
-  if [[ "${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" == "1" ]] && git_remote_uses_ssh "$remote_url"; then
+  if [[ "${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" == "1" ]] && git_remote_uses_ssh "$auth_url"; then
     if [[ ! -f "${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-$(default_upstream_git_deploy_key_path)}" ]]; then
-      echo "ArcLink upstream deploy key private file is missing; cannot fetch $remote_url." >&2
+      echo "ArcLink upstream deploy key private file is missing; cannot fetch $auth_url." >&2
       return 1
     fi
     if [[ ! -f "${ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE:-$(default_upstream_git_known_hosts_file)}" ]]; then
-      echo "ArcLink upstream deploy key known_hosts file is missing; cannot fetch $remote_url." >&2
+      echo "ArcLink upstream deploy key known_hosts file is missing; cannot fetch $auth_url." >&2
       return 1
     fi
     ssh_command="$(upstream_git_ssh_command)"
     GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false SSH_ASKPASS=/bin/false GCM_INTERACTIVE=Never \
-      GIT_SSH_COMMAND="$ssh_command" git -C "$BOOTSTRAP_DIR" fetch --prune "$remote"
+      GIT_SSH_COMMAND="$ssh_command" git -C "$BOOTSTRAP_DIR" fetch --prune "$auth_url" "$branch"
     return
   fi
 
   GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false SSH_ASKPASS=/bin/false GCM_INTERACTIVE=Never \
-    git -C "$BOOTSTRAP_DIR" fetch --prune "$remote"
+    git -C "$BOOTSTRAP_DIR" fetch --prune "$auth_url" "$branch"
 }
 
 sync_control_upgrade_checkout_from_upstream() {
-  local branch="" upstream="" remote="" before="" after="" upstream_commit=""
+  local branch="" before="" after="" upstream_commit=""
+  local auth_url="" origin_url="" auth_norm="" origin_norm=""
   local expected_branch="${ARCLINK_UPSTREAM_BRANCH:-arclink}"
 
   if [[ "${ARCLINK_CONTROL_UPGRADE_ALLOW_DIRTY:-0}" == "1" ]]; then
@@ -11818,37 +11852,67 @@ sync_control_upgrade_checkout_from_upstream() {
     echo "Set ARCLINK_UPSTREAM_BRANCH and ARCLINK_ALLOW_NON_ARCLINK_UPGRADE=1 only for an explicit staging or emergency deployment." >&2
     return 1
   fi
-  upstream="$(git -C "$BOOTSTRAP_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
-  if [[ -z "$upstream" ]]; then
-    echo "Refusing control upgrade: branch '$branch' has no upstream to fetch." >&2
-    echo "Set an upstream or set ARCLINK_CONTROL_UPGRADE_SKIP_UPSTREAM_SYNC=1 for an intentional local build." >&2
+
+  # SECURITY: resolve the upstream from a HOST-CONTROLLED source, never from the
+  # checkout's mutable .git/config (`@{u}` / branch.<b>.remote / origin URL). The
+  # repo checkout is owned/writable by the unprivileged arclink service user, so a
+  # config-derived remote could redirect this root-run fetch at attacker code.
+  auth_url="$(control_upgrade_authoritative_upstream_url)"
+  if [[ -z "$auth_url" ]]; then
+    echo "Refusing control upgrade: no authoritative upstream URL is available." >&2
+    echo "Set ARCLINK_UPSTREAM_REPO_URL or rely on deploy.sh's canonical default." >&2
     return 1
   fi
-  remote="$(git -C "$BOOTSTRAP_DIR" config "branch.$branch.remote" 2>/dev/null || true)"
-  if [[ -z "$remote" ]]; then
-    remote="${upstream%%/*}"
+  auth_norm="$(normalize_git_remote_url "$auth_url")"
+
+  # Force the checkout's `origin` to the authoritative URL so the deploy-key
+  # core.sshCommand lane (configure_upstream_git_for_repo) still targets it, then
+  # VERIFY it matches. A mismatch means a poisoned .git/config; refuse unless an
+  # explicit operator override is set. The fetch below uses $auth_url directly
+  # regardless, so even origin can no longer steer it.
+  if git -C "$BOOTSTRAP_DIR" remote get-url origin >/dev/null 2>&1; then
+    origin_url="$(git -C "$BOOTSTRAP_DIR" remote get-url origin 2>/dev/null || true)"
+    origin_norm="$(normalize_git_remote_url "$origin_url")"
+    if [[ "$origin_norm" != "$auth_norm" ]]; then
+      if [[ "${ARCLINK_CONTROL_UPGRADE_ALLOW_REMOTE_MISMATCH:-0}" != "1" ]]; then
+        echo "Refusing control upgrade: checkout origin '$origin_url' does not match the authoritative upstream '$auth_url'." >&2
+        echo "This can indicate a tampered .git/config. Set ARCLINK_CONTROL_UPGRADE_ALLOW_REMOTE_MISMATCH=1 only for a deliberate remote change." >&2
+        return 1
+      fi
+      echo "Warning: checkout origin '$origin_url' differs from authoritative upstream '$auth_url'; proceeding because ARCLINK_CONTROL_UPGRADE_ALLOW_REMOTE_MISMATCH=1." >&2
+    fi
+    git -C "$BOOTSTRAP_DIR" remote set-url origin "$auth_url"
+  else
+    git -C "$BOOTSTRAP_DIR" remote add origin "$auth_url"
   fi
 
-  echo "Checking upstream for control upgrade ($branch -> $upstream)..."
-  control_upgrade_fetch_upstream "$remote"
+  echo "Checking upstream for control upgrade ($branch -> $auth_url#$expected_branch)..."
+  control_upgrade_fetch_upstream "$auth_url" "$expected_branch"
   before="$(git -C "$BOOTSTRAP_DIR" rev-parse HEAD)"
-  upstream_commit="$(git -C "$BOOTSTRAP_DIR" rev-parse "$upstream")"
+  # Read the freshly fetched tip from FETCH_HEAD (the verified authoritative ref),
+  # NOT from the upstream tracking ref, so a poisoned tracking ref cannot pick the
+  # target commit.
+  upstream_commit="$(git -C "$BOOTSTRAP_DIR" rev-parse FETCH_HEAD 2>/dev/null || true)"
+  if [[ -z "$upstream_commit" ]]; then
+    echo "Refusing control upgrade: could not resolve the fetched upstream tip from $auth_url#$expected_branch." >&2
+    return 1
+  fi
   if [[ "$before" == "$upstream_commit" ]]; then
     echo "Control upgrade checkout is current at $(git -C "$BOOTSTRAP_DIR" rev-parse --short HEAD)."
     return 0
   fi
   if git -C "$BOOTSTRAP_DIR" merge-base --is-ancestor "$before" "$upstream_commit"; then
-    git -C "$BOOTSTRAP_DIR" merge --ff-only "$upstream"
+    git -C "$BOOTSTRAP_DIR" merge --ff-only "$upstream_commit"
     after="$(git -C "$BOOTSTRAP_DIR" rev-parse HEAD)"
     echo "Fast-forwarded control upgrade checkout from ${before:0:12} to ${after:0:12}."
     return 0
   fi
   if git -C "$BOOTSTRAP_DIR" merge-base --is-ancestor "$upstream_commit" "$before"; then
-    echo "Refusing control upgrade: checkout ${before:0:12} is ahead of upstream $upstream." >&2
+    echo "Refusing control upgrade: checkout ${before:0:12} is ahead of upstream ${upstream_commit:0:12}." >&2
     echo "Push the commit to the configured upstream branch, or set ARCLINK_CONTROL_UPGRADE_SKIP_UPSTREAM_SYNC=1 for an intentional local build." >&2
     return 1
   fi
-  echo "Refusing control upgrade: branch '$branch' has diverged from upstream '$upstream'." >&2
+  echo "Refusing control upgrade: branch '$branch' has diverged from upstream '$auth_url#$expected_branch'." >&2
   echo "Resolve the divergence with git merge/rebase, then rerun ./deploy.sh control upgrade." >&2
   return 1
 }

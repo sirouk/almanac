@@ -2825,6 +2825,7 @@ def test_operator_upgrade_host_runner_pin_changes_do_not_push_upstream() -> None
             {
                 "schema_version": 1,
                 "request_id": "op-pinlocal-0001",
+                "created_at": int(time.time()),
                 "operation": "run_pin_upgrade",
                 "repo_dir": str(repo),
                 "priv_dir": str(priv),
@@ -2885,6 +2886,7 @@ def test_operator_upgrade_host_runner_executes_full_host_path_and_noop_pin_skip(
             {
                 "schema_version": 1,
                 "request_id": "op-hostrunner-0001",
+                "created_at": int(time.time()),
                 "operation": "run_operator_upgrade",
                 "repo_dir": str(repo),
                 "priv_dir": str(priv),
@@ -2894,6 +2896,7 @@ def test_operator_upgrade_host_runner_executes_full_host_path_and_noop_pin_skip(
             {
                 "schema_version": 1,
                 "request_id": "op-hostrunner-0002",
+                "created_at": int(time.time()),
                 "operation": "run_pin_upgrade",
                 "repo_dir": str(repo),
                 "priv_dir": str(priv),

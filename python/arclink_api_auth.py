@@ -4868,6 +4868,11 @@ def read_provider_state_api(
         if provider == "chutes":
             deployment_id = str(row["deployment_id"] or "")
             user_id_for_boundary = str(row["user_id"] or "")
+            # billing-H5: feed the still-open reservation total into the boundary so
+            # the displayed ``available_cents`` matches the router-enforced headroom
+            # (settled ``remaining_cents`` alone overstates what new spend is allowed).
+            router_reservations = router_state.get(deployment_id, {}).get("reservations", {})
+            reserved_cents_for_boundary = int(router_reservations.get("reserved_cents") or 0) if isinstance(router_reservations, Mapping) else 0
             boundary = evaluate_chutes_deployment_boundary(
                 deployment_id,
                 user_id_for_boundary,
@@ -4875,6 +4880,7 @@ def read_provider_state_api(
                 env=env_source,
                 billing_state=str(row["entitlement_state"] or "none"),
                 observe_unlimited_authorized=observe_unlimited_authorized(conn, deployment_id, user_id_for_boundary),
+                reserved_cents=reserved_cents_for_boundary,
             )
             public_boundary = boundary.to_public(include_user_id=session_kind == "admin", include_admin_fields=session_kind == "admin")
             item["credential_state"] = boundary.credential_state

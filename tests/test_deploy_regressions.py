@@ -2985,13 +2985,12 @@ def test_control_upgrade_syncs_checkout_from_upstream_before_build() -> None:
     text = DEPLOY_SH.read_text(encoding="utf-8")
     sync = extract(text, "control_upgrade_fetch_upstream() {", "run_control_install_flow() {")
     flow = extract(text, "run_control_install_flow() {", "run_control_reconfigure_flow() {")
-    expect("git -C \"$BOOTSTRAP_DIR\" fetch --prune \"$remote\"" in sync, sync)
+    expect("git -C \"$BOOTSTRAP_DIR\" fetch --prune \"$auth_url\" \"$branch\"" in sync, sync)
     expect("GIT_SSH_COMMAND=\"$ssh_command\"" in sync, "control upgrade fetch must honor the configured upstream deploy key")
     expect("configure_upstream_git_for_repo \"$BOOTSTRAP_DIR\"" in sync, "control upgrade should make forwarded upstream deploy-key env load-bearing")
     expect("Refusing control upgrade from branch" in sync and "expected '$expected_branch'" in sync, sync)
-    expect("has no upstream to fetch" in sync, sync)
     expect("is ahead of upstream" in sync and "return 1" in sync, sync)
-    expect("git -C \"$BOOTSTRAP_DIR\" merge --ff-only \"$upstream\"" in sync, sync)
+    expect("git -C \"$BOOTSTRAP_DIR\" merge --ff-only \"$upstream_commit\"" in sync, sync)
     expect("ARCLINK_CONTROL_UPGRADE_SKIP_UPSTREAM_SYNC" in sync, sync)
     expect("merge-base --is-ancestor" in sync, sync)
     expect(
@@ -3002,6 +3001,116 @@ def test_control_upgrade_syncs_checkout_from_upstream_before_build() -> None:
         "control upgrade should verify a clean tree, sync upstream, then build",
     )
     print("PASS test_control_upgrade_syncs_checkout_from_upstream_before_build")
+
+
+def test_control_upgrade_fetch_uses_host_authoritative_url_not_git_config() -> None:
+    # SECURITY REGRESSION: the operator-upgrade host-runner runs deploy.sh as root.
+    # The control-upgrade sync MUST fetch from the HOST-CONTROLLED authoritative
+    # upstream (ARCLINK_UPSTREAM_REPO_URL / compiled-in canonical), never from the
+    # checkout's arclink-writable .git/config `origin`/`@{u}`. This proves a poisoned
+    # origin cannot redirect the root fetch, and that a mismatched origin is refused.
+    text = DEPLOY_SH.read_text(encoding="utf-8")
+    # Splice the URL-resolver helpers (canonical/placeholder/normalize/authoritative)
+    # plus the fetch+sync functions so the behavioral probe runs them as written.
+    helpers = extract(text, "canonical_arclink_upstream_repo_url() {", "# Read the commit currently deployed")
+    fetch = extract(text, "control_upgrade_fetch_upstream() {", "run_control_install_flow() {")
+    # Static guards: the fetch+sync must not pull the remote/url from .git/config.
+    expect("control_upgrade_authoritative_upstream_url" in fetch, fetch)
+    expect("rev-parse FETCH_HEAD" in fetch, "control upgrade must take its target from the verified FETCH_HEAD")
+    # The mutable upstream tracking ref / config-derived remote must never feed a
+    # git command (only documentary mentions in comments are allowed).
+    expect("symbolic-full-name '@{u}'" not in fetch, "control upgrade must not rev-parse the mutable @{u}")
+    expect('config "branch.$branch.remote"' not in fetch, fetch)
+    expect('fetch --prune "$remote"' not in fetch, fetch)
+    expect('merge --ff-only "$upstream"' not in fetch, "ff-merge must target the verified FETCH_HEAD commit, not @{u}")
+    expect("ARCLINK_CONTROL_UPGRADE_ALLOW_REMOTE_MISMATCH" in fetch, fetch)
+
+    git = shutil.which("git")
+    if git is None:
+        print("PASS test_control_upgrade_fetch_uses_host_authoritative_url_not_git_config (skipped: git unavailable)")
+        return
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@example.com",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@example.com",
+            "GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"),
+            "GIT_CONFIG_SYSTEM": "/dev/null",
+            "HOME": str(tmp_path),
+        }
+
+        def git_run(args: list[str], cwd: Path) -> None:
+            res = subprocess.run([git, *args], cwd=str(cwd), env=env, text=True, capture_output=True)
+            if res.returncode != 0:
+                raise AssertionError(f"git {' '.join(args)} failed: {res.stderr}")
+
+        def make_repo(name: str, marker: str) -> Path:
+            repo = tmp_path / name
+            repo.mkdir()
+            git_run(["init", "-q", "-b", "arclink"], repo)
+            (repo / "MARKER").write_text(marker, encoding="utf-8")
+            git_run(["add", "MARKER"], repo)
+            git_run(["commit", "-q", "-m", marker], repo)
+            return repo
+
+        # Authoritative (real) upstream the host pins, and an attacker repo the
+        # arclink user pointed `origin` at via a poisoned .git/config.
+        auth = make_repo("authoritative", "AUTHORITATIVE")
+        attacker = make_repo("attacker", "ATTACKER-PWNED")
+        # Give the authoritative repo a NEW commit so a fast-forward is required;
+        # the checkout starts from authoritative's first commit.
+        (auth / "MARKER").write_text("AUTHORITATIVE-NEXT", encoding="utf-8")
+        git_run(["add", "MARKER"], auth)
+        git_run(["commit", "-q", "-m", "auth-next"], auth)
+
+        # The control checkout: clone authoritative's FIRST commit, then poison
+        # origin to point at the attacker repo (what the arclink user can do).
+        checkout = tmp_path / "checkout"
+        git_run(["clone", "-q", "-b", "arclink", str(auth), str(checkout)], tmp_path)
+        git_run(["reset", "-q", "--hard", "HEAD~1"], checkout)
+        git_run(["remote", "set-url", "origin", str(attacker)], checkout)
+
+        def run_sync(extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+            script = f"""
+set -uo pipefail
+BOOTSTRAP_DIR={shlex.quote(str(checkout))}
+{helpers}
+{fetch}
+sync_control_upgrade_checkout_from_upstream
+"""
+            sync_env = {**env, "ARCLINK_UPSTREAM_BRANCH": "arclink", **extra_env}
+            return subprocess.run(["bash", "-lc", script], env=sync_env, text=True, capture_output=True)
+
+        # 1) Mismatched origin (attacker) without override -> refuse, no fetch.
+        res = run_sync({"ARCLINK_UPSTREAM_REPO_URL": str(auth)})
+        expect(res.returncode != 0, f"mismatched origin should be refused: {res.stdout}\n{res.stderr}")
+        expect(
+            "does not match the authoritative upstream" in (res.stdout + res.stderr),
+            f"expected a mismatch refusal, got: {res.stdout!r} {res.stderr!r}",
+        )
+        head = subprocess.run([git, "rev-parse", "HEAD"], cwd=str(checkout), env=env, text=True, capture_output=True).stdout.strip()
+        marker = (checkout / "MARKER").read_text(encoding="utf-8")
+        expect(marker == "AUTHORITATIVE", f"refused upgrade must not advance the checkout; marker={marker!r}")
+
+        # 2) Override the mismatch -> the fetch still targets the AUTHORITATIVE url
+        #    (set via env), NEVER the attacker origin; checkout ends on authoritative.
+        res = run_sync({
+            "ARCLINK_UPSTREAM_REPO_URL": str(auth),
+            "ARCLINK_CONTROL_UPGRADE_ALLOW_REMOTE_MISMATCH": "1",
+        })
+        expect(res.returncode == 0, f"authoritative upgrade should succeed: {res.stdout}\n{res.stderr}")
+        marker = (checkout / "MARKER").read_text(encoding="utf-8")
+        expect(
+            marker == "AUTHORITATIVE-NEXT",
+            f"fetch must follow the host-authoritative url, not the poisoned origin; marker={marker!r}",
+        )
+        expect("ATTACKER-PWNED" not in marker, "attacker code must never be deployed")
+
+    print("PASS test_control_upgrade_fetch_uses_host_authoritative_url_not_git_config")
 
 
 def test_component_upgrade_reexec_reads_operator_artifact_config_file_key() -> None:
@@ -4744,6 +4853,7 @@ def main() -> int:
         test_control_enrollment_submenu_and_secret_are_first_class,
         test_control_docker_bootstrap_seeds_session_hash_pepper_and_gateway_broker_token,
         test_control_upgrade_syncs_checkout_from_upstream_before_build,
+        test_control_upgrade_fetch_uses_host_authoritative_url_not_git_config,
         test_component_upgrade_reexec_reads_operator_artifact_config_file_key,
         test_init_bootstrap_defaults_to_canonical_repo_and_safe_printf,
         test_operator_hermes_home_install_lock_has_timeout,

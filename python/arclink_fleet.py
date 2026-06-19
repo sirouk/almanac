@@ -187,85 +187,150 @@ def register_fleet_host(
     if capacity_slots < 1:
         raise ArcLinkFleetError("ArcLink fleet host capacity must be at least 1")
 
-    existing = conn.execute(
-        "SELECT * FROM arclink_fleet_hosts WHERE LOWER(hostname) = ?",
-        (clean_hostname,),
-    ).fetchone()
-    if existing is not None:
-        # Preserve image-sync state across a hostname re-registration: a caller
-        # supplying fresh metadata (e.g. inventory re-register) must not silently
-        # erase the image_sync_* keys that gate placement eligibility. Carry over
-        # any image_sync_* key the incoming metadata does not itself set.
-        if metadata is not None:
-            preserved = json_loads_safe(str(existing["metadata_json"] or "{}"))
-            sync_carryover = {
-                key: value
-                for key, value in preserved.items()
-                if str(key).startswith("image_sync_") and key not in metadata
-            }
-            if sync_carryover:
-                merged_metadata = {**dict(metadata), **sync_carryover}
-                metadata_json = json_dumps_safe(
-                    merged_metadata, label="ArcLink fleet", error_cls=ArcLinkFleetError
-                )
-        sets: list[str] = []
-        params: list[Any] = []
-        if str(existing["region"] or "") != clean_region:
-            sets.append("region = ?")
-            params.append(clean_region)
-        if int(existing["capacity_slots"]) != int(capacity_slots):
-            sets.append("capacity_slots = ?")
-            params.append(int(capacity_slots))
-        if tags_json is not None and str(existing["tags_json"] or "{}") != tags_json:
-            sets.append("tags_json = ?")
-            params.append(tags_json)
-        if metadata_json is not None and str(existing["metadata_json"] or "{}") != metadata_json:
-            sets.append("metadata_json = ?")
-            params.append(metadata_json)
-        if sets:
-            sets.append("updated_at = ?")
-            params.append(utc_now_iso())
-            params.append(str(existing["host_id"]))
-            conn.execute(f"UPDATE arclink_fleet_hosts SET {', '.join(sets)} WHERE host_id = ?", params)
-            if commit:
-                conn.commit()
-            existing = conn.execute(
-                "SELECT * FROM arclink_fleet_hosts WHERE host_id = ?",
-                (str(existing["host_id"]),),
-            ).fetchone()
-        return dict(existing)
-
-    clean_id = host_id.strip() if host_id else _fleet_id("host")
-    now = utc_now_iso()
+    # H7: the existence SELECT -> in-Python image_sync_*/blob merge -> whole-blob
+    # UPDATE must be ONE atomic critical section. In autocommit a concurrent
+    # re-register racing a liveness metadata patch (or another re-register) does a
+    # blind whole-metadata_json overwrite computed from a stale read -> it can drop
+    # capacity_slots / image_sync_* gate keys, so a host can lose its
+    # image_sync_failed gate and become wrongly placement-eligible. Serialize the
+    # read->merge->write under BEGIN IMMEDIATE and re-read INSIDE the lock, mirroring
+    # place_deployment's commit/rollback discipline (own_txn pattern).
+    #
+    # We only OWN (begin + commit/rollback) the transaction when we are both in
+    # autocommit AND the caller asked us to commit. A caller passing commit=False
+    # (e.g. register_inventory_machine, which inserts the host then the machine in
+    # one atomic unit and governs the outer commit/rollback itself) is borrowing
+    # our writes into ITS transaction -- we must not begin/commit/rollback under it.
+    own_txn = commit and not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
     try:
-        conn.execute(
-            """
-            INSERT INTO arclink_fleet_hosts (
-              host_id, hostname, region, tags_json, status, drain, capacity_slots,
-              observed_load, metadata_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, 'active', 0, ?, 0, ?, ?, ?)
-            """,
-            (clean_id, clean_hostname, clean_region, tags_json or "{}", capacity_slots, metadata_json or "{}", now, now),
-        )
-    except sqlite3.IntegrityError:
-        raced = conn.execute(
+        existing = conn.execute(
             "SELECT * FROM arclink_fleet_hosts WHERE LOWER(hostname) = ?",
             (clean_hostname,),
         ).fetchone()
-        if raced is None:
-            raise
-        return register_fleet_host(
-            conn,
-            hostname=clean_hostname,
-            region=clean_region,
-            tags=tags,
-            capacity_slots=capacity_slots,
-            metadata=metadata,
-            commit=commit,
-        )
-    if commit:
-        conn.commit()
-    return dict(conn.execute("SELECT * FROM arclink_fleet_hosts WHERE host_id = ?", (clean_id,)).fetchone())
+        if existing is not None:
+            # Recompute the merged metadata_json from the row we just read under the
+            # write lock (not the function-entry read), so no concurrent writer can
+            # have changed metadata_json between our read and our write.
+            row_metadata_json = metadata_json
+            # Preserve image-sync state across a hostname re-registration: a caller
+            # supplying fresh metadata (e.g. inventory re-register) must not silently
+            # erase the image_sync_* keys that gate placement eligibility. Carry over
+            # any image_sync_* key the incoming metadata does not itself set.
+            if metadata is not None:
+                preserved = json_loads_safe(str(existing["metadata_json"] or "{}"))
+                sync_carryover = {
+                    key: value
+                    for key, value in preserved.items()
+                    if str(key).startswith("image_sync_") and key not in metadata
+                }
+                if sync_carryover:
+                    merged_metadata = {**dict(metadata), **sync_carryover}
+                    row_metadata_json = json_dumps_safe(
+                        merged_metadata, label="ArcLink fleet", error_cls=ArcLinkFleetError
+                    )
+            sets: list[str] = []
+            params: list[Any] = []
+            if str(existing["region"] or "") != clean_region:
+                sets.append("region = ?")
+                params.append(clean_region)
+            if int(existing["capacity_slots"]) != int(capacity_slots):
+                sets.append("capacity_slots = ?")
+                params.append(int(capacity_slots))
+            if tags_json is not None and str(existing["tags_json"] or "{}") != tags_json:
+                sets.append("tags_json = ?")
+                params.append(tags_json)
+            if row_metadata_json is not None and str(existing["metadata_json"] or "{}") != row_metadata_json:
+                sets.append("metadata_json = ?")
+                params.append(row_metadata_json)
+            if sets:
+                sets.append("updated_at = ?")
+                params.append(utc_now_iso())
+                params.append(str(existing["host_id"]))
+                conn.execute(f"UPDATE arclink_fleet_hosts SET {', '.join(sets)} WHERE host_id = ?", params)
+                existing = conn.execute(
+                    "SELECT * FROM arclink_fleet_hosts WHERE host_id = ?",
+                    (str(existing["host_id"]),),
+                ).fetchone()
+            if own_txn:
+                conn.commit()
+            return dict(existing)
+
+        # New host: insert under the same locked transaction. BEGIN IMMEDIATE
+        # already holds the write lock, so the LOWER(hostname) existence check
+        # above and this INSERT are atomic -- a concurrent registrant is serialized
+        # behind us rather than racing the check. The IntegrityError fallback below
+        # remains as defense-in-depth for callers that pass an already-open txn.
+        clean_id = host_id.strip() if host_id else _fleet_id("host")
+        now = utc_now_iso()
+        try:
+            conn.execute(
+                """
+                INSERT INTO arclink_fleet_hosts (
+                  host_id, hostname, region, tags_json, status, drain, capacity_slots,
+                  observed_load, metadata_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'active', 0, ?, 0, ?, ?, ?)
+                """,
+                (clean_id, clean_hostname, clean_region, tags_json or "{}", capacity_slots, metadata_json or "{}", now, now),
+            )
+        except sqlite3.IntegrityError:
+            raced = conn.execute(
+                "SELECT * FROM arclink_fleet_hosts WHERE LOWER(hostname) = ?",
+                (clean_hostname,),
+            ).fetchone()
+            if raced is None:
+                raise
+            # Re-read-and-merge the raced row in place rather than recursing (a
+            # recursive call would see our open txn and skip its own commit). Apply
+            # the same image_sync_* carryover and config-refresh discipline as the
+            # existing-host branch above.
+            row_metadata_json = metadata_json
+            if metadata is not None:
+                preserved = json_loads_safe(str(raced["metadata_json"] or "{}"))
+                sync_carryover = {
+                    key: value
+                    for key, value in preserved.items()
+                    if str(key).startswith("image_sync_") and key not in metadata
+                }
+                if sync_carryover:
+                    merged_metadata = {**dict(metadata), **sync_carryover}
+                    row_metadata_json = json_dumps_safe(
+                        merged_metadata, label="ArcLink fleet", error_cls=ArcLinkFleetError
+                    )
+            sets: list[str] = []
+            params: list[Any] = []
+            if str(raced["region"] or "") != clean_region:
+                sets.append("region = ?")
+                params.append(clean_region)
+            if int(raced["capacity_slots"]) != int(capacity_slots):
+                sets.append("capacity_slots = ?")
+                params.append(int(capacity_slots))
+            if tags_json is not None and str(raced["tags_json"] or "{}") != tags_json:
+                sets.append("tags_json = ?")
+                params.append(tags_json)
+            if row_metadata_json is not None and str(raced["metadata_json"] or "{}") != row_metadata_json:
+                sets.append("metadata_json = ?")
+                params.append(row_metadata_json)
+            if sets:
+                sets.append("updated_at = ?")
+                params.append(utc_now_iso())
+                params.append(str(raced["host_id"]))
+                conn.execute(f"UPDATE arclink_fleet_hosts SET {', '.join(sets)} WHERE host_id = ?", params)
+                raced = conn.execute(
+                    "SELECT * FROM arclink_fleet_hosts WHERE host_id = ?",
+                    (str(raced["host_id"]),),
+                ).fetchone()
+            if own_txn:
+                conn.commit()
+            return dict(raced)
+        if own_txn:
+            conn.commit()
+        return dict(conn.execute("SELECT * FROM arclink_fleet_hosts WHERE host_id = ?", (clean_id,)).fetchone())
+    except Exception:
+        if own_txn and conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 def update_fleet_host(
@@ -277,37 +342,54 @@ def update_fleet_host(
     observed_load: int | None = None,
     capacity_slots: int | None = None,
 ) -> dict[str, Any]:
-    row = conn.execute("SELECT * FROM arclink_fleet_hosts WHERE host_id = ?", (host_id,)).fetchone()
-    if row is None:
-        raise ArcLinkFleetError(f"unknown ArcLink fleet host: {host_id}")
-    sets: list[str] = []
-    params: list[Any] = []
-    if status is not None:
-        if status not in FLEET_HOST_STATUSES:
-            raise ArcLinkFleetError(f"unsupported fleet host status: {status}")
-        sets.append("status = ?")
-        params.append(status)
-    if drain is not None:
-        sets.append("drain = ?")
-        params.append(1 if drain else 0)
-    if observed_load is not None:
-        if observed_load < 0:
-            raise ArcLinkFleetError("observed load cannot be negative")
-        sets.append("observed_load = ?")
-        params.append(observed_load)
-    if capacity_slots is not None:
-        if capacity_slots < 1:
-            raise ArcLinkFleetError("capacity must be at least 1")
-        sets.append("capacity_slots = ?")
-        params.append(capacity_slots)
-    if not sets:
-        return dict(row)
-    sets.append("updated_at = ?")
-    params.append(utc_now_iso())
-    params.append(host_id)
-    conn.execute(f"UPDATE arclink_fleet_hosts SET {', '.join(sets)} WHERE host_id = ?", params)
-    conn.commit()
-    return dict(conn.execute("SELECT * FROM arclink_fleet_hosts WHERE host_id = ?", (host_id,)).fetchone())
+    # M-cluster: update_fleet_host is an operator setter that writes an ABSOLUTE
+    # observed_load (an explicit admin override, not a COUNT-derived value). Wrap
+    # the existence read and the write in one BEGIN IMMEDIATE critical section so
+    # the override is applied atomically (the read and the write observe the same
+    # locked snapshot) and cannot interleave with the place_deployment /
+    # remove_placement / reconcile counter writers.
+    own_txn = not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute("SELECT * FROM arclink_fleet_hosts WHERE host_id = ?", (host_id,)).fetchone()
+        if row is None:
+            raise ArcLinkFleetError(f"unknown ArcLink fleet host: {host_id}")
+        sets: list[str] = []
+        params: list[Any] = []
+        if status is not None:
+            if status not in FLEET_HOST_STATUSES:
+                raise ArcLinkFleetError(f"unsupported fleet host status: {status}")
+            sets.append("status = ?")
+            params.append(status)
+        if drain is not None:
+            sets.append("drain = ?")
+            params.append(1 if drain else 0)
+        if observed_load is not None:
+            if observed_load < 0:
+                raise ArcLinkFleetError("observed load cannot be negative")
+            sets.append("observed_load = ?")
+            params.append(observed_load)
+        if capacity_slots is not None:
+            if capacity_slots < 1:
+                raise ArcLinkFleetError("capacity must be at least 1")
+            sets.append("capacity_slots = ?")
+            params.append(capacity_slots)
+        if not sets:
+            if own_txn:
+                conn.commit()
+            return dict(row)
+        sets.append("updated_at = ?")
+        params.append(utc_now_iso())
+        params.append(host_id)
+        conn.execute(f"UPDATE arclink_fleet_hosts SET {', '.join(sets)} WHERE host_id = ?", params)
+        if own_txn:
+            conn.commit()
+        return dict(conn.execute("SELECT * FROM arclink_fleet_hosts WHERE host_id = ?", (host_id,)).fetchone())
+    except Exception:
+        if own_txn and conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 def get_fleet_host(conn: sqlite3.Connection, *, host_id: str) -> dict[str, Any]:
@@ -424,44 +506,79 @@ def reconcile_fleet_observed_loads(conn: sqlite3.Connection, *, host_id: str = "
     if clean_host_id:
         where = "WHERE h.host_id = ?"
         params.append(clean_host_id)
-    rows = conn.execute(
-        f"""
-        SELECT
-          h.host_id,
-          h.hostname,
-          h.observed_load AS old_load,
-          COUNT(p.placement_id) AS active_load
-        FROM arclink_fleet_hosts h
-        LEFT JOIN arclink_deployment_placements p
-          ON p.host_id = h.host_id
-         AND p.status = 'active'
-        {where}
-        GROUP BY h.host_id, h.hostname, h.observed_load
-        """,
-        params,
-    ).fetchall()
-    repaired: list[dict[str, Any]] = []
-    now = utc_now_iso()
-    for row in rows:
-        old_load = int(row["old_load"])
-        active_load = int(row["active_load"])
-        if old_load == active_load:
-            continue
-        conn.execute(
-            "UPDATE arclink_fleet_hosts SET observed_load = ?, updated_at = ? WHERE host_id = ?",
-            (active_load, now, row["host_id"]),
-        )
-        repaired.append(
-            {
-                "host_id": str(row["host_id"]),
-                "hostname": str(row["hostname"]),
-                "old_load": old_load,
-                "observed_load": active_load,
-            }
-        )
-    if repaired:
-        conn.commit()
-    return repaired
+    # M8: the old code COUNTed active placements then, in autocommit, UPDATEd
+    # observed_load to that absolute count -- a placement committing between the
+    # COUNT and the UPDATE was silently erased (lost update). Do the read and the
+    # write as ONE atomic critical section under BEGIN IMMEDIATE, and compute each
+    # host's new load with a correlated subquery evaluated AT WRITE TIME so it
+    # reflects the just-locked committed placement rows, never a stale pre-read.
+    own_txn = not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT
+              h.host_id,
+              h.hostname,
+              h.observed_load AS old_load,
+              COUNT(p.placement_id) AS active_load
+            FROM arclink_fleet_hosts h
+            LEFT JOIN arclink_deployment_placements p
+              ON p.host_id = h.host_id
+             AND p.status = 'active'
+            {where}
+            GROUP BY h.host_id, h.hostname, h.observed_load
+            """,
+            params,
+        ).fetchall()
+        repaired: list[dict[str, Any]] = []
+        now = utc_now_iso()
+        for row in rows:
+            old_load = int(row["old_load"])
+            # Recompute the active load AT WRITE TIME via a correlated subquery so a
+            # placement that committed between the bulk read above and this UPDATE is
+            # included (or excluded) atomically -- the COUNT and the SET observe the
+            # same locked snapshot.
+            conn.execute(
+                """
+                UPDATE arclink_fleet_hosts
+                SET observed_load = (
+                      SELECT COUNT(*) FROM arclink_deployment_placements
+                      WHERE host_id = arclink_fleet_hosts.host_id AND status = 'active'
+                    ),
+                    updated_at = ?
+                WHERE host_id = ?
+                  AND observed_load != (
+                      SELECT COUNT(*) FROM arclink_deployment_placements
+                      WHERE host_id = arclink_fleet_hosts.host_id AND status = 'active'
+                    )
+                """,
+                (now, row["host_id"]),
+            )
+            new_load = int(
+                conn.execute(
+                    "SELECT observed_load FROM arclink_fleet_hosts WHERE host_id = ?",
+                    (row["host_id"],),
+                ).fetchone()["observed_load"]
+            )
+            if old_load == new_load:
+                continue
+            repaired.append(
+                {
+                    "host_id": str(row["host_id"]),
+                    "hostname": str(row["hostname"]),
+                    "old_load": old_load,
+                    "observed_load": new_load,
+                }
+            )
+        if own_txn:
+            conn.commit()
+        return repaired
+    except Exception:
+        if own_txn and conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 def _audit_fleet_orphan(

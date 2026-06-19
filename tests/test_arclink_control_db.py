@@ -820,6 +820,403 @@ def test_operator_hiccup_arm_resolve_is_atomic_and_single_outcome() -> None:
     print("PASS test_operator_hiccup_arm_resolve_is_atomic_and_single_outcome")
 
 
+def _seed_router_key_deployment(mod, conn, *, raw_key: str) -> None:
+    mod.upsert_arclink_user(conn, user_id="user_rk", email="rk@example.test", entitlement_state="paid")
+    mod.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_rk",
+        user_id="user_rk",
+        prefix="rk-vault-1a2b",
+        base_domain="example.test",
+        status="active",
+    )
+    mod.ensure_llm_router_key(
+        conn,
+        deployment_id="dep_rk",
+        user_id="user_rk",
+        secret_ref="secret://arclink/llm-router/dep_rk/api-key",
+        raw_key=raw_key,
+        allowed_models=["model-a"],
+    )
+
+
+def test_llm_router_key_hash_pepper_fails_closed_outside_local_dev() -> None:
+    # sec-C1: the router-key hash pepper must mirror the session pepper guard --
+    # raise when no real pepper is configured and the base domain is not local-dev.
+    mod = load_module(CONTROL_PY, "arclink_control_db_router_pepper_test")
+    old_env = os.environ.copy()
+    try:
+        # Production-shaped: a real (non-local-dev) base domain and no pepper.
+        os.environ.clear()
+        os.environ["ARCLINK_CONFIG_FILE"] = os.devnull
+        os.environ["ARCLINK_BASE_DOMAIN"] = "arclink.ai"
+        raised = False
+        try:
+            mod._llm_router_key_hash_pepper()
+        except ValueError as exc:
+            raised = "pepper is not configured" in str(exc)
+        expect(raised, "missing pepper outside local-dev must raise")
+
+        # REQUIRED forces the raise even on a local-dev domain.
+        os.environ["ARCLINK_BASE_DOMAIN"] = "localhost"
+        os.environ["ARCLINK_LLM_ROUTER_KEY_HASH_PEPPER_REQUIRED"] = "1"
+        raised_required = False
+        try:
+            mod._llm_router_key_hash_pepper()
+        except ValueError:
+            raised_required = True
+        expect(raised_required, "REQUIRED must force the raise even on local-dev")
+
+        # A real configured pepper is used verbatim.
+        os.environ.pop("ARCLINK_LLM_ROUTER_KEY_HASH_PEPPER_REQUIRED", None)
+        os.environ["ARCLINK_BASE_DOMAIN"] = "arclink.ai"
+        os.environ["ARCLINK_LLM_ROUTER_KEY_HASH_PEPPER"] = "a-real-router-pepper-value"
+        expect(mod._llm_router_key_hash_pepper() == "a-real-router-pepper-value", "configured pepper must win")
+
+        # Local-dev domain with no pepper falls back to the documented dev value.
+        os.environ.pop("ARCLINK_LLM_ROUTER_KEY_HASH_PEPPER", None)
+        os.environ["ARCLINK_BASE_DOMAIN"] = "example.test"
+        expect(
+            mod._llm_router_key_hash_pepper() == "arclink-dev-llm-router-key-hash-pepper",
+            "local-dev must use the dev fallback",
+        )
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+    print("PASS test_llm_router_key_hash_pepper_fails_closed_outside_local_dev")
+
+
+def test_verify_llm_router_key_migrates_legacy_hash_and_throttles_last_seen() -> None:
+    # sec-C1 + M3: a legacy (unpeppered) hash is migrated to the peppered hash on
+    # successful auth; thereafter last_seen_at is only written when stale (>60s),
+    # not on every request.
+    mod = load_module(CONTROL_PY, "arclink_control_db_router_verify_test")
+    old_env = os.environ.copy()
+    try:
+        os.environ.clear()
+        os.environ["ARCLINK_CONFIG_FILE"] = os.devnull
+        os.environ["ARCLINK_BASE_DOMAIN"] = "example.test"  # local-dev dev pepper
+        conn = memory_db(mod)
+        try:
+            raw_key = mod.generate_llm_router_raw_key()
+            _seed_router_key_deployment(mod, conn, raw_key=raw_key)
+            peppered = mod._hash_llm_router_key(raw_key)
+            legacy = mod._legacy_hash_llm_router_key(raw_key)
+            expect(peppered != legacy, "peppered and legacy hashes must differ")
+
+            # Force the stored hash back to the legacy (unpeppered) form and a very
+            # old last_seen to simulate a pre-migration row.
+            conn.execute(
+                "UPDATE arclink_llm_router_keys SET key_hash = ?, last_seen_at = '2026-01-01T00:00:00+00:00' WHERE key_id = ?",
+                (legacy, "llmk_" + raw_key.split("_")[2]),
+            )
+            conn.commit()
+
+            record = mod.verify_llm_router_key(conn, raw_key)
+            expect(record is not None, "legacy-hash key must still authenticate")
+            stored = conn.execute(
+                "SELECT key_hash, last_seen_at FROM arclink_llm_router_keys"
+            ).fetchone()
+            expect(str(stored["key_hash"]) == peppered, "legacy hash must migrate to peppered on auth")
+            migrated_seen = str(stored["last_seen_at"])
+            expect(migrated_seen != "2026-01-01T00:00:00+00:00", "migration writes a fresh last_seen")
+
+            # M3: an immediate re-auth is within the 60s window -> last_seen NOT rewritten.
+            mod.verify_llm_router_key(conn, raw_key)
+            after = conn.execute("SELECT last_seen_at FROM arclink_llm_router_keys").fetchone()
+            expect(str(after["last_seen_at"]) == migrated_seen, "fresh last_seen must be throttled (no rewrite)")
+
+            # A stale last_seen IS refreshed on the next auth.
+            conn.execute(
+                "UPDATE arclink_llm_router_keys SET last_seen_at = '2026-02-01T00:00:00+00:00'"
+            )
+            conn.commit()
+            mod.verify_llm_router_key(conn, raw_key)
+            refreshed = conn.execute("SELECT last_seen_at FROM arclink_llm_router_keys").fetchone()
+            expect(str(refreshed["last_seen_at"]) != "2026-02-01T00:00:00+00:00", "stale last_seen must refresh")
+        finally:
+            conn.close()
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+    print("PASS test_verify_llm_router_key_migrates_legacy_hash_and_throttles_last_seen")
+
+
+def test_upsert_model_catalog_commit_false_folds_into_caller_txn() -> None:
+    # M4: upsert_model_catalog(commit=False) must NOT commit, so the caller can
+    # fold the catalog mutation and its audit row into one atomic transaction.
+    mod = load_module(CONTROL_PY, "arclink_control_db_catalog_commit_test")
+    conn = memory_db(mod)
+    try:
+        conn.execute("BEGIN")
+        rows = mod.upsert_model_catalog(
+            conn,
+            provider="chutes",
+            models={"x-TEE": {"confidential_compute": True}},
+            commit=False,
+        )
+        expect(len(rows) == 1, str(rows))
+        expect(conn.in_transaction, "commit=False must leave the txn open for the caller")
+        conn.rollback()
+        # The rollback discarded the uncommitted upsert.
+        remaining = conn.execute("SELECT COUNT(*) AS c FROM arclink_model_catalog").fetchone()["c"]
+        expect(int(remaining) == 0, f"rolled-back catalog upsert must not persist, got {remaining}")
+
+        # Default (commit=True) still persists on its own.
+        mod.upsert_model_catalog(conn, provider="chutes", models={"y-TEE": {"confidential_compute": True}})
+        persisted = conn.execute("SELECT COUNT(*) AS c FROM arclink_model_catalog").fetchone()["c"]
+        expect(int(persisted) == 1, str(persisted))
+    finally:
+        conn.close()
+    print("PASS test_upsert_model_catalog_commit_false_folds_into_caller_txn")
+
+
+def test_llm_budget_reservations_legacy_check_migrates_to_expired_with_heartbeat() -> None:
+    # C2: the heartbeat reaper needs a `heartbeat_at` column and an `'expired'`
+    # status. Legacy DBs have neither (CHECK lacks 'expired', no heartbeat col).
+    # ensure_schema must idempotently add the column (backfilled from created_at)
+    # and rebuild the CHECK to admit 'expired', preserving existing rows.
+    mod = load_module(CONTROL_PY, "arclink_control_db_reservation_migration_test")
+    tmp = tempfile.TemporaryDirectory()
+    try:
+        db_path = str(Path(tmp.name) / "legacy.sqlite3")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        # Build the OLD reservations table: no heartbeat_at, CHECK without 'expired'.
+        conn.executescript(
+            """
+            CREATE TABLE arclink_llm_budget_reservations (
+              reservation_id TEXT PRIMARY KEY,
+              request_id TEXT NOT NULL,
+              deployment_id TEXT NOT NULL,
+              user_id TEXT NOT NULL,
+              reserved_cents INTEGER NOT NULL,
+              settled_cents INTEGER NOT NULL DEFAULT 0,
+              status TEXT NOT NULL CHECK (status IN ('reserved', 'settled', 'released', 'failed')),
+              metadata_json TEXT NOT NULL DEFAULT '{}',
+              created_at TEXT NOT NULL,
+              settled_at TEXT NOT NULL DEFAULT ''
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO arclink_llm_budget_reservations (
+              reservation_id, request_id, deployment_id, user_id, reserved_cents, status, created_at
+            ) VALUES ('llmres_legacy', 'req_legacy', 'dep_1', 'user_1', 5, 'reserved', '2026-01-01T00:00:00+00:00')
+            """
+        )
+        conn.commit()
+        # Pre-migration: 'expired' is rejected by the old CHECK.
+        try:
+            conn.execute(
+                "INSERT INTO arclink_llm_budget_reservations "
+                "(reservation_id, request_id, deployment_id, user_id, reserved_cents, status, created_at) "
+                "VALUES ('llmres_x', 'r', 'd', 'u', 1, 'expired', '2026-01-01T00:00:00+00:00')"
+            )
+        except sqlite3.IntegrityError:
+            pass
+        else:
+            raise AssertionError("legacy CHECK should reject 'expired' before migration")
+        conn.rollback()
+
+        # Run the live schema migration.
+        mod.ensure_schema(conn)
+
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(arclink_llm_budget_reservations)").fetchall()}
+        expect("heartbeat_at" in cols, f"heartbeat_at column must be added: {cols}")
+        legacy = conn.execute(
+            "SELECT status, heartbeat_at, created_at FROM arclink_llm_budget_reservations WHERE reservation_id='llmres_legacy'"
+        ).fetchone()
+        expect(str(legacy["status"]) == "reserved", dict(legacy))
+        # Backfilled from created_at so a pre-heartbeat leaked row still ages out.
+        expect(str(legacy["heartbeat_at"]) == str(legacy["created_at"]), dict(legacy))
+
+        # 'expired' is now an accepted status.
+        conn.execute(
+            "INSERT INTO arclink_llm_budget_reservations "
+            "(reservation_id, request_id, deployment_id, user_id, reserved_cents, status, created_at, heartbeat_at) "
+            "VALUES ('llmres_exp', 'r', 'd', 'u', 1, 'expired', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
+        )
+        conn.commit()
+        expired = conn.execute(
+            "SELECT status FROM arclink_llm_budget_reservations WHERE reservation_id='llmres_exp'"
+        ).fetchone()
+        expect(str(expired["status"]) == "expired", dict(expired))
+
+        # Idempotent: a second ensure_schema does not error or re-rebuild needlessly.
+        mod.ensure_schema(conn)
+        still = conn.execute(
+            "SELECT COUNT(*) AS c FROM arclink_llm_budget_reservations"
+        ).fetchone()["c"]
+        expect(int(still) == 2, f"rows preserved across idempotent migration, got {still}")
+        conn.close()
+    finally:
+        tmp.cleanup()
+    print("PASS test_llm_budget_reservations_legacy_check_migrates_to_expired_with_heartbeat")
+
+
+def test_llm_budget_reservations_rebuild_is_atomic_and_keeps_index_on_first_pass() -> None:
+    # Round-3 (deploy-blocking): the 'expired' CHECK rebuild DROPs the table, which
+    # also drops idx_arclink_llm_reservations_request_status (created earlier in the
+    # ensure_schema index block). The old rebuild left the index missing until a
+    # LATER ensure_schema pass and ran outside a transaction (a crash between DROP
+    # old and RENAME __new could strand rows). The fix recreates the index INSIDE
+    # the rebuild and folds the whole copy/swap into a single transaction.
+    #
+    # This proves: ONE ensure_schema pass yields the table WITH the index AND the
+    # 'expired' CHECK AND all rows preserved; the change is committed durably; and a
+    # second pass is a clean no-op.
+    mod = load_module(CONTROL_PY, "arclink_control_db_reservation_atomic_test")
+    tmp = tempfile.TemporaryDirectory()
+    try:
+        db_path = str(Path(tmp.name) / "legacy_atomic.sqlite3")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        # Legacy table: CHECK lacks 'expired', no heartbeat_at; plus the legacy index
+        # that the DROP-rebuild will tear down (so we prove it is recreated, not just
+        # never-dropped).
+        conn.executescript(
+            """
+            CREATE TABLE arclink_llm_budget_reservations (
+              reservation_id TEXT PRIMARY KEY,
+              request_id TEXT NOT NULL,
+              deployment_id TEXT NOT NULL,
+              user_id TEXT NOT NULL,
+              reserved_cents INTEGER NOT NULL,
+              settled_cents INTEGER NOT NULL DEFAULT 0,
+              status TEXT NOT NULL CHECK (status IN ('reserved', 'settled', 'released', 'failed')),
+              metadata_json TEXT NOT NULL DEFAULT '{}',
+              created_at TEXT NOT NULL,
+              settled_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX idx_arclink_llm_reservations_request_status
+              ON arclink_llm_budget_reservations (request_id, status);
+            INSERT INTO arclink_llm_budget_reservations
+              (reservation_id, request_id, deployment_id, user_id, reserved_cents, status, created_at)
+              VALUES ('llmres_a', 'req_a', 'dep_1', 'user_1', 5, 'reserved', '2026-01-01T00:00:00+00:00'),
+                     ('llmres_b', 'req_b', 'dep_1', 'user_1', 7, 'settled', '2026-01-02T00:00:00+00:00');
+            """
+        )
+        conn.commit()
+
+        def _index_present(c: sqlite3.Connection) -> bool:
+            row = c.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_arclink_llm_reservations_request_status'"
+            ).fetchone()
+            return row is not None
+
+        def _expired_in_check(c: sqlite3.Connection) -> bool:
+            ddl = str(
+                c.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='arclink_llm_budget_reservations'"
+                ).fetchone()["sql"]
+            )
+            return "'expired'" in ddl
+
+        # ONE ensure_schema pass.
+        mod.ensure_schema(conn)
+
+        # Index present after the FIRST pass (the core regression) -- not deferred.
+        expect(_index_present(conn), "index must exist after a single ensure_schema pass")
+        # 'expired' CHECK present.
+        expect(_expired_in_check(conn), "rebuilt CHECK must admit 'expired' after one pass")
+        # All rows preserved through the copy/swap.
+        ids = sorted(
+            str(r["reservation_id"])
+            for r in conn.execute("SELECT reservation_id FROM arclink_llm_budget_reservations").fetchall()
+        )
+        expect(ids == ["llmres_a", "llmres_b"], f"all rows must survive the rebuild: {ids}")
+        # heartbeat_at column added + backfilled from created_at.
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(arclink_llm_budget_reservations)").fetchall()}
+        expect("heartbeat_at" in cols, f"heartbeat_at column must be present: {cols}")
+        conn.close()
+
+        # Durability: reopen a FRESH connection -> the rebuild committed (atomic
+        # swap landed), index and CHECK persist, rows intact.
+        conn2 = sqlite3.connect(db_path)
+        conn2.row_factory = sqlite3.Row
+        expect(_index_present(conn2), "index must persist after reopen (committed)")
+        expect(_expired_in_check(conn2), "'expired' CHECK must persist after reopen (committed)")
+        durable = conn2.execute("SELECT COUNT(*) AS c FROM arclink_llm_budget_reservations").fetchone()["c"]
+        expect(int(durable) == 2, f"rows must be durable after commit, got {durable}")
+        # 'expired' is insertable post-migration.
+        conn2.execute(
+            "INSERT INTO arclink_llm_budget_reservations "
+            "(reservation_id, request_id, deployment_id, user_id, reserved_cents, status, created_at, heartbeat_at) "
+            "VALUES ('llmres_exp', 'r', 'd', 'u', 1, 'expired', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
+        )
+        conn2.commit()
+
+        # Second pass is a clean no-op: index/CHECK unchanged, no extra/duplicate
+        # rebuild, rows preserved.
+        mod.ensure_schema(conn2)
+        expect(_index_present(conn2), "index still present after 2nd pass")
+        expect(_expired_in_check(conn2), "'expired' CHECK still present after 2nd pass")
+        # No leftover __new scratch table from a stranded/partial rebuild.
+        leftover = conn2.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='arclink_llm_budget_reservations__new'"
+        ).fetchone()
+        expect(leftover is None, "no __new scratch table may be left behind")
+        final_count = conn2.execute("SELECT COUNT(*) AS c FROM arclink_llm_budget_reservations").fetchone()["c"]
+        expect(int(final_count) == 3, f"rows preserved across idempotent 2nd pass, got {final_count}")
+        conn2.close()
+    finally:
+        tmp.cleanup()
+    print("PASS test_llm_budget_reservations_rebuild_is_atomic_and_keeps_index_on_first_pass")
+
+
+def test_operator_action_secret_at_rest_is_rejected_and_hiccup_message_redacted() -> None:
+    # sec-H1: operator action authorization payload + JSON targets must reject
+    # plaintext secret material at rest; operator-hiccup notice bodies must be
+    # redacted before being persisted.
+    mod = load_module(CONTROL_PY, "arclink_control_db_operator_secret_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = config_for_root(mod, Path(tmp))
+        conn = mod.connect_db(cfg)
+        try:
+            # A JSON requested_target carrying a secret must be rejected.
+            rejected_target = False
+            try:
+                mod.request_operator_action(
+                    conn,
+                    action_kind="some-action",
+                    requested_by="operator",
+                    requested_target=json.dumps({"api_key": "sk-ant-SECRET-target-123456"}),
+                )
+            except ValueError as exc:
+                rejected_target = "secret material" in str(exc)
+            expect(rejected_target, "JSON target with plaintext secret must be rejected")
+            count = conn.execute("SELECT COUNT(*) AS c FROM operator_actions").fetchone()["c"]
+            expect(int(count) == 0, "rejected target must not persist a row")
+
+            # The authorization payload builder rejects embedded secrets.
+            rejected_payload = False
+            try:
+                mod._operator_action_auth_payload_json({"confirmation_id": "ok", "token": "sk-ant-SECRET-payload-123456"})
+            except ValueError as exc:
+                rejected_payload = "secret material" in str(exc)
+            expect(rejected_payload, "authorization payload with plaintext secret must be rejected")
+
+            # An operator-hiccup notice body carrying a secret is redacted at rest.
+            mod.report_operator_hiccup(
+                conn,
+                cfg,
+                source="unit",
+                key="secret-body-key",
+                message="upstream failed with key sk-ant-SECRET-body-1234567890",
+            )
+            body = conn.execute(
+                "SELECT message FROM notification_outbox ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            expect(body is not None, "hiccup must queue a notice")
+            expect("sk-ant-SECRET-body" not in str(body["message"]), str(body["message"]))
+            expect("REDACTED" in str(body["message"]), str(body["message"]))
+        finally:
+            conn.close()
+    print("PASS test_operator_action_secret_at_rest_is_rejected_and_hiccup_message_redacted")
+
+
 if __name__ == "__main__":
     test_config_loader_preserves_multi_token_values_and_export_prefix()
     test_explicit_missing_config_file_fails_loudly_but_devnull_remains_sentinel()
@@ -843,3 +1240,9 @@ if __name__ == "__main__":
     test_wave4_fresh_schema_rejects_invalid_high_value_status()
     test_mark_notification_error_does_not_clobber_delivered_row()
     test_operator_hiccup_arm_resolve_is_atomic_and_single_outcome()
+    test_llm_router_key_hash_pepper_fails_closed_outside_local_dev()
+    test_verify_llm_router_key_migrates_legacy_hash_and_throttles_last_seen()
+    test_upsert_model_catalog_commit_false_folds_into_caller_txn()
+    test_llm_budget_reservations_legacy_check_migrates_to_expired_with_heartbeat()
+    test_llm_budget_reservations_rebuild_is_atomic_and_keeps_index_on_first_pass()
+    test_operator_action_secret_at_rest_is_rejected_and_hiccup_message_redacted()

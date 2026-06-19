@@ -34,6 +34,12 @@ def load_module(filename: str, name: str):
 
 
 def memory_db(control):
+    # Establish the local-dev env so the LLM router-key hash pepper (sec-C1) uses
+    # its documented dev fallback instead of fail-closing. Mirrors the canonical
+    # arclink_test_helpers.memory_db / the session-pepper tests.
+    os.environ.setdefault("ARCLINK_CONFIG_FILE", os.devnull)
+    os.environ["ARCLINK_BASE_DOMAIN"] = "example.test"
+    os.environ.pop("ARCLINK_LLM_ROUTER_KEY_HASH_PEPPER_REQUIRED", None)
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     control.ensure_schema(conn)

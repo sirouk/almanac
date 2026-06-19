@@ -23,6 +23,23 @@ CHUTES_ENV = {
     "OPERATOR_NOTIFY_CHANNEL_ID": OPERATOR_CHAT_ID,
 }
 
+# A realistic, full -TEE catalog (>= the H1 hard floor of 8). The behavior tests
+# below (success path, last-known-good, dedup, re-arm, proportional drop) seed
+# from this so a *successful* sync always carries a production-credible catalog
+# size rather than a degraded 2-model partial that the H1 floor now (correctly)
+# refuses to make authoritative.
+FULL_TEE_MODELS = [
+    "moonshotai/Kimi-K2.6-TEE",
+    "moonshotai/Kimi-K2.7-TEE",
+    "zai-org/GLM-5.1-TEE",
+    "zai-org/GLM-5.2-TEE",
+    "deepseek-ai/DeepSeek-V3-TEE",
+    "deepseek-ai/DeepSeek-R1-TEE",
+    "Qwen/Qwen3-235B-TEE",
+    "meta-llama/Llama-4-TEE",
+    "mistralai/Mistral-Large-TEE",
+]
+
 
 def operator_cfg(
     control,
@@ -166,12 +183,12 @@ def test_sync_success_populates_catalog() -> None:
     sync = load_module("arclink_llm_model_sync.py", "arclink_llm_model_sync_success_test")
     conn = memory_db(control)
     cfg = operator_cfg(control)
-    client = FixtureCatalogHttpClient(["moonshotai/Kimi-K2.6-TEE", "zai-org/GLM-5.1-TEE"])
+    client = FixtureCatalogHttpClient(FULL_TEE_MODELS)
 
     result = sync.sync_llm_models(conn, CHUTES_ENV, cfg=cfg, http_client=client)
     expect(result["status"] == "ok", str(result))
-    expect(result["model_count"] == 2, str(result))
-    expect(_active_tee_models(control, conn) == ["moonshotai/Kimi-K2.6-TEE", "zai-org/GLM-5.1-TEE"], str(result))
+    expect(result["model_count"] == len(FULL_TEE_MODELS), str(result))
+    expect(_active_tee_models(control, conn) == sorted(FULL_TEE_MODELS), str(result))
     expect(_undelivered_operator_notices(conn) == [], "success must not queue an operator notice")
     print("PASS test_sync_success_populates_catalog")
 
@@ -184,11 +201,11 @@ def test_failure_keeps_last_known_good_and_notifies_operator() -> None:
 
     # First a good sync to establish last-known-good.
     ok = sync.sync_llm_models(
-        conn, CHUTES_ENV, cfg=cfg, http_client=FixtureCatalogHttpClient(["moonshotai/Kimi-K2.6-TEE", "zai-org/GLM-5.1-TEE"])
+        conn, CHUTES_ENV, cfg=cfg, http_client=FixtureCatalogHttpClient(FULL_TEE_MODELS)
     )
     expect(ok["status"] == "ok", str(ok))
     baseline = _active_tee_models(control, conn)
-    expect(len(baseline) == 2, str(baseline))
+    expect(len(baseline) == len(FULL_TEE_MODELS), str(baseline))
 
     # Now the fetch fails -- allow-list must be preserved, operator notified.
     failed = sync.sync_llm_models(conn, CHUTES_ENV, cfg=cfg, http_client=FailingCatalogHttpClient())
@@ -279,7 +296,7 @@ def test_success_after_failure_clears_alert_state() -> None:
     expect(suppressed["notified"] is False, "second failure suppressed by audit dedup")
 
     ok = sync.sync_llm_models(
-        conn, CHUTES_ENV, cfg=cfg, http_client=FixtureCatalogHttpClient(["a-TEE", "b-TEE"])
+        conn, CHUTES_ENV, cfg=cfg, http_client=FixtureCatalogHttpClient(FULL_TEE_MODELS)
     )
     expect(ok["status"] == "ok", str(ok))
 
@@ -305,7 +322,7 @@ def test_rearm_after_success_even_if_prior_notice_never_delivered() -> None:
 
     # Establish last-known-good so a later success isn't blocked by the floor.
     ok0 = sync.sync_llm_models(
-        conn, CHUTES_ENV, cfg=cfg, http_client=FixtureCatalogHttpClient(["a-TEE", "b-TEE"])
+        conn, CHUTES_ENV, cfg=cfg, http_client=FixtureCatalogHttpClient(FULL_TEE_MODELS)
     )
     expect(ok0["status"] == "ok", str(ok0))
 
@@ -317,7 +334,7 @@ def test_rearm_after_success_even_if_prior_notice_never_delivered() -> None:
     # A successful sync clears the alert state (re-arms) WITHOUT requiring the
     # prior notice to have been delivered. The stale undelivered row is still here.
     ok = sync.sync_llm_models(
-        conn, CHUTES_ENV, cfg=cfg, http_client=FixtureCatalogHttpClient(["a-TEE", "b-TEE"])
+        conn, CHUTES_ENV, cfg=cfg, http_client=FixtureCatalogHttpClient(FULL_TEE_MODELS)
     )
     expect(ok["status"] == "ok", str(ok))
     expect(len(_undelivered_operator_notices(conn)) == 1, "old undelivered notice still lingers")
@@ -331,8 +348,8 @@ def test_rearm_after_success_even_if_prior_notice_never_delivered() -> None:
 
 
 def test_partial_response_below_floor_is_failed_keeps_last_known_good() -> None:
-    # BUG #3 (floor): a partial response under the sane default minimum (2) must
-    # be a FAILED sync -- never accepted as success with mark-missing.
+    # BUG #3 (floor): a partial response under the sane default minimum (H1: 8)
+    # must be a FAILED sync -- never accepted as success with mark-missing.
     control = load_module("arclink_control.py", "arclink_control_model_sync_floor_test")
     sync = load_module("arclink_llm_model_sync.py", "arclink_llm_model_sync_floor_test")
     conn = memory_db(control)
@@ -345,8 +362,8 @@ def test_partial_response_below_floor_is_failed_keeps_last_known_good() -> None:
     baseline = _active_tee_models(control, conn)
     expect(len(baseline) == 13, str(baseline))
 
-    # Default env: no MIN override -> floor is 2. A single-model partial response
-    # is below the floor and must FAIL (the old min=1 would have accepted it).
+    # Default env: no MIN override -> floor is 8 (H1). A single-model partial
+    # response is below the floor and must FAIL (the old min=1 would have accepted it).
     failed = sync.sync_llm_models(
         conn, CHUTES_ENV, cfg=cfg, http_client=FixtureCatalogHttpClient(["vendor/model-00-TEE"])
     )
@@ -359,23 +376,24 @@ def test_partial_response_below_floor_is_failed_keeps_last_known_good() -> None:
 
 
 def test_suspicious_proportional_drop_is_failed_keeps_last_known_good() -> None:
-    # BUG #3 (proportional drop): even above the hard floor, a large drop vs the
-    # last-known active count (e.g. 2 of 13) is treated as a FAILED sync so the
-    # allow-list is not silently shrunk and the other models are not marked
-    # unavailable.
+    # BUG #3 (proportional drop): even above the hard floor (H1: 8), a large drop
+    # vs the last-known active count (e.g. 9 of 20) is treated as a FAILED sync so
+    # the allow-list is not silently shrunk and the other models are not marked
+    # unavailable. The partial set stays >= the floor so this exercises the
+    # proportional-drop guard specifically, not the too-few-models floor.
     control = load_module("arclink_control.py", "arclink_control_model_sync_drop_test")
     sync = load_module("arclink_llm_model_sync.py", "arclink_llm_model_sync_drop_test")
     conn = memory_db(control)
     cfg = operator_cfg(control)
 
-    full = [f"vendor/model-{i:02d}-TEE" for i in range(13)]
+    full = [f"vendor/model-{i:02d}-TEE" for i in range(20)]
     ok = sync.sync_llm_models(conn, CHUTES_ENV, cfg=cfg, http_client=FixtureCatalogHttpClient(full))
     expect(ok["status"] == "ok", str(ok))
     baseline = _active_tee_models(control, conn)
-    expect(len(baseline) == 13, str(baseline))
+    expect(len(baseline) == 20, str(baseline))
 
-    # 2 of 13 is above the floor (2) but a >50% proportional drop -> suspicious.
-    partial = ["vendor/model-00-TEE", "vendor/model-01-TEE"]
+    # 9 of 20 is above the floor (8) but a >50% proportional drop -> suspicious.
+    partial = [f"vendor/model-{i:02d}-TEE" for i in range(9)]
     failed = sync.sync_llm_models(conn, CHUTES_ENV, cfg=cfg, http_client=FixtureCatalogHttpClient(partial))
     expect(failed["status"] == "failed", str(failed))
     expect("suspicious_drop" in failed["reason"], failed["reason"])
@@ -504,6 +522,63 @@ def test_startup_refresh_tee_heavy_drop_keeps_glm_and_kimi() -> None:
     print("PASS test_startup_refresh_tee_heavy_drop_keeps_glm_and_kimi")
 
 
+def test_first_sync_requires_real_catalog_size_and_default_floor_is_eight() -> None:
+    # H1: the FIRST authoritative sync (no last-known active baseline, so the
+    # proportional-drop guard cannot fire) must look like a real, full catalog
+    # before it is allowed to write the baseline every later guard trusts. The
+    # default hard floor is now 8 (was effectively 1 via compose), so a degraded
+    # 2-model first response can never become authoritative.
+    control = load_module("arclink_control.py", "arclink_control_model_sync_h1_test")
+    sync = load_module("arclink_llm_model_sync.py", "arclink_llm_model_sync_h1_test")
+
+    # The compose default raises the per-request floor to 8; the module keeps a
+    # low absolute hard floor of 2 (never accept fewer than 2 regardless). The
+    # first-sync baseline guard is an independent, higher (8) expectation that
+    # bites even when the per-request floor is left at its minimum.
+    expect(sync.DEFAULT_MODEL_SYNC_MIN_MODELS == 2, str(sync.DEFAULT_MODEL_SYNC_MIN_MODELS))
+    expect(sync.DEFAULT_FIRST_SYNC_MIN_MODELS == 8, str(sync.DEFAULT_FIRST_SYNC_MIN_MODELS))
+
+    # A degraded 5-model first response on an EMPTY baseline clears the per-request
+    # floor (2) but is below the first-sync expectation (8), so the first-sync
+    # baseline guard FAILS it -- a degraded partial never becomes authoritative.
+    conn = memory_db(control)
+    cfg = operator_cfg(control)
+    five = [f"vendor/first-{i:02d}-TEE" for i in range(5)]
+    degraded = sync.sync_llm_models(
+        conn, CHUTES_ENV, cfg=cfg, http_client=FixtureCatalogHttpClient(five)
+    )
+    expect(degraded["status"] == "failed", str(degraded))
+    expect("first_sync_too_few" in degraded["reason"], degraded["reason"])
+    expect(_active_tee_models(control, conn) == [], "degraded first response must not be written")
+    expect(len(_undelivered_operator_notices(conn)) == 1, "operator notified on degraded first sync")
+
+    # The first-sync minimum is independently tunable upward: a 9-model first
+    # response is fine by default (>= 8) but blocked when the operator demands 12.
+    conn2 = memory_db(control)
+    cfg2 = operator_cfg(control)
+    env_high_first = dict(
+        CHUTES_ENV,
+        ARCLINK_LLM_ROUTER_MODEL_SYNC_FIRST_SYNC_MIN_MODELS="12",
+    )
+    nine = [f"vendor/first-{i:02d}-TEE" for i in range(9)]
+    blocked = sync.sync_llm_models(
+        conn2, env_high_first, cfg=cfg2, http_client=FixtureCatalogHttpClient(nine)
+    )
+    expect(blocked["status"] == "failed", str(blocked))
+    expect("first_sync_too_few" in blocked["reason"], blocked["reason"])
+    expect(_active_tee_models(control, conn2) == [], "first-sync guard must block partial baseline write")
+
+    # A full first response (>= 8) is accepted and becomes the baseline.
+    conn3 = memory_db(control)
+    cfg3 = operator_cfg(control)
+    ok = sync.sync_llm_models(
+        conn3, CHUTES_ENV, cfg=cfg3, http_client=FixtureCatalogHttpClient(FULL_TEE_MODELS)
+    )
+    expect(ok["status"] == "ok", str(ok))
+    expect(len(_active_tee_models(control, conn3)) == len(FULL_TEE_MODELS), str(ok))
+    print("PASS test_first_sync_requires_real_catalog_size_and_default_floor_is_eight")
+
+
 def main() -> int:
     test_filter_tee_models_keeps_only_tee_suffix()
     test_fetch_tee_models_filters_catalog()
@@ -519,7 +594,8 @@ def main() -> int:
     test_suspicious_proportional_drop_is_failed_keeps_last_known_good()
     test_router_effective_allow_list_reflects_synced_catalog()
     test_startup_refresh_tee_heavy_drop_keeps_glm_and_kimi()
-    print("PASS all 14 ArcLink LLM model-sync tests")
+    test_first_sync_requires_real_catalog_size_and_default_floor_is_eight()
+    print("PASS all 15 ArcLink LLM model-sync tests")
     return 0
 
 

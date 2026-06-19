@@ -4,10 +4,11 @@ from __future__ import annotations
 import json
 import sqlite3
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from arclink_test_helpers import expect, load_module
+from arclink_test_helpers import expect, load_module, use_explicit_local_session_hash_env
 
 
 def fake_upstream_transport(
@@ -166,6 +167,10 @@ class FixtureCatalogHttpClient:
 
 
 def temp_router_db() -> tuple[tempfile.TemporaryDirectory[str], str]:
+    # Establish the local-dev env so the router-key hash pepper (sec-C1) uses its
+    # documented dev fallback instead of raising. Mirrors memory_db / the
+    # session-pepper tests: a local-dev base domain + no REQUIRED flag.
+    use_explicit_local_session_hash_env()
     tmp = tempfile.TemporaryDirectory()
     path = str(Path(tmp.name) / "router.sqlite3")
     conn = sqlite3.connect(path)
@@ -325,13 +330,16 @@ def _seed_router_key(
         metadata=dict(deployment_metadata or {}),
     )
     raw_key = control.generate_llm_router_raw_key()
+    # ``None`` -> the default 2-model key allow-list; an explicit ``[]`` -> a key
+    # with NO per-key allow-list (so the global / default-model path is exercised).
+    key_allowed = ["model-a", "model-b"] if allowed_models is None else list(allowed_models)
     record = control.ensure_llm_router_key(
         conn,
         deployment_id="dep_1",
         user_id="user_1",
         secret_ref="secret://arclink/llm-router/dep_1/api-key",
         raw_key=raw_key,
-        allowed_models=allowed_models or ["model-a", "model-b"],
+        allowed_models=key_allowed,
     )
     if status != "active":
         conn.execute("UPDATE arclink_llm_router_keys SET status = ? WHERE key_id = ?", (status, record["key_id"]))
@@ -1611,12 +1619,19 @@ def test_chat_preflight_enforces_rate_limit_and_concurrency() -> None:
         raw_key = _seed_router_key(db_path)
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
+        # A genuinely in-flight reservation (fresh created_at) must hold the
+        # concurrency slot. A current timestamp keeps it well inside the C2 TTL
+        # reaper window so the reaper leaves it untouched.
+        fresh_created_at = (
+            datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        )
         conn.execute(
             """
             INSERT INTO arclink_llm_budget_reservations (
               reservation_id, request_id, deployment_id, user_id, reserved_cents, status, created_at
-            ) VALUES ('llmres_existing', 'llmreq_existing', 'dep_1', 'user_1', 1, 'reserved', '2026-05-16T00:00:00+00:00')
-            """
+            ) VALUES ('llmres_existing', 'llmreq_existing', 'dep_1', 'user_1', 1, 'reserved', ?)
+            """,
+            (fresh_created_at,),
         )
         conn.commit()
         conn.close()
@@ -2133,6 +2148,1025 @@ def test_chat_partial_stream_failure_settles_without_prompt_or_secret_storage() 
     print("PASS test_chat_partial_stream_failure_settles_without_prompt_or_secret_storage")
 
 
+def test_open_reservations_count_against_budget_so_concurrency_cannot_overspend() -> None:
+    # C1: boundary.remaining_cents is SETTLED-only, so concurrent in-flight
+    # requests each holding an OPEN reservation must be subtracted from remaining
+    # before the per-request reservation gate, or N requests collectively reserve
+    # past the budget. Seed remaining headroom that is already fully consumed by
+    # open reservations and confirm the next request is refused (402).
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(
+            db_path,
+            deployment_metadata={"chutes": {"monthly_budget_cents": 100, "used_cents": 95}},
+        )
+        # Remaining settled headroom is 5c. An open reservation of 5c already
+        # holds all of it, so the next request (>=1c) must be refused.
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        fresh = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        conn.execute(
+            """
+            INSERT INTO arclink_llm_budget_reservations (
+              reservation_id, request_id, deployment_id, user_id, reserved_cents, status, created_at
+            ) VALUES ('llmres_open', 'llmreq_open', 'dep_1', 'user_1', 5, 'reserved', ?)
+            """,
+            (fresh,),
+        )
+        conn.commit()
+        conn.close()
+        upstream = fake_upstream_transport()
+        client = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                # High concurrency limit so the concurrency gate does not mask the
+                # budget gate -- this proves the OPEN-reservation subtraction.
+                "ARCLINK_LLM_ROUTER_DEPLOYMENT_CONCURRENCY_LIMIT": "50",
+            },
+            upstream_transport=upstream,
+        )
+        blocked = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "model-a", "messages": [{"role": "user", "content": "hello"}]},
+        )
+        expect(blocked.status_code == 402, blocked.text)
+        expect(blocked.json()["error"]["code"] == "budget_exhausted", blocked.text)
+        expect(len(upstream.requests) == 0, str(upstream.requests))  # type: ignore[attr-defined]
+    finally:
+        tmp.cleanup()
+    print("PASS test_open_reservations_count_against_budget_so_concurrency_cannot_overspend")
+
+
+def test_stale_reservation_reaper_releases_leaked_rows_and_keeps_fresh() -> None:
+    # C2: a worker that dies mid-request leaks a 'reserved' row that consumes
+    # budget headroom forever. The HEARTBEAT reaper must expire rows whose
+    # heartbeat went stale past the TTL while leaving genuinely in-flight (fresh
+    # heartbeat) rows untouched -- and marks them 'expired' (not a clean
+    # 'released') so settlement can still reconcile them by id.
+    router = load_module("arclink_llm_router.py", "arclink_llm_router_reaper_test")
+    control = load_module("arclink_control.py", "arclink_control_llm_router_reaper_test")
+    tmp, db_path = temp_router_db()
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            control.ensure_schema(conn)
+            stale = "2026-01-01T00:00:00+00:00"  # far past the TTL
+            fresh = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+            for rid, hb in (("llmres_stale", stale), ("llmres_fresh", fresh)):
+                conn.execute(
+                    """
+                    INSERT INTO arclink_llm_budget_reservations (
+                      reservation_id, request_id, deployment_id, user_id, reserved_cents, status, created_at, heartbeat_at
+                    ) VALUES (?, ?, 'dep_1', 'user_1', 3, 'reserved', ?, ?)
+                    """,
+                    (rid, f"req_{rid}", stale, hb),
+                )
+            conn.commit()
+            config = router.load_router_config(
+                {"ARCLINK_DB_PATH": db_path, "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "k"}
+            )
+            released = router._reap_stale_reservations(conn, config)
+            expect(released == 1, f"exactly the stale-heartbeat row should be reaped, got {released}")
+            rows = {
+                str(row["reservation_id"]): str(row["status"])
+                for row in conn.execute(
+                    "SELECT reservation_id, status FROM arclink_llm_budget_reservations"
+                ).fetchall()
+            }
+            # NOTE: both rows are equally OLD (created_at far in the past); only the
+            # heartbeat distinguishes them, proving the reaper keys on heartbeat
+            # staleness, NOT total age -- so a long-but-live stream is never reaped.
+            expect(rows["llmres_stale"] == "expired", str(rows))
+            expect(rows["llmres_fresh"] == "reserved", str(rows))
+            # Idempotent: a second pass reaps nothing.
+            expect(router._reap_stale_reservations(conn, config) == 0, "reaper must be idempotent")
+        finally:
+            conn.close()
+    finally:
+        tmp.cleanup()
+    print("PASS test_stale_reservation_reaper_releases_leaked_rows_and_keeps_fresh")
+
+
+def test_omitted_max_tokens_forwards_reservation_output_cap_upstream() -> None:
+    # missed-H: when the caller omits max_tokens the reservation prices a bounded
+    # output (min(cap, 1024)); the forwarded upstream payload must carry that same
+    # cap so actual usage cannot settle unbounded above the reservation.
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(
+            db_path,
+            deployment_metadata={"chutes": {"monthly_budget_cents": 100000, "used_cents": 0}},
+        )
+        upstream = fake_upstream_transport()
+        client = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_MAX_TOKENS_CAP": "4096",
+            },
+            upstream_transport=upstream,
+        )
+        # Caller omits max_tokens entirely.
+        ok = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "model-a", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        expect(ok.status_code == 200, ok.text)
+        forwarded = upstream.requests[0]["payload"]  # type: ignore[attr-defined]
+        expect(forwarded.get("max_tokens") == 1024, str(forwarded))
+
+        # An explicit caller cap is preserved (not overwritten).
+        upstream.requests.clear()  # type: ignore[attr-defined]
+        ok2 = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "model-a", "max_tokens": 64, "messages": [{"role": "user", "content": "hi"}]},
+        )
+        expect(ok2.status_code == 200, ok2.text)
+        forwarded2 = upstream.requests[0]["payload"]  # type: ignore[attr-defined]
+        expect(forwarded2.get("max_tokens") == 64, str(forwarded2))
+    finally:
+        tmp.cleanup()
+    print("PASS test_omitted_max_tokens_forwards_reservation_output_cap_upstream")
+
+
+def test_default_model_marked_unavailable_is_not_forwarded() -> None:
+    # H2: _router_model_allowed admits config.default_model regardless of catalog
+    # status. Once the catalog marks that model 'unavailable' (no live
+    # replacement), the router must refuse to forward it -- even as the default --
+    # unless the break-glass env is set.
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(
+            db_path,
+            allowed_models=[],  # global allow-list / default model path
+            deployment_metadata={"chutes": {"monthly_budget_cents": 100000, "used_cents": 0}},
+        )
+        # Seed the default model into the catalog and mark it unavailable.
+        control = load_module("arclink_control.py", "arclink_control_h2_unavailable_test")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            control.ensure_schema(conn)
+            control.upsert_model_catalog(
+                conn,
+                provider="chutes",
+                models={"default-unavailable-TEE": {"confidential_compute": True}},
+            )
+            conn.execute(
+                "UPDATE arclink_model_catalog SET status='unavailable' WHERE model_id='default-unavailable-TEE'"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        upstream = fake_upstream_transport()
+        base_env = {
+            "ARCLINK_DB_PATH": db_path,
+            "ARCLINK_LLM_ROUTER_ENABLED": "1",
+            "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+            "ARCLINK_LLM_ROUTER_DEFAULT_MODEL": "default-unavailable-TEE",
+            # Empty global allow-list -> env fallback is (default,), exercising the
+            # default-model admission path the H2 guard must still reject.
+            "ARCLINK_LLM_ROUTER_ALLOWED_MODELS": "",
+        }
+        client = _client_for(base_env, upstream_transport=upstream)
+        refused = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "default-unavailable-TEE", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        expect(refused.status_code == 403, refused.text)
+        expect(refused.json()["error"]["code"] == "model_unavailable", refused.text)
+        expect(len(upstream.requests) == 0, str(upstream.requests))  # type: ignore[attr-defined]
+
+        # Break-glass env reopens it for incident response.
+        upstream2 = fake_upstream_transport()
+        client2 = _client_for(
+            {**base_env, "ARCLINK_LLM_ROUTER_ALLOW_INACTIVE_MODELS": "1"},
+            upstream_transport=upstream2,
+        )
+        allowed = client2.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "default-unavailable-TEE", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        expect(allowed.status_code == 200, allowed.text)
+        expect(len(upstream2.requests) == 1, str(upstream2.requests))  # type: ignore[attr-defined]
+    finally:
+        tmp.cleanup()
+    print("PASS test_default_model_marked_unavailable_is_not_forwarded")
+
+
+def test_health_reports_allow_list_state_and_alerts_on_collapse() -> None:
+    # H3: /health must distinguish a synced catalog from the env fallback and
+    # alert the Operator once when the synced allow-list COLLAPSES to env-only
+    # after a prior successful sync.
+    tmp, db_path = temp_router_db()
+    try:
+        control = load_module("arclink_control.py", "arclink_control_h3_collapse_test")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            control.ensure_schema(conn)
+            # A prior successful sync exists, but the catalog is now empty -> collapse.
+            control.append_arclink_audit(
+                conn,
+                action="llm_router:model_sync_ok",
+                target_kind="llm-router",
+                target_id="chutes",
+                reason="synced 9 -TEE models",
+                metadata={"model_count": 9},
+            )
+        finally:
+            conn.close()
+        client = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_ALLOWED_MODELS": "model-a",
+            }
+        )
+        health = client.get("/health")
+        expect(health.status_code == 200, health.text)
+        payload = health.json()
+        allow_list = payload.get("allow_list") or {}
+        expect(allow_list.get("source") == "env_fallback", str(allow_list))
+        expect(allow_list.get("synced_catalog_collapsed") is True, str(allow_list))
+        expect(allow_list.get("ever_synced") is True, str(allow_list))
+
+        # An operator hiccup notice was queued exactly once across repeated checks.
+        client.get("/health")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            notices = conn.execute(
+                "SELECT message FROM notification_outbox WHERE target_kind='operator'"
+            ).fetchall()
+            audits = conn.execute(
+                "SELECT action FROM arclink_audit_log WHERE action LIKE 'operator_hiccup:llm_router_allow_list_collapsed%'"
+            ).fetchall()
+        finally:
+            conn.close()
+        expect(len(notices) == 1, f"collapse must alert the operator exactly once, got {len(notices)}")
+        expect("COLLAPSED" in str(notices[0]["message"]), str(notices[0]["message"]))
+        expect(len(audits) == 1, str(audits))
+    finally:
+        tmp.cleanup()
+    print("PASS test_health_reports_allow_list_state_and_alerts_on_collapse")
+
+
+def test_fresh_heartbeat_survives_old_read_timeout_window_and_settles_by_id() -> None:
+    # C2 (deploy-blocking): an httpx READ timeout is per-chunk, NOT a total stream
+    # lifetime, so a long stream legitimately outlives read_timeout+120 while still
+    # yielding chunks. The OLD age-based reaper would expire that LIVE reservation,
+    # stop counting it against budget (C1 overspend), and the status='reserved'
+    # release guard meant a reaped-but-returning request could never reconcile.
+    #
+    # This proves the heartbeat fix end to end:
+    #   (a) a reservation with a FRESH heartbeat is NOT reaped even though its
+    #       created_at is far older than the old read_timeout+120 window;
+    #   (b) a reservation with a STALE heartbeat IS reaped (-> 'expired');
+    #   (c) a reaped ('expired') row that then SETTLES reconciles by id -> 'settled'
+    #       and stops double-counting against the C1 status='reserved' headroom sum.
+    router = load_module("arclink_llm_router.py", "arclink_llm_router_heartbeat_test")
+    control = load_module("arclink_control.py", "arclink_control_llm_router_heartbeat_test")
+    tmp, db_path = temp_router_db()
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            control.ensure_schema(conn)
+            now = datetime.now(timezone.utc)
+            # A short read timeout -> old TTL would be read_timeout+120 == 130s.
+            config = router.load_router_config(
+                {
+                    "ARCLINK_DB_PATH": db_path,
+                    "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "k",
+                    "ARCLINK_LLM_ROUTER_UPSTREAM_READ_TIMEOUT_SECONDS": "10",
+                }
+            )
+            # created_at 1 hour ago for BOTH rows (well past read_timeout+120) so the
+            # ONLY thing that can save a row is a fresh heartbeat.
+            old_created = (now - __import__("datetime").timedelta(hours=1)).replace(microsecond=0).isoformat()
+            fresh_hb = now.replace(microsecond=0).isoformat()
+            stale_hb = (now - __import__("datetime").timedelta(minutes=30)).replace(microsecond=0).isoformat()
+            for rid, hb, cents in (("llmres_live", fresh_hb, 7), ("llmres_dead", stale_hb, 11)):
+                conn.execute(
+                    """
+                    INSERT INTO arclink_llm_budget_reservations (
+                      reservation_id, request_id, deployment_id, user_id, reserved_cents, status, created_at, heartbeat_at
+                    ) VALUES (?, ?, 'dep_1', 'user_1', ?, 'reserved', ?, ?)
+                    """,
+                    (rid, f"req_{rid}", cents, old_created, hb),
+                )
+            conn.commit()
+
+            reaped = router._reap_stale_reservations(conn, config)
+            expect(reaped == 1, f"only the stale-heartbeat (dead) row should be reaped, got {reaped}")
+            rows = {
+                str(r["reservation_id"]): str(r["status"])
+                for r in conn.execute("SELECT reservation_id, status FROM arclink_llm_budget_reservations").fetchall()
+            }
+            # (a) live row with a fresh heartbeat survives despite the ancient created_at.
+            expect(rows["llmres_live"] == "reserved", f"fresh-heartbeat live row must survive: {rows}")
+            # (b) dead row is expired (distinct from a clean 'released').
+            expect(rows["llmres_dead"] == "expired", f"stale-heartbeat row must be expired: {rows}")
+
+            # C1: the expired row no longer counts against the open-reservation sum;
+            # only the live (still 'reserved') row does.
+            open_cents = router._open_reserved_cents(conn, "dep_1")
+            expect(open_cents == 7, f"expired row must drop out of the budget headroom sum, got {open_cents}")
+
+            # (c) the reaped (expired) request returns and SETTLES -> reconciles by id.
+            router._release_budget_reservation(
+                conn,
+                "llmres_dead",
+                status="settled",
+                settled_cents=9,
+            )
+            settled_row = conn.execute(
+                "SELECT status, settled_cents FROM arclink_llm_budget_reservations WHERE reservation_id='llmres_dead'"
+            ).fetchone()
+            expect(str(settled_row["status"]) == "settled", f"expired row must reconcile to settled: {dict(settled_row)}")
+            expect(int(settled_row["settled_cents"]) == 9, str(dict(settled_row)))
+            # And it still does not re-enter the open headroom sum after settlement.
+            expect(router._open_reserved_cents(conn, "dep_1") == 7, "settled row must not double-count")
+
+            # A double-settle on the now-terminal row is a no-op (no row rewrite).
+            router._release_budget_reservation(conn, "llmres_dead", status="failed", settled_cents=999)
+            recheck = conn.execute(
+                "SELECT status, settled_cents FROM arclink_llm_budget_reservations WHERE reservation_id='llmres_dead'"
+            ).fetchone()
+            expect(str(recheck["status"]) == "settled", f"terminal row must not be rewritten: {dict(recheck)}")
+            expect(int(recheck["settled_cents"]) == 9, str(dict(recheck)))
+        finally:
+            conn.close()
+    finally:
+        tmp.cleanup()
+    print("PASS test_fresh_heartbeat_survives_old_read_timeout_window_and_settles_by_id")
+
+
+def test_null_max_tokens_is_dropped_and_reservation_cap_injected() -> None:
+    # missed-H2: a caller can set max_tokens: null (or non-positive/invalid). The
+    # reservation prices the bounded default (min(cap, 1024)), but the null key
+    # EXISTS in the body -- forwarding it verbatim lets upstream treat null as
+    # unbounded. The forwarded payload must DROP the null/invalid key and inject
+    # the reservation output cap, with no null surviving.
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(
+            db_path,
+            deployment_metadata={"chutes": {"monthly_budget_cents": 100000, "used_cents": 0}},
+        )
+        upstream = fake_upstream_transport()
+        client = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_MAX_TOKENS_CAP": "4096",
+            },
+            upstream_transport=upstream,
+        )
+        ok = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={
+                "model": "model-a",
+                "max_tokens": None,
+                "max_completion_tokens": None,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        expect(ok.status_code == 200, ok.text)
+        forwarded = upstream.requests[0]["payload"]  # type: ignore[attr-defined]
+        # The null keys are gone, and a positive injected cap is present.
+        expect("max_completion_tokens" not in forwarded, str(forwarded))
+        expect(forwarded.get("max_tokens") == 1024, str(forwarded))
+        expect(forwarded.get("max_tokens") is not None, str(forwarded))
+
+        # A non-positive / non-int explicit value is also dropped, not forwarded.
+        upstream.requests.clear()  # type: ignore[attr-defined]
+        ok2 = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "model-a", "max_tokens": 0, "messages": [{"role": "user", "content": "hi"}]},
+        )
+        expect(ok2.status_code == 200, ok2.text)
+        forwarded2 = upstream.requests[0]["payload"]  # type: ignore[attr-defined]
+        expect(forwarded2.get("max_tokens") == 1024, str(forwarded2))
+    finally:
+        tmp.cleanup()
+    print("PASS test_null_max_tokens_is_dropped_and_reservation_cap_injected")
+
+
+def test_reaper_ttl_exceeds_upstream_read_window_so_slow_live_request_is_safe() -> None:
+    # Round-3 (deploy-blocking): the heartbeat refreshes only AFTER a streamed
+    # chunk, while httpx bounds time-to-first-byte, the inter-chunk gap, AND a whole
+    # non-streaming call to the upstream READ timeout. So a LIVE request can go up
+    # to read_timeout seconds without refreshing -- the reaper TTL must be STRICTLY
+    # GREATER than one read window (+margin) or a legitimately-slow live request is
+    # false-expired, dropped from the C1 open-reservation sum -> budget over-reserved.
+    router = load_module("arclink_llm_router.py", "arclink_llm_router_ttl_window_test")
+    control = load_module("arclink_control.py", "arclink_control_llm_router_ttl_window_test")
+    tmp, db_path = temp_router_db()
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            control.ensure_schema(conn)
+            # A LONG read timeout: one read window (600s) far exceeds the legacy
+            # fixed 120s floor, so the TTL must track read_timeout+margin.
+            read_timeout = 600
+            margin = router.RESERVATION_REAPER_TTL_MARGIN_SECONDS
+            config = router.load_router_config(
+                {
+                    "ARCLINK_DB_PATH": db_path,
+                    "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "k",
+                    "ARCLINK_LLM_ROUTER_UPSTREAM_READ_TIMEOUT_SECONDS": str(read_timeout),
+                }
+            )
+            ttl = router._reservation_reaper_ttl_seconds(config)
+            # TTL strictly greater than a single read window so one read-timeout gap
+            # (no refresh) can never by itself trip the reaper.
+            expect(ttl == read_timeout + margin, f"TTL must be read_timeout+margin, got {ttl}")
+            expect(ttl > read_timeout, f"TTL must exceed one read window, got {ttl} vs {read_timeout}")
+
+            now = datetime.now(timezone.utc)
+            from datetime import timedelta as _td
+            ancient_created = (now - _td(hours=6)).replace(microsecond=0).isoformat()
+            # (a) live stream whose ONLY liveness signal is the heartbeat: ancient
+            #     created_at, but heartbeat stale by exactly one read window (less
+            #     than the TTL). MUST survive -- a single read gap can't expire it.
+            within_window_hb = (now - _td(seconds=read_timeout)).replace(microsecond=0).isoformat()
+            # (b) heartbeat stale by MORE than read_timeout+margin -> genuinely dead.
+            past_ttl_hb = (now - _td(seconds=read_timeout + margin + 60)).replace(microsecond=0).isoformat()
+            for rid, hb, cents in (
+                ("llmres_slow_live", within_window_hb, 5),
+                ("llmres_dead", past_ttl_hb, 9),
+            ):
+                conn.execute(
+                    """
+                    INSERT INTO arclink_llm_budget_reservations (
+                      reservation_id, request_id, deployment_id, user_id, reserved_cents, status, created_at, heartbeat_at
+                    ) VALUES (?, ?, 'dep_1', 'user_1', ?, 'reserved', ?, ?)
+                    """,
+                    (rid, f"req_{rid}", cents, ancient_created, hb),
+                )
+            conn.commit()
+
+            reaped = router._reap_stale_reservations(conn, config)
+            expect(reaped == 1, f"only the row stale past the new TTL should reap, got {reaped}")
+            rows = {
+                str(r["reservation_id"]): str(r["status"])
+                for r in conn.execute("SELECT reservation_id, status FROM arclink_llm_budget_reservations").fetchall()
+            }
+            # Slow-but-live request whose heartbeat is one read window old survives.
+            expect(rows["llmres_slow_live"] == "reserved", f"slow live request must NOT be expired: {rows}")
+            # Heartbeat stale past read_timeout+margin is reaped.
+            expect(rows["llmres_dead"] == "expired", f"row stale past TTL must be expired: {rows}")
+            # The slow-live row still counts against the C1 headroom sum (no
+            # under-counting -> no over-reservation); the dead one drops out.
+            expect(router._open_reserved_cents(conn, "dep_1") == 5, "only the live row counts against headroom")
+        finally:
+            conn.close()
+    finally:
+        tmp.cleanup()
+    print("PASS test_reaper_ttl_exceeds_upstream_read_window_so_slow_live_request_is_safe")
+
+
+def test_all_max_output_keys_capped_no_largest_key_bypass() -> None:
+    # Round-3 (new bug): the max-token cap only checked the FIRST present key, so
+    # {max_tokens: null, max_completion_tokens: 999999} or
+    # {max_tokens: 64, max_completion_tokens: 999999} let the huge key bypass the
+    # cap and reach upstream unclamped (under-priced reservation). The effective
+    # requested cap must be the MIN of usable positive values across ALL keys, the
+    # reservation must price that effective max, and EVERY present max-output key
+    # must be clamped <= that effective cap on the wire.
+    router = load_module("arclink_llm_router.py", "arclink_llm_router_allkeys_cap_test")
+
+    # Unit: _requested_max_tokens takes the MIN across all usable keys, not the first.
+    expect(router._requested_max_tokens({"max_tokens": None, "max_completion_tokens": 999999}) == 999999,
+           "null + 999999 -> effective 999999 (only usable value)")
+    expect(router._requested_max_tokens({"max_tokens": 64, "max_completion_tokens": 999999}) == 64,
+           "64 + 999999 -> effective MIN 64, NOT the first/largest key")
+    expect(router._requested_max_tokens({"max_completion_tokens": 32, "max_tokens": 8192}) == 32,
+           "min across keys regardless of order")
+    expect(router._requested_max_tokens({"max_tokens": 0, "max_completion_tokens": None}) == 0,
+           "no usable value -> 0 (reservation default)")
+
+    # Unit: _prepare_upstream_payload clamps EVERY present key <= the priced ceiling.
+    p1 = router._prepare_upstream_payload(
+        {"max_tokens": None, "max_completion_tokens": 999999}, max_output_tokens=999999
+    )
+    expect(p1.get("max_tokens") is None and "max_tokens" not in p1, str(p1))  # null dropped
+    expect(p1.get("max_completion_tokens") == 999999, str(p1))  # == ceiling, allowed
+    p2 = router._prepare_upstream_payload(
+        {"max_tokens": 64, "max_completion_tokens": 999999}, max_output_tokens=64
+    )
+    # BOTH keys clamped to the 64 ceiling -- the 999999 key can NOT exceed the reservation.
+    expect(p2.get("max_tokens") == 64, str(p2))
+    expect(p2.get("max_completion_tokens") == 64, str(p2))
+    for key in ("max_tokens", "max_completion_tokens"):
+        expect(int(p2.get(key)) <= 64, f"{key} must be clamped to <= ceiling: {p2}")
+
+    # End-to-end: both payloads FORWARD (cap high enough to admit the effective max),
+    # every forwarded max-output key <= the effective cap, and the reservation is
+    # priced to the EFFECTIVE (capped) max -- not the bypassing huge key.
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(
+            db_path,
+            deployment_metadata={"chutes": {"monthly_budget_cents": 100000000, "used_cents": 0}},
+        )
+
+        # Case A: {max_tokens: null, max_completion_tokens: 999999} -> effective 999999.
+        upstream_a = fake_upstream_transport()
+        client_a = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_MAX_TOKENS_CAP": "1000000",
+            },
+            upstream_transport=upstream_a,
+        )
+        ra = client_a.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={
+                "model": "model-a",
+                "max_tokens": None,
+                "max_completion_tokens": 999999,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        expect(ra.status_code == 200, ra.text)
+        fwd_a = upstream_a.requests[0]["payload"]  # type: ignore[attr-defined]
+        effective_a = 999999
+        for key in ("max_tokens", "max_completion_tokens"):
+            if key in fwd_a and fwd_a[key] is not None:
+                expect(int(fwd_a[key]) <= effective_a, f"A: {key} must be <= effective cap: {fwd_a}")
+        expect("max_tokens" not in fwd_a, f"A: null max_tokens must be dropped: {fwd_a}")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            res_a = conn.execute("SELECT reserved_cents FROM arclink_llm_budget_reservations ORDER BY created_at DESC LIMIT 1").fetchone()
+            priced_a = int(res_a["reserved_cents"])
+            conn.execute("DELETE FROM arclink_llm_budget_reservations")
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Case B: {max_tokens: 64, max_completion_tokens: 999999} -> effective MIN 64.
+        upstream_b = fake_upstream_transport()
+        client_b = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_MAX_TOKENS_CAP": "1000000",
+            },
+            upstream_transport=upstream_b,
+        )
+        rb = client_b.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={
+                "model": "model-a",
+                "max_tokens": 64,
+                "max_completion_tokens": 999999,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        expect(rb.status_code == 200, rb.text)
+        fwd_b = upstream_b.requests[0]["payload"]  # type: ignore[attr-defined]
+        effective_b = 64
+        # EVERY present max-output key <= 64 -- the 999999 key is clamped, not bypassed.
+        for key in ("max_tokens", "max_completion_tokens"):
+            expect(key in fwd_b, f"B: {key} expected present (clamped): {fwd_b}")
+            expect(int(fwd_b[key]) <= effective_b, f"B: {key} must be clamped to <= 64: {fwd_b}")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            res_b = conn.execute("SELECT reserved_cents FROM arclink_llm_budget_reservations ORDER BY created_at DESC LIMIT 1").fetchone()
+            priced_b = int(res_b["reserved_cents"])
+        finally:
+            conn.close()
+
+        # The reservation is priced to the EFFECTIVE (capped) max: case B (effective
+        # 64) must reserve far fewer cents than case A (effective 999999). If the
+        # 999999 key had bypassed the cap, B would also price ~999999 output tokens.
+        expect(priced_b < priced_a, f"effective-64 reservation must be cheaper than effective-999999: {priced_b} vs {priced_a}")
+    finally:
+        tmp.cleanup()
+    print("PASS test_all_max_output_keys_capped_no_largest_key_bypass")
+
+
+def test_allow_list_collapse_alert_rearms_after_recovery() -> None:
+    # H3 rearm: report_operator_hiccup dedups on its key and only re-arms when a
+    # matching resolve is recorded. /health must RESOLVE the collapse key on
+    # recovery (synced catalog non-empty again) so a SECOND collapse re-alerts.
+    tmp, db_path = temp_router_db()
+    try:
+        control = load_module("arclink_control.py", "arclink_control_h3_rearm_test")
+
+        def _seed_prior_sync(c: Any) -> None:
+            control.append_arclink_audit(
+                c,
+                action="llm_router:model_sync_ok",
+                target_kind="llm-router",
+                target_id="chutes",
+                reason="synced 9 -TEE models",
+                metadata={"model_count": 9},
+            )
+
+        def _set_catalog(models: list[str]) -> None:
+            c = sqlite3.connect(db_path)
+            c.row_factory = sqlite3.Row
+            try:
+                control.ensure_schema(c)
+                c.execute("DELETE FROM arclink_model_catalog WHERE provider='chutes'")
+                for mid in models:
+                    control.upsert_model_catalog(c, provider="chutes", models={mid: {"confidential_compute": True}})
+                c.commit()
+            finally:
+                c.close()
+
+        def _collapse_audit_count() -> int:
+            c = sqlite3.connect(db_path)
+            c.row_factory = sqlite3.Row
+            try:
+                report = c.execute(
+                    "SELECT COUNT(*) AS n FROM arclink_audit_log WHERE action='operator_hiccup:llm_router_allow_list_collapsed'"
+                ).fetchone()
+                resolve = c.execute(
+                    "SELECT COUNT(*) AS n FROM arclink_audit_log WHERE action='operator_hiccup_resolved:llm_router_allow_list_collapsed'"
+                ).fetchone()
+                notices = c.execute(
+                    "SELECT COUNT(*) AS n FROM notification_outbox WHERE target_kind='operator'"
+                ).fetchone()
+                return int(report["n"]), int(resolve["n"]), int(notices["n"])
+            finally:
+                c.close()
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            control.ensure_schema(conn)
+            _seed_prior_sync(conn)
+        finally:
+            conn.close()
+
+        env = {
+            "ARCLINK_DB_PATH": db_path,
+            "ARCLINK_LLM_ROUTER_ENABLED": "1",
+            "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+            "ARCLINK_LLM_ROUTER_ALLOWED_MODELS": "model-a",
+        }
+        client = _client_for(env)
+
+        # 1) First collapse: catalog empty after a prior sync -> alert exactly once.
+        client.get("/health")
+        client.get("/health")
+        reports, resolves, notices = _collapse_audit_count()
+        expect(reports == 1, f"first collapse must alert once, got {reports}")
+        expect(resolves == 0, f"no resolve yet, got {resolves}")
+        expect(notices == 1, f"exactly one operator notice, got {notices}")
+
+        # 2) Recovery: synced -TEE catalog non-empty again -> /health resolves the key.
+        _set_catalog(["model-a-TEE", "model-b-TEE"])
+        # Use a fresh client so RouterConfig reads the now-populated catalog.
+        client2 = _client_for(env)
+        health = client2.get("/health")
+        allow_list = health.json().get("allow_list") or {}
+        expect(allow_list.get("source") == "synced_catalog", str(allow_list))
+        expect(allow_list.get("synced_catalog_collapsed") is False, str(allow_list))
+        reports, resolves, notices = _collapse_audit_count()
+        expect(resolves == 1, f"recovery must resolve the key exactly once, got {resolves}")
+
+        # 3) Second collapse: catalog emptied again -> alert RE-ARMS and fires again.
+        _set_catalog([])
+        client3 = _client_for(env)
+        client3.get("/health")
+        reports, resolves, notices = _collapse_audit_count()
+        expect(reports == 2, f"second collapse after recovery must re-alert, got {reports}")
+        expect(notices == 2, f"second operator notice must be queued, got {notices}")
+    finally:
+        tmp.cleanup()
+    print("PASS test_allow_list_collapse_alert_rearms_after_recovery")
+
+
+def test_pre_response_retries_keep_live_reservation_heartbeated_across_windows() -> None:
+    # Round-4 (deploy-blocking): the heartbeat only refreshed AFTER a streamed chunk,
+    # so the non-streaming retry path (and the streaming pre-first-chunk path) could
+    # each burn a full upstream read timeout per attempt with NO heartbeat refresh.
+    # N fallback retries -> up to N x read_timeout un-heartbeated -> the reaper
+    # false-expires the LIVE reservation -> it drops from the C1 open-reservation sum
+    # -> budget over-reserved. The fix touches the heartbeat at the START of every
+    # attempt, so a live request can never go longer than ONE read window without a
+    # heartbeat regardless of retry count.
+    #
+    # This drives the REAL _forward_non_streaming retry loop with a fake clock: each
+    # upstream attempt advances time by a full read window and runs the reaper (as a
+    # concurrent preflight would). With the per-attempt touch the live row is never
+    # expired even though total elapsed time across the retries far exceeds the TTL;
+    # a parallel DEAD reservation that no attempt ever touches IS reaped.
+    import asyncio
+    from datetime import timedelta as _td
+
+    router = load_module("arclink_llm_router.py", "arclink_llm_router_retry_heartbeat_test")
+    control = load_module("arclink_control.py", "arclink_control_retry_heartbeat_test")
+    tmp, db_path = temp_router_db()
+    real_datetime = router.datetime
+    try:
+        conn0 = sqlite3.connect(db_path)
+        conn0.row_factory = sqlite3.Row
+        control.ensure_schema(conn0)
+        conn0.close()
+
+        # read_timeout chosen so a few attempts' total elapsed time EXCEEDS the TTL:
+        # TTL == read_timeout + margin == 240s, but 4 attempts span 480s. Without the
+        # per-attempt heartbeat touch the live row's heartbeat would stay frozen at T0
+        # and be reaped by the third reaper pass (T0+360 > 240); with the fix each
+        # attempt refreshes it, so max staleness stays ~read_timeout < TTL.
+        read_timeout = 120
+        margin = router.RESERVATION_REAPER_TTL_MARGIN_SECONDS
+        config = router.load_router_config(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_UPSTREAM_READ_TIMEOUT_SECONDS": str(read_timeout),
+                # Three fallbacks -> four candidates -> four attempts. The reaper
+                # 429 (retryable) on the first three forces three pre-response retries
+                # before the final 200.
+                "ARCLINK_LLM_ROUTER_FALLBACK_MODELS": "model-b,model-c,model-d",
+                "ARCLINK_LLM_ROUTER_FALLBACK_STATUS_CODES": "429",
+            }
+        )
+
+        # Advancing fake clock shared by both the heartbeat writer and the reaper, so
+        # the test is fully deterministic with zero real sleeping.
+        clock = {"now": real_datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)}
+
+        class FakeDatetime(real_datetime):  # type: ignore[misc, valid-type]
+            @classmethod
+            def now(cls, tz=None):  # type: ignore[override]
+                value = clock["now"]
+                return value if tz is None else value.astimezone(tz)
+
+        start_iso = clock["now"].replace(microsecond=0).isoformat()
+        ttl = router._reservation_reaper_ttl_seconds(config)
+        # A worker that died: heartbeat already stale past the TTL at T0 and never
+        # touched again, so the very first reaper pass must expire it. This isolates
+        # the fix -- the live row (touched each attempt) survives the SAME reaper
+        # passes that reap this dead row.
+        dead_hb = (clock["now"] - _td(seconds=ttl + 60)).replace(microsecond=0).isoformat()
+        # The live reservation under retry: heartbeat freshly stamped at T0.
+        for rid, hb, cents in (("llmres_live_retry", start_iso, 5), ("llmres_dead_worker", dead_hb, 9)):
+            conn0 = sqlite3.connect(db_path)
+            conn0.execute(
+                """
+                INSERT INTO arclink_llm_budget_reservations (
+                  reservation_id, request_id, deployment_id, user_id, reserved_cents, status, metadata_json, created_at, heartbeat_at
+                ) VALUES (?, ?, 'dep_1', 'user_1', ?, 'reserved', '{}', ?, ?)
+                """,
+                (rid, f"req_{rid}", cents, start_iso, hb),
+            )
+            conn0.commit()
+            conn0.close()
+
+        reservation = {
+            "reservation_id": "llmres_live_retry",
+            "request_id": "req_llmres_live_retry",
+            "deployment_id": "dep_1",
+            "user_id": "user_1",
+            "reserved_cents": 5,
+            "heartbeat_at": start_iso,
+            "upstream_model": "model-a",
+            "input_token_estimate": 4,
+            "output_token_estimate": 16,
+            "effective_completions": 1,
+        }
+
+        live_status_seen: list[str] = []
+        attempt_count = {"n": 0}
+
+        def handler_factory():
+            import httpx
+
+            async def handler(request: "httpx.Request") -> "httpx.Response":
+                attempt_count["n"] += 1
+                # Each attempt consumes a FULL read window before any heartbeat could
+                # come from streamed output. Advance the shared clock accordingly...
+                clock["now"] = clock["now"] + _td(seconds=read_timeout)
+                # ...then run the reaper exactly as a concurrent preflight would. With
+                # the per-attempt touch already applied (start of this attempt) the
+                # live row's heartbeat is fresh; without the fix it would be
+                # read_timeout * (attempt-1) stale and expire on a later attempt.
+                rconn = sqlite3.connect(db_path)
+                rconn.row_factory = sqlite3.Row
+                router.ensure_schema(rconn)
+                router._reap_stale_reservations(rconn, config)
+                row = rconn.execute(
+                    "SELECT status FROM arclink_llm_budget_reservations WHERE reservation_id='llmres_live_retry'"
+                ).fetchone()
+                live_status_seen.append(str(row["status"]))
+                rconn.close()
+                # Retry the first three attempts (429), succeed on the fourth.
+                if attempt_count["n"] < 4:
+                    return httpx.Response(429, json={"error": "overloaded"})
+                return httpx.Response(
+                    200,
+                    json={
+                        "id": "chatcmpl_retry",
+                        "object": "chat.completion",
+                        "usage": {"prompt_tokens": 4, "completion_tokens": 6, "total_tokens": 10},
+                    },
+                )
+
+            return httpx.MockTransport(handler)
+
+        class _State:
+            pass
+
+        class _App:
+            state = _State()
+
+        class _Req:
+            app = _App()
+
+        _App.state.router_upstream_transport = handler_factory()
+
+        # Patch the module clock so the heartbeat writer and the reaper share it.
+        router.datetime = FakeDatetime
+        try:
+            response = asyncio.run(
+                router._forward_non_streaming(
+                    _Req(),
+                    config,
+                    auth_record={"deployment_id": "dep_1", "user_id": "user_1", "key_id": "k1"},
+                    reservation=reservation,
+                    payload={"model": "model-a", "messages": [{"role": "user", "content": "hi"}]},
+                )
+            )
+        finally:
+            router.datetime = real_datetime
+
+        expect(response.status_code == 200, str(getattr(response, "body", b"")))
+        # Four attempts happened, total elapsed 40s >> TTL (read_timeout+margin) -- yet
+        # the live reservation was 'reserved' on EVERY reaper pass (never falsely
+        # expired) because each attempt refreshed its heartbeat first.
+        expect(attempt_count["n"] == 4, f"expected 4 attempts, got {attempt_count['n']}")
+        expect(
+            live_status_seen == ["reserved", "reserved", "reserved", "reserved"],
+            f"live reservation must stay reserved across all retry windows, saw {live_status_seen}",
+        )
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            live = conn.execute(
+                "SELECT status FROM arclink_llm_budget_reservations WHERE reservation_id='llmres_live_retry'"
+            ).fetchone()
+            dead = conn.execute(
+                "SELECT status FROM arclink_llm_budget_reservations WHERE reservation_id='llmres_dead_worker'"
+            ).fetchone()
+        finally:
+            conn.close()
+        # The live request settled cleanly (succeeded) -- never reaped mid-flight.
+        expect(str(live["status"]) == "settled", f"live row must settle, got {dict(live)}")
+        # The genuinely-dead worker (never touched, stale past the TTL) WAS reaped.
+        expect(str(dead["status"]) == "expired", f"dead worker row must be reaped, got {dict(dead)}")
+    finally:
+        router.datetime = real_datetime
+        tmp.cleanup()
+    print("PASS test_pre_response_retries_keep_live_reservation_heartbeated_across_windows")
+
+
+def test_multi_completion_n_reserves_and_clamps_against_single_output_cap() -> None:
+    # Round-4 (deploy-blocking): the chat payload is forwarded wholesale, but the
+    # reservation only priced a SINGLE output cap. A caller sending n: 5 (or best_of)
+    # gets up to 5x the output while only 1x is reserved -> C1 under-reserved ->
+    # over-spend. The fix prices the EFFECTIVE worst-case output (per-completion cap x
+    # clamped n), clamps n into 1..MAX_COMPLETIONS, and forwards the clamped value so
+    # the upstream fan-out can never exceed what was reserved.
+    router = load_module("arclink_llm_router.py", "arclink_llm_router_multi_completion_unit_test")
+
+    # Unit: completion count is the MAX usable multiplier, clamped to 1..max.
+    cfg = router.load_router_config(
+        {
+            "ARCLINK_DB_PATH": "/tmp/unused-arclink-router-n.sqlite3",
+            "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "k",
+            "ARCLINK_LLM_ROUTER_MAX_COMPLETIONS": "4",
+        }
+    )
+    expect(router._effective_completions(cfg, {}) == 1, "no n -> 1")
+    expect(router._effective_completions(cfg, {"n": 1}) == 1, "n=1 -> 1")
+    expect(router._effective_completions(cfg, {"n": 3}) == 3, "n=3 -> 3")
+    expect(router._effective_completions(cfg, {"n": 5}) == 4, "n=5 clamped to max 4")
+    expect(router._effective_completions(cfg, {"n": None}) == 1, "n=null -> 1")
+    expect(router._effective_completions(cfg, {"n": 0}) == 1, "n=0 -> 1")
+    expect(router._effective_completions(cfg, {"best_of": 7}) == 4, "best_of priced/clamped too")
+    expect(router._effective_completions(cfg, {"n": 2, "best_of": 9}) == 4, "max across multipliers, clamped")
+
+    # Unit: pricing scales output (not input) by the completion count.
+    one = router._estimate_reservation_cents_for_model(cfg, None, 1000, 1000, 1)
+    five = router._estimate_reservation_cents_for_model(cfg, None, 1000, 1000, 5)
+    expect(five > one, f"5 completions must price more than 1: {five} vs {one}")
+
+    # Unit: forwarded payload clamps every multiplier key to the priced ceiling and
+    # drops unusable values.
+    p = router._prepare_upstream_payload({"n": 9, "best_of": 9}, max_output_tokens=1000, max_completions=4)
+    expect(p.get("n") == 4, f"n must clamp to ceiling: {p}")
+    expect(p.get("best_of") == 4, f"best_of must clamp to ceiling: {p}")
+    p_null = router._prepare_upstream_payload({"n": None}, max_output_tokens=1000, max_completions=4)
+    expect("n" not in p_null, f"unusable n must be dropped: {p_null}")
+    p_default = router._prepare_upstream_payload({"n": 1}, max_output_tokens=1000, max_completions=1)
+    expect(p_default.get("n") == 1, f"single completion unchanged: {p_default}")
+
+    # End-to-end: n: 5 with max_tokens: 1000 -> reservation priced for the CLAMPED
+    # 4x1000 output, forwarded n <= the clamp; a single-completion request is
+    # unchanged (n defaults to 1, priced 1x).
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(
+            db_path,
+            deployment_metadata={"chutes": {"monthly_budget_cents": 100000000, "used_cents": 0}},
+        )
+        base_env = {
+            "ARCLINK_DB_PATH": db_path,
+            "ARCLINK_LLM_ROUTER_ENABLED": "1",
+            "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+            "ARCLINK_LLM_ROUTER_MAX_TOKENS_CAP": "100000",
+            "ARCLINK_LLM_ROUTER_MAX_COMPLETIONS": "4",
+        }
+
+        # Multi-completion request: n=5 -> clamped to 4.
+        upstream_multi = fake_upstream_transport()
+        client_multi = _client_for(base_env, upstream_transport=upstream_multi)
+        rm = client_multi.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "model-a", "n": 5, "max_tokens": 1000, "messages": [{"role": "user", "content": "hi"}]},
+        )
+        expect(rm.status_code == 200, rm.text)
+        fwd_multi = upstream_multi.requests[0]["payload"]  # type: ignore[attr-defined]
+        # Forwarded n is clamped to <= the configured max (4), never the raw 5.
+        expect(fwd_multi.get("n") == 4, f"forwarded n must be clamped to 4: {fwd_multi}")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            res_multi = conn.execute(
+                "SELECT reserved_cents FROM arclink_llm_budget_reservations ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+            priced_multi = int(res_multi["reserved_cents"])
+            conn.execute("DELETE FROM arclink_llm_budget_reservations")
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Single-completion request: same max_tokens, no n -> priced 1x, n untouched.
+        upstream_single = fake_upstream_transport()
+        client_single = _client_for(base_env, upstream_transport=upstream_single)
+        rs = client_single.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "model-a", "max_tokens": 1000, "messages": [{"role": "user", "content": "hi"}]},
+        )
+        expect(rs.status_code == 200, rs.text)
+        fwd_single = upstream_single.requests[0]["payload"]  # type: ignore[attr-defined]
+        expect("n" not in fwd_single, f"single-completion request must not inject n: {fwd_single}")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            res_single = conn.execute(
+                "SELECT reserved_cents FROM arclink_llm_budget_reservations ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+            priced_single = int(res_single["reserved_cents"])
+        finally:
+            conn.close()
+
+        # The multi-completion reservation prices the EFFECTIVE 4x output and so must
+        # reserve materially more than the single-completion request at the same
+        # per-completion cap. If n had bypassed the cap, both would price 1x output.
+        expect(
+            priced_multi > priced_single,
+            f"n=5(clamped 4) must reserve more than n=1 at same max_tokens: {priced_multi} vs {priced_single}",
+        )
+    finally:
+        tmp.cleanup()
+    print("PASS test_multi_completion_n_reserves_and_clamps_against_single_output_cap")
+
+
 def main() -> int:
     test_router_metadata_json_rejects_plaintext_secret_material()
     test_read_json_body_rejects_chunked_body_before_buffering_past_limit()
@@ -2165,7 +3199,19 @@ def main() -> int:
     test_provider_side_fallback_csv_default_model_is_allowed_as_single_model_string()
     test_chat_streaming_retries_pre_stream_fallback_and_records_metadata()
     test_chat_partial_stream_failure_settles_without_prompt_or_secret_storage()
-    print("PASS all 31 ArcLink LLM router tests")
+    test_open_reservations_count_against_budget_so_concurrency_cannot_overspend()
+    test_stale_reservation_reaper_releases_leaked_rows_and_keeps_fresh()
+    test_omitted_max_tokens_forwards_reservation_output_cap_upstream()
+    test_default_model_marked_unavailable_is_not_forwarded()
+    test_health_reports_allow_list_state_and_alerts_on_collapse()
+    test_fresh_heartbeat_survives_old_read_timeout_window_and_settles_by_id()
+    test_null_max_tokens_is_dropped_and_reservation_cap_injected()
+    test_reaper_ttl_exceeds_upstream_read_window_so_slow_live_request_is_safe()
+    test_all_max_output_keys_capped_no_largest_key_bypass()
+    test_allow_list_collapse_alert_rearms_after_recovery()
+    test_pre_response_retries_keep_live_reservation_heartbeated_across_windows()
+    test_multi_completion_n_reserves_and_clamps_against_single_output_cap()
+    print("PASS all 43 ArcLink LLM router tests")
     return 0
 
 

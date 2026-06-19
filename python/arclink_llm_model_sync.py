@@ -13,7 +13,7 @@ fallback. This worker refreshes that table; the router picks the new set up on
 the very next request without a restart (it opens a DB connection per request).
 
 Failure handling: if the Chutes fetch fails, returns no ``-TEE`` models,
-returns fewer than ``ARCLINK_LLM_ROUTER_MODEL_SYNC_MIN_MODELS`` (default 2,
+returns fewer than ``ARCLINK_LLM_ROUTER_MODEL_SYNC_MIN_MODELS`` (default 8,
 floored so a partial response can never be accepted), or drops suspiciously far
 below the last-known active ``-TEE`` count, the existing catalog is left
 untouched (last-known-good is preserved -- the allow-list is *never* emptied)
@@ -55,12 +55,21 @@ AUDIT_ACTION_FAILED = "llm_router:model_sync_failed"
 
 OPERATOR_NOTICE_KEY = "llm_router_model_sync_failed"
 
-# Floor below which a -TEE catalog response is considered untrustworthy
-# regardless of any configured minimum. A real Chutes outage / partial response
-# is treated as a FAILED sync (last-known-good kept) rather than silently
-# shrinking the allow-list. See ARCLINK_LLM_ROUTER_MODEL_SYNC_MIN_MODELS for the
-# operator-tunable hard minimum and the proportional-drop guard below.
+# Absolute hard floor below which a -TEE catalog response is considered
+# untrustworthy regardless of any configured minimum -- a real Chutes outage /
+# partial response is a FAILED sync (last-known-good kept), never accepted.
+# ``ARCLINK_LLM_ROUTER_MODEL_SYNC_MIN_MODELS`` is the operator-tunable floor that
+# can only RAISE this (the compose default sets it to 8); the proportional-drop
+# guard below catches drops that still clear the floor.
 DEFAULT_MODEL_SYNC_MIN_MODELS = 2
+# H1 fix: expected-minimum for the FIRST authoritative sync (when there is no
+# last-known active -TEE baseline, so the proportional-drop guard below cannot
+# fire). The very first destructive sync writes the baseline every later guard
+# trusts, so it must itself look like a real, full catalog (the Chutes -TEE set
+# is well into the double digits) -- not a degraded partial that happens to clear
+# the lower per-request floor. Independent of (and higher than) the per-request
+# floor so it bites even when the operator floor is left at its minimum.
+DEFAULT_FIRST_SYNC_MIN_MODELS = 8
 # If the fetched -TEE count drops to <= this fraction of the last-known active
 # -TEE count, treat it as a suspicious partial response and FAIL the sync.
 SUSPICIOUS_DROP_FRACTION = 0.5
@@ -276,12 +285,33 @@ def sync_llm_models(
             f"too_few_models: got {fetched} -TEE models, require >= {min_models}"
         )
 
+    last_active = _active_tee_count(conn)
+    if last_active <= 0:
+        # H1 first/empty-baseline guard: the proportional-drop guard below needs
+        # a last-known active count to compare against. With no baseline (cold
+        # start or after every row went unavailable) it cannot fire, so a degraded
+        # partial response would otherwise become the authoritative baseline that
+        # every later sync trusts. Require the first authoritative sync to look
+        # like a real, full catalog before it is allowed to write that baseline.
+        first_sync_min = max(
+            min_models,
+            _env_int(
+                env,
+                "ARCLINK_LLM_ROUTER_MODEL_SYNC_FIRST_SYNC_MIN_MODELS",
+                DEFAULT_FIRST_SYNC_MIN_MODELS,
+            ),
+        )
+        if fetched < first_sync_min:
+            return _fail(
+                f"first_sync_too_few: got {fetched} -TEE models on an empty baseline, "
+                f"require >= {first_sync_min} before a destructive authoritative sync; "
+                "keeping last-known-good"
+            )
     # Proportional-drop sanity guard: even above the hard floor, a sudden large
     # drop versus the last-known active set is a strong signal of a partial /
     # degraded Chutes response. Treat it as a FAILED sync so we keep
     # last-known-good and notify rather than silently shrinking the allow-list.
-    last_active = _active_tee_count(conn)
-    if last_active > 0 and fetched <= int(last_active * SUSPICIOUS_DROP_FRACTION):
+    elif fetched <= int(last_active * SUSPICIOUS_DROP_FRACTION):
         return _fail(
             f"suspicious_drop: got {fetched} -TEE models vs last-known {last_active} active "
             f"(<= {int(SUSPICIOUS_DROP_FRACTION * 100)}% of current); keeping last-known-good"
@@ -291,11 +321,15 @@ def sync_llm_models(
     # previously-active -TEE model that disappeared to 'unavailable', so it
     # drops out of the router's effective allow-list. Models that are still
     # present stay 'active'.
+    # M4: commit=False folds the catalog refresh and the OK-audit into a single
+    # transaction so a crash between them cannot leave a refreshed catalog with no
+    # matching audit row (which would desync the failure-dedup / last-known state).
     rows = upsert_model_catalog(
         conn,
         provider=PROVIDER,
         models=tee_models,
         mark_missing_unavailable=True,
+        commit=False,
     )
     append_arclink_audit(
         conn,

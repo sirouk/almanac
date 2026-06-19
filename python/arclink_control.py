@@ -57,6 +57,7 @@ from arclink_notion_ssot import (  # noqa: E402
 from arclink_rpc_client import mcp_call  # noqa: E402
 from arclink_resource_map import managed_resource_ref, shared_resource_lines, shared_tailnet_host  # noqa: E402
 from arclink_boundary import json_dumps_safe, reject_secret_material  # noqa: E402
+from arclink_secrets_regex import redact_then_truncate as _redact_then_truncate  # noqa: E402
 
 
 AUTO_PROVISION_UNIX_USER_PATTERN = re.compile(r"^[a-z_][a-z0-9_-]{0,30}$")
@@ -1382,10 +1383,11 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           user_id TEXT NOT NULL,
           reserved_cents INTEGER NOT NULL,
           settled_cents INTEGER NOT NULL DEFAULT 0,
-          status TEXT NOT NULL CHECK (status IN ('reserved', 'settled', 'released', 'failed')),
+          status TEXT NOT NULL CHECK (status IN ('reserved', 'settled', 'released', 'failed', 'expired')),
           metadata_json TEXT NOT NULL DEFAULT '{}',
           created_at TEXT NOT NULL,
-          settled_at TEXT NOT NULL DEFAULT ''
+          settled_at TEXT NOT NULL DEFAULT '',
+          heartbeat_at TEXT NOT NULL DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS arclink_onboarding_sessions (
@@ -2241,6 +2243,19 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     _ensure_column(conn, "arclink_model_catalog", "last_seen_at", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_llm_usage_events", "metadata_json", "TEXT NOT NULL DEFAULT '{}'")
     _ensure_column(conn, "arclink_llm_budget_reservations", "metadata_json", "TEXT NOT NULL DEFAULT '{}'")
+    # C2 heartbeat reaper: a live request stamps heartbeat_at periodically so the
+    # reaper never expires an in-flight reservation just because an httpx READ
+    # timeout window (per-chunk, not total stream lifetime) elapsed. Backfilled to
+    # created_at for legacy rows so a pre-heartbeat leaked reservation still ages out.
+    _ensure_column(conn, "arclink_llm_budget_reservations", "heartbeat_at", "TEXT NOT NULL DEFAULT ''")
+    conn.execute(
+        "UPDATE arclink_llm_budget_reservations SET heartbeat_at = created_at "
+        "WHERE heartbeat_at = '' OR heartbeat_at IS NULL"
+    )
+    # C2: extend the status CHECK to admit 'expired' (a reaper-released live row,
+    # distinct from a clean 'released') so settlement can reconcile a reaped-but-
+    # returning request by id. Guarded rebuild -- only runs if the CHECK lacks it.
+    _migrate_llm_budget_reservations_add_expired_status(conn)
     _ensure_column(conn, "arclink_action_intents", "worker_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_action_intents", "claimed_at", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_pod_migrations", "source_placement_id", "TEXT NOT NULL DEFAULT ''")
@@ -2933,6 +2948,87 @@ def _migrate_fleet_audit_chain_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
     _repair_fleet_audit_chain_hashes(conn)
     upsert_setting(conn, "fleet_audit_chain_hash_repair_v1", "done")
+
+
+def _migrate_llm_budget_reservations_add_expired_status(conn: sqlite3.Connection) -> None:
+    """Add 'expired' to the reservation status CHECK (guarded ATOMIC rebuild).
+
+    C2: the heartbeat reaper marks a stale live reservation 'expired' (distinct
+    from a clean 'released') so settlement can still reconcile a reaped-but-
+    returning request BY ID, while the C1 preflight headroom sum (status
+    'reserved') correctly ignores it. SQLite cannot ALTER a CHECK, so rebuild the
+    table only when the existing CHECK lacks 'expired'. Idempotent.
+
+    Round-3 fix: the rebuild now runs inside a SINGLE BEGIN IMMEDIATE..COMMIT (no
+    ``executescript``, which would force an implicit commit and break atomicity),
+    so a crash between DROP old and RENAME ``__new`` can never strand rows -- the
+    whole copy/swap rolls back as a unit. The
+    ``idx_arclink_llm_reservations_request_status`` index (dropped with the old
+    table) is recreated INSIDE the same transaction so it is never missing after
+    the first ensure_schema pass -- not merely re-added on a later pass.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arclink_llm_budget_reservations'",
+    ).fetchone()
+    ddl = str(row["sql"] or "") if row is not None else ""
+    if not ddl or "'expired'" in ddl:
+        return
+    cols = _table_columns(conn, "arclink_llm_budget_reservations")
+    has_heartbeat = "heartbeat_at" in cols
+    heartbeat_select = "heartbeat_at" if has_heartbeat else "created_at AS heartbeat_at"
+    own_txn = not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("DROP TABLE IF EXISTS arclink_llm_budget_reservations__new")
+        conn.execute(
+            """
+            CREATE TABLE arclink_llm_budget_reservations__new (
+              reservation_id TEXT PRIMARY KEY,
+              request_id TEXT NOT NULL,
+              deployment_id TEXT NOT NULL,
+              user_id TEXT NOT NULL,
+              reserved_cents INTEGER NOT NULL,
+              settled_cents INTEGER NOT NULL DEFAULT 0,
+              status TEXT NOT NULL CHECK (status IN ('reserved', 'settled', 'released', 'failed', 'expired')),
+              metadata_json TEXT NOT NULL DEFAULT '{}',
+              created_at TEXT NOT NULL,
+              settled_at TEXT NOT NULL DEFAULT '',
+              heartbeat_at TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        conn.execute(
+            f"""
+            INSERT INTO arclink_llm_budget_reservations__new (
+              reservation_id, request_id, deployment_id, user_id, reserved_cents,
+              settled_cents, status, metadata_json, created_at, settled_at, heartbeat_at
+            )
+            SELECT
+              reservation_id, request_id, deployment_id, user_id, reserved_cents,
+              settled_cents, status, metadata_json, created_at, settled_at, {heartbeat_select}
+            FROM arclink_llm_budget_reservations
+            """
+        )
+        conn.execute("DROP TABLE arclink_llm_budget_reservations")
+        conn.execute(
+            "ALTER TABLE arclink_llm_budget_reservations__new RENAME TO arclink_llm_budget_reservations"
+        )
+        # The DROP above also dropped this index (created earlier in the
+        # ensure_schema index block). Recreate it inside the SAME transaction so a
+        # single ensure_schema pass yields the rebuilt table WITH its index.
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_arclink_llm_reservations_request_status
+            ON arclink_llm_budget_reservations (request_id, status)
+            """
+        )
+    except BaseException:
+        if own_txn:
+            conn.rollback()
+        raise
+    if own_txn:
+        conn.commit()
 
 
 def _migrate_arclink_rollouts_status_schema(conn: sqlite3.Connection) -> None:
@@ -6652,6 +6748,7 @@ def upsert_model_catalog(
     provider: str,
     models: Mapping[str, Any],
     mark_missing_unavailable: bool = False,
+    commit: bool = True,
 ) -> list[dict[str, Any]]:
     clean_provider = str(provider or "").strip().lower()
     if not clean_provider:
@@ -6744,7 +6841,12 @@ def upsert_model_catalog(
                     """,
                     (now_iso, clean_provider, old_model_id),
                 )
-    conn.commit()
+    # M4: let the caller fold catalog mutation + its own audit row into one
+    # transaction. The sync worker passes commit=False so the catalog upsert and
+    # the success-audit commit atomically -- a crash between them otherwise leaves
+    # a refreshed catalog with no audit row (desyncing the dedup/last-known state).
+    if commit:
+        conn.commit()
     if seen:
         placeholders = ",".join("?" for _ in seen)
         rows_raw = conn.execute(
@@ -6825,12 +6927,50 @@ def _parse_llm_router_key_id(raw_key: str) -> str:
     return f"{LLM_ROUTER_KEY_ID_PREFIX}{match.group(1)}"
 
 
-def _llm_router_key_hash_pepper() -> str:
+LLM_ROUTER_KEY_HASH_LOCAL_DEV_DOMAINS = {"localhost", "127.0.0.1", "::1", "example.test"}
+
+
+def _llm_router_key_hash_is_local_dev() -> bool:
+    # Mirrors the session-pepper local-dev recognition (api_auth LOCAL_DEV_DOMAINS
+    # + ".test"), plus the RFC 6762 reserved ".local" suffix. An *unset* base
+    # domain is also treated as local-dev: a public production deployment always
+    # configures its real base domain, so an empty value can only be a local /
+    # in-process context. A NON-empty public production domain matches none of
+    # these, so it correctly fail-closes (raise) without a configured pepper.
+    base_domain = str(config_env_value("ARCLINK_BASE_DOMAIN", "") or "").strip().lower()
+    if not base_domain:
+        return True
     return (
-        str(os.environ.get("ARCLINK_LLM_ROUTER_KEY_HASH_PEPPER") or "").strip()
-        or str(os.environ.get("ARCLINK_SESSION_HASH_PEPPER") or "").strip()
-        or "arclink-dev-llm-router-key-hash-pepper"
+        base_domain in LLM_ROUTER_KEY_HASH_LOCAL_DEV_DOMAINS
+        or base_domain.endswith(".test")
+        or base_domain.endswith(".local")
     )
+
+
+def _llm_router_key_hash_pepper() -> str:
+    """Peppered-hash secret for ArcLink LLM router keys.
+
+    sec-C1 fix: mirror the session-token pepper guard. A real pepper MUST be
+    configured outside local dev -- otherwise the router-key hashes would be
+    forgeable with a known hardcoded literal. The dev fallback is only allowed on
+    local-dev domains (or when neither REQUIRED nor a prod domain forces the
+    issue); production raises instead of silently using a guessable pepper.
+    """
+    pepper = (
+        str(config_env_value("ARCLINK_LLM_ROUTER_KEY_HASH_PEPPER", "") or "").strip()
+        or str(config_env_value("ARCLINK_SESSION_HASH_PEPPER", "") or "").strip()
+    )
+    if pepper:
+        return pepper
+    required = str(config_env_value("ARCLINK_LLM_ROUTER_KEY_HASH_PEPPER_REQUIRED", "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if required or not _llm_router_key_hash_is_local_dev():
+        raise ValueError("ArcLink LLM router key hash pepper is not configured")
+    return "arclink-dev-llm-router-key-hash-pepper"
 
 
 def _hash_llm_router_key(raw_key: str) -> str:
@@ -6844,6 +6984,20 @@ def _hash_llm_router_key(raw_key: str) -> str:
 
 def _legacy_hash_llm_router_key(raw_key: str) -> str:
     return hash_token(raw_key)
+
+
+def _llm_router_key_last_seen_within(last_seen_at: Any, *, seconds: int, now_iso: str) -> bool:
+    """True when ``last_seen_at`` is within ``seconds`` of now (throttle window).
+
+    Used to skip the per-request ``last_seen_at`` write when it was already
+    updated recently. Any unparseable/missing timestamp counts as stale (False)
+    so the first auth after a restart still records a heartbeat.
+    """
+    seen = parse_utc_iso(str(last_seen_at or "").strip() or None)
+    now = parse_utc_iso(str(now_iso))
+    if seen is None or now is None:
+        return False
+    return (now - seen) < dt.timedelta(seconds=max(0, int(seconds)))
 
 
 def _safe_llm_router_key_row(row: sqlite3.Row | Mapping[str, Any] | None) -> dict[str, Any] | None:
@@ -6935,13 +7089,30 @@ def verify_llm_router_key(conn: sqlite3.Connection, raw_key: str) -> dict[str, A
     if str(record.get("user_status") or "active") != "active":
         return None
     now_iso = utc_now_iso()
-    conn.execute(
-        "UPDATE arclink_llm_router_keys SET key_hash = ?, last_seen_at = ? WHERE key_id = ?",
-        (current_hash, now_iso, record["key_id"]),
-    )
-    conn.commit()
-    record["last_seen_at"] = now_iso
-    record["key_hash"] = current_hash
+    stored_hash = str(record.get("key_hash") or "")
+    needs_migration = stored_hash != current_hash
+    # M3 hot-path fix: ``verify_llm_router_key`` runs on EVERY router request, so
+    # an unconditional UPDATE+commit of ``last_seen_at`` serialized a write on the
+    # busiest read path. Only write immediately when there is real work -- a
+    # legacy/unpeppered hash to migrate to the current peppered hash. Otherwise
+    # throttle ``last_seen_at`` to at most once per minute per key, so steady-state
+    # auth is a pure read.
+    last_seen_fresh = _llm_router_key_last_seen_within(record.get("last_seen_at"), seconds=60, now_iso=now_iso)
+    if needs_migration:
+        conn.execute(
+            "UPDATE arclink_llm_router_keys SET key_hash = ?, last_seen_at = ? WHERE key_id = ?",
+            (current_hash, now_iso, record["key_id"]),
+        )
+        conn.commit()
+        record["last_seen_at"] = now_iso
+        record["key_hash"] = current_hash
+    elif not last_seen_fresh:
+        conn.execute(
+            "UPDATE arclink_llm_router_keys SET last_seen_at = ? WHERE key_id = ?",
+            (now_iso, record["key_id"]),
+        )
+        conn.commit()
+        record["last_seen_at"] = now_iso
     return _safe_llm_router_key_row(record)
 
 
@@ -8204,7 +8375,14 @@ def queue_notification(
     message: str,
     extra: dict[str, Any] | None = None,
     commit: bool = True,
+    redact_message: bool = False,
 ) -> int:
+    # sec-H1: operator-action / system-failure notices can interpolate failure
+    # detail (targets, reasons, internal state) into the message body, which is
+    # persisted at rest in notification_outbox.message. Opt-in redaction scrubs
+    # plaintext secret material from that body before storing it, without changing
+    # the default behavior of the many benign callers.
+    message_body = _redact_then_truncate(message, limit=2000) if redact_message else message
     cursor = conn.execute(
         """
         INSERT INTO notification_outbox (target_kind, target_id, channel_kind, message, extra_json, created_at)
@@ -8214,7 +8392,7 @@ def queue_notification(
             target_kind,
             target_id,
             channel_kind,
-            message,
+            message_body,
             json_dumps_safe(extra or {}, label="ArcLink notification extra"),
             utc_now_iso(),
         ),
@@ -8381,6 +8559,9 @@ def report_operator_hiccup(
             message=message,
             extra=notice_extra,
             commit=False,
+            # sec-H1: operator-hiccup bodies interpolate failure detail; redact
+            # any plaintext secret material before it is persisted at rest.
+            redact_message=True,
         )
         append_arclink_audit(
             conn,
@@ -8632,7 +8813,14 @@ def operator_action_auth_secret(*, create: bool = False) -> str:
 
 
 def _operator_action_auth_payload_json(payload: Mapping[str, Any]) -> str:
-    return json.dumps(dict(payload), sort_keys=True, separators=(",", ":"))
+    # sec-H1: this authorization payload is persisted at rest in
+    # operator_actions.authorization_payload_json. Reject plaintext secret
+    # material before serialization (mirroring event/audit metadata) so a signed
+    # operator authorization can never smuggle a credential into the DB. Keep the
+    # exact compact serialization the MAC/hash are computed over.
+    data = dict(payload)
+    reject_secret_material(data, label="ArcLink operator action authorization payload")
+    return json.dumps(data, sort_keys=True, separators=(",", ":"))
 
 
 def _operator_action_auth_payload_hash(payload_json: str) -> str:
@@ -8641,6 +8829,29 @@ def _operator_action_auth_payload_hash(payload_json: str) -> str:
 
 def _operator_action_target_hash(requested_target: str) -> str:
     return hashlib.sha256(str(requested_target or "").encode("utf-8")).hexdigest()
+
+
+def _reject_operator_action_target_secret(requested_target: str) -> None:
+    """Reject plaintext secret material in an operator action target (sec-H1).
+
+    Targets are stored at rest in ``operator_actions.requested_target`` and are
+    often JSON parameter blobs. Parse JSON objects/arrays and scan them
+    structurally; treat any other value as a single string. Raises ValueError on
+    plaintext secret material, matching the event/audit metadata guard.
+    """
+    clean = str(requested_target or "").strip()
+    if not clean:
+        return
+    parsed: Any = None
+    if clean[:1] in {"{", "["}:
+        try:
+            parsed = json.loads(clean)
+        except (TypeError, ValueError):
+            parsed = None
+    reject_secret_material(
+        parsed if isinstance(parsed, (Mapping, list, tuple)) else clean,
+        label="ArcLink operator action target",
+    )
 
 
 def _operator_action_confirmation_id(payload: Mapping[str, Any]) -> str:
@@ -8897,6 +9108,11 @@ def request_operator_action(
     if not normalized_kind:
         raise ValueError("action_kind is required")
     requested_target_value = str(requested_target or "").strip()
+    # sec-H1: requested_target is persisted at rest and is frequently a JSON
+    # blob of action parameters (see send-discord-agent-dm). When it parses as a
+    # JSON object/array, reject plaintext secret material before storing it
+    # (mirroring event/audit metadata); plain string targets are checked directly.
+    _reject_operator_action_target_secret(requested_target_value)
     normalized_source = str(request_source or "").strip()
     own_txn = not conn.in_transaction
     if own_txn:

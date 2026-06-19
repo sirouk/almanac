@@ -24,11 +24,14 @@ from arclink_chutes import (
 )
 from arclink_boundary import json_dumps_safe
 from arclink_control import (
+    Config,
     ensure_schema,
     get_model_catalog_entry,
     latest_model_in_family,
     model_family_key,
     rate_limit_count,
+    report_operator_hiccup,
+    resolve_operator_hiccup,
     upsert_model_catalog,
     verify_llm_router_key,
 )
@@ -41,6 +44,13 @@ DEFAULT_MODEL = "moonshotai/Kimi-K2.6-TEE"
 DEFAULT_MAX_BODY_BYTES = 1024 * 1024
 DEFAULT_PROMPT_ESTIMATE_TOKEN_CAP = 120000
 DEFAULT_MAX_TOKENS_CAP = 8192
+# C1 multi-completion fix: the chat payload is forwarded wholesale, so a caller
+# can set ``n`` (and, where the upstream honors it, ``best_of``) to fan a single
+# request into several completions -- each up to the per-completion output cap.
+# The reservation must price the EFFECTIVE worst-case output (per-completion cap x
+# the completion count), and the forwarded count must be clamped so it can never
+# exceed what was priced. Default ceiling kept small.
+DEFAULT_MAX_COMPLETIONS = 4
 DEFAULT_DEPLOYMENT_CONCURRENCY_LIMIT = 4
 DEFAULT_KEY_REQUESTS_PER_MINUTE = 60
 DEFAULT_DEPLOYMENT_REQUESTS_PER_MINUTE = 120
@@ -110,6 +120,7 @@ class RouterConfig:
     max_body_bytes: int
     prompt_estimate_token_cap: int
     max_tokens_cap: int
+    max_completions: int
     deployment_concurrency_limit: int
     key_requests_per_minute: int
     deployment_requests_per_minute: int
@@ -126,6 +137,7 @@ class RouterConfig:
     upstream_max_keepalive_connections: int
     upstream_keepalive_expiry_seconds: int
     upstream_warmup_enabled: bool
+    allow_inactive_models: bool
 
     @property
     def configured(self) -> bool:
@@ -221,6 +233,12 @@ def load_router_config(env: Mapping[str, str] | None = None) -> RouterConfig:
             minimum=1,
         ),
         max_tokens_cap=_bounded_env_int(source, "ARCLINK_LLM_ROUTER_MAX_TOKENS_CAP", DEFAULT_MAX_TOKENS_CAP, minimum=1),
+        max_completions=_bounded_env_int(
+            source,
+            "ARCLINK_LLM_ROUTER_MAX_COMPLETIONS",
+            DEFAULT_MAX_COMPLETIONS,
+            minimum=1,
+        ),
         deployment_concurrency_limit=_bounded_env_int(
             source,
             "ARCLINK_LLM_ROUTER_DEPLOYMENT_CONCURRENCY_LIMIT",
@@ -312,6 +330,8 @@ def load_router_config(env: Mapping[str, str] | None = None) -> RouterConfig:
             minimum=1,
         ),
         upstream_warmup_enabled=_truthy(source.get("ARCLINK_LLM_ROUTER_UPSTREAM_WARMUP_ENABLED"), default=True),
+        # H2 break-glass: forward catalog-inactive models (incident response only).
+        allow_inactive_models=_truthy(source.get("ARCLINK_LLM_ROUTER_ALLOW_INACTIVE_MODELS"), default=False),
     )
 
 
@@ -561,11 +581,79 @@ def _estimate_prompt_tokens(payload: Mapping[str, Any], body: bytes) -> int:
     return max(1, len(str(payload)) // 4)
 
 
+_MAX_OUTPUT_TOKEN_KEYS = ("max_tokens", "max_completion_tokens")
+# C1 multi-completion fix: keys that fan one request into multiple sampled
+# completions, multiplying the worst-case output. ``n`` is the OpenAI-compatible
+# chat-completions multiplier (the Chutes ``/v1/chat/completions`` endpoint
+# honors it). ``best_of`` is a legacy text-completions param that the OpenAI chat
+# endpoint rejects rather than honors -- but since the router forwards the payload
+# wholesale we price (and clamp) defensively against the larger of the two so an
+# upstream that DID honor ``best_of`` could never settle more output than reserved.
+_COMPLETION_MULTIPLIER_KEYS = ("n", "best_of")
+
+
+def _requested_completions(payload: Mapping[str, Any]) -> int:
+    """Worst-case number of sampled completions the payload would fan into.
+
+    The reservation must price ``per-completion output cap x this count``. Takes
+    the MAX usable value across the multiplier keys (the largest fan-out the
+    caller expressed); defaults to 1 when no key carries a usable positive value.
+    """
+    usable = [
+        value
+        for name in _COMPLETION_MULTIPLIER_KEYS
+        if name in payload
+        for value in (_usable_positive_int(payload.get(name)),)
+        if value > 0
+    ]
+    return max(usable) if usable else 1
+
+
+def _effective_completions(config: RouterConfig, payload: Mapping[str, Any]) -> int:
+    """Completion count clamped into ``1..config.max_completions``.
+
+    Both the reservation pricing and the forwarded payload use this single value
+    so the forwarded fan-out can never exceed what was priced.
+    """
+    return max(1, min(int(config.max_completions), _requested_completions(payload)))
+
+
+def _usable_positive_int(value: Any) -> int:
+    """Return ``value`` as a positive int, or 0 when it is not a usable cap.
+
+    ``null``, booleans, non-numeric strings, and non-positive numbers all map to
+    0 so the caller can treat them as "no usable output cap" (omitted) rather than
+    an unbounded request. Mirrors ``_clean_int`` but rejects bool/None up front.
+    """
+    if value is None or isinstance(value, bool):
+        return 0
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        return 0
+    return parsed if parsed > 0 else 0
+
+
 def _requested_max_tokens(payload: Mapping[str, Any]) -> int:
-    for name in ("max_tokens", "max_completion_tokens"):
-        if name in payload:
-            return max(0, _clean_int(payload.get(name), 0))
-    return 0
+    """Effective requested output cap across ALL max-output keys.
+
+    Round-3 fix: a caller can send several max-output keys at once
+    (``max_tokens`` AND ``max_completion_tokens``). The old "first present key"
+    logic let ``{max_tokens: null, max_completion_tokens: 999999}`` (or
+    ``{max_tokens: 64, max_completion_tokens: 999999}``) bypass the preflight cap
+    check and underprice the reservation. The EFFECTIVE requested cap is the MIN of
+    the usable positive values across every key (the tightest bound the caller
+    actually expressed); 0 ("no usable cap") only when NO key carries a usable
+    positive value, in which case the caller prices the bounded reservation default.
+    """
+    usable = [
+        value
+        for name in _MAX_OUTPUT_TOKEN_KEYS
+        if name in payload
+        for value in (_usable_positive_int(payload.get(name)),)
+        if value > 0
+    ]
+    return min(usable) if usable else 0
 
 
 def _model_price_cents(config: RouterConfig, catalog_entry: Mapping[str, Any] | None) -> tuple[int, int, str]:
@@ -582,10 +670,15 @@ def _estimate_reservation_cents_for_model(
     catalog_entry: Mapping[str, Any] | None,
     input_tokens: int,
     max_tokens: int,
+    completions: int = 1,
 ) -> int:
     input_cents, output_cents, _ = _model_price_cents(config, catalog_entry)
-    output_tokens = max_tokens if max_tokens > 0 else min(config.max_tokens_cap, 1024)
-    estimated = ((max(0, input_tokens) * input_cents) + (max(0, output_tokens) * output_cents) + 999999) // 1000000
+    per_completion_output = max_tokens if max_tokens > 0 else min(config.max_tokens_cap, 1024)
+    # C1 multi-completion fix: the prompt is sent once but ``n`` (or ``best_of``)
+    # samples the output ``completions`` times, so the worst-case BILLED output is
+    # the per-completion cap x the completion count. Input is shared across samples.
+    output_tokens = max(0, per_completion_output) * max(1, int(completions))
+    estimated = ((max(0, input_tokens) * input_cents) + (output_tokens * output_cents) + 999999) // 1000000
     return max(config.min_reservation_cents, int(estimated))
 
 
@@ -607,6 +700,7 @@ def _fallback_reservation_pricing(
     primary_entry: Mapping[str, Any] | None,
     input_tokens: int,
     max_tokens: int,
+    completions: int = 1,
 ) -> dict[str, Any]:
     choices: list[dict[str, Any]] = []
     for model in _router_fallback_candidates(config, primary_model):
@@ -615,7 +709,7 @@ def _fallback_reservation_pricing(
         choices.append(
             {
                 "model": model,
-                "reserved_cents": _estimate_reservation_cents_for_model(config, entry, input_tokens, max_tokens),
+                "reserved_cents": _estimate_reservation_cents_for_model(config, entry, input_tokens, max_tokens, completions),
                 "pricing_source": source,
                 "input_cents_per_million": input_price,
                 "output_cents_per_million": output_price,
@@ -627,7 +721,7 @@ def _fallback_reservation_pricing(
         choices.append(
             {
                 "model": primary_model,
-                "reserved_cents": _estimate_reservation_cents_for_model(config, primary_entry, input_tokens, max_tokens),
+                "reserved_cents": _estimate_reservation_cents_for_model(config, primary_entry, input_tokens, max_tokens, completions),
                 "pricing_source": source,
                 "input_cents_per_million": input_price,
                 "output_cents_per_million": output_price,
@@ -730,6 +824,103 @@ def _effective_global_allowed_models(
     """
     synced = _synced_global_allowed_models(conn)
     return synced or config.allowed_models
+
+
+def _synced_catalog_ever_succeeded(conn: sqlite3.Connection) -> bool:
+    """True if the sync worker ever recorded a successful authoritative sync.
+
+    Lets the router tell "no catalog yet" (cold start, env fallback is expected)
+    apart from "catalog emptied during normal op" (a real collapse worth an
+    operator alert). Anchored on the same ``llm_router:model_sync_ok`` audit
+    action the sync worker writes.
+    """
+    try:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM arclink_audit_log
+            WHERE action = 'llm_router:model_sync_ok'
+            LIMIT 1
+            """
+        ).fetchone()
+    except sqlite3.Error:
+        return False
+    return row is not None
+
+
+def _router_allow_list_state(conn: sqlite3.Connection, config: RouterConfig) -> dict[str, Any]:
+    """Operator-facing snapshot of the effective allow-list source.
+
+    H3: distinguishes a synced catalog from the env fallback and flags a
+    *collapse* -- the synced set emptying after a prior successful sync, which
+    silently drops the router back to the env default-only list.
+    """
+    synced = _synced_global_allowed_models(conn)
+    ever_synced = _synced_catalog_ever_succeeded(conn)
+    using_fallback = not synced
+    collapsed = using_fallback and ever_synced
+    effective = synced or config.allowed_models
+    return {
+        "source": "synced_catalog" if synced else "env_fallback",
+        "synced_model_count": len(synced),
+        "effective_model_count": len(effective),
+        "ever_synced": ever_synced,
+        "synced_catalog_collapsed": collapsed,
+    }
+
+
+ALLOW_LIST_COLLAPSE_HICCUP_KEY = "llm_router_allow_list_collapsed"
+
+
+def _report_allow_list_collapse(conn: sqlite3.Connection, state: Mapping[str, Any]) -> None:
+    """Alert on allow-list collapse, and RESOLVE the alert on recovery.
+
+    Best-effort and never raises into the request/health path. ``report_operator_hiccup``
+    dedups on its audit key, so repeated health checks during the same outage do
+    not spam.
+
+    H3 rearm fix: the hiccup alert only re-arms when a matching
+    ``resolve_operator_hiccup`` is recorded -- merely *stopping* reporting on
+    recovery would leave the key armed forever, suppressing a SECOND collapse. So
+    when the synced catalog is non-empty again (no collapse), resolve the key so a
+    later collapse re-alerts.
+    """
+    try:
+        cfg = Config.from_env()
+    except Exception:
+        return
+    if not state.get("synced_catalog_collapsed"):
+        # Recovered (or never collapsed): re-arm the alert. resolve_operator_hiccup
+        # is a cheap no-op when the key is not currently armed.
+        try:
+            resolve_operator_hiccup(
+                conn,
+                cfg,
+                source="llm_router",
+                key=ALLOW_LIST_COLLAPSE_HICCUP_KEY,
+                reason="synced -TEE catalog recovered (non-empty allow-list)",
+            )
+        except Exception:
+            return
+        return
+    try:
+        report_operator_hiccup(
+            conn,
+            cfg,
+            source="llm_router",
+            key=ALLOW_LIST_COLLAPSE_HICCUP_KEY,
+            message=(
+                "ArcLink LLM router allow-list COLLAPSED to the env default-only fallback: "
+                "the synced -TEE catalog is now empty after a prior successful sync. Customers "
+                "can only reach the default model until the catalog is restored."
+            ),
+            extra={
+                "effective_model_count": int(state.get("effective_model_count") or 0),
+                "synced_model_count": int(state.get("synced_model_count") or 0),
+            },
+        )
+    except Exception:
+        return
 
 
 def _router_model_allowed(
@@ -968,6 +1159,27 @@ def _open_reserved_count(conn: sqlite3.Connection, deployment_id: str) -> int:
     return int(row["count"] if row else 0)
 
 
+def _open_reserved_cents(conn: sqlite3.Connection, deployment_id: str) -> int:
+    """Sum of still-open (status='reserved') reservation amounts for a Pod.
+
+    Settlement only updates ``arclink_chutes_usage`` (which feeds
+    ``boundary.remaining_cents``) when a request *completes*. Concurrent
+    in-flight requests each hold an OPEN reservation that has not yet been
+    charged against the budget. The preflight budget gate must subtract these
+    open reservations from the settled ``remaining_cents`` so that N concurrent
+    requests cannot collectively reserve more than the budget allows (C1).
+    """
+    row = conn.execute(
+        """
+        SELECT COALESCE(SUM(reserved_cents), 0) AS reserved
+        FROM arclink_llm_budget_reservations
+        WHERE deployment_id = ? AND status = 'reserved'
+        """,
+        (deployment_id,),
+    ).fetchone()
+    return int(row["reserved"] if row else 0)
+
+
 def _create_budget_reservation(
     conn: sqlite3.Connection,
     *,
@@ -979,11 +1191,12 @@ def _create_budget_reservation(
     commit: bool = True,
 ) -> dict[str, Any]:
     reservation_id = f"llmres_{uuid.uuid4().hex[:24]}"
+    now_iso = _utc_now_iso()
     conn.execute(
         """
         INSERT INTO arclink_llm_budget_reservations (
-          reservation_id, request_id, deployment_id, user_id, reserved_cents, status, metadata_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, 'reserved', ?, ?)
+          reservation_id, request_id, deployment_id, user_id, reserved_cents, status, metadata_json, created_at, heartbeat_at
+        ) VALUES (?, ?, ?, ?, ?, 'reserved', ?, ?, ?)
         """,
         (
             reservation_id,
@@ -992,7 +1205,11 @@ def _create_budget_reservation(
             user_id,
             max(1, int(reserved_cents)),
             _metadata_json(metadata or {}),
-            _utc_now_iso(),
+            now_iso,
+            # C2: stamp the heartbeat at creation so the reaper measures liveness
+            # by heartbeat staleness, not by total age (a long-lived stream that
+            # keeps yielding chunks stays alive and is never expired mid-flight).
+            now_iso,
         ),
     )
     if commit:
@@ -1003,6 +1220,7 @@ def _create_budget_reservation(
         "deployment_id": deployment_id,
         "user_id": user_id,
         "reserved_cents": max(1, int(reserved_cents)),
+        "heartbeat_at": now_iso,
         "metadata": dict(metadata or {}),
     }
 
@@ -1015,12 +1233,19 @@ def _release_budget_reservation(
     settled_cents: int = 0,
     metadata: Mapping[str, Any] | None = None,
 ) -> None:
+    # C2 reconcile-by-id: settle the reservation BY ID regardless of its current
+    # status. The heartbeat reaper may have already flipped a live row to
+    # 'expired' (e.g. a long stream whose heartbeat staleness crossed the TTL just
+    # before settlement); the settling request must still reconcile it to its
+    # terminal 'settled'/'failed' state rather than no-op on a status guard. Only
+    # an already-terminal row (settled/failed/released) is left untouched so a
+    # double-settle cannot rewrite a finished row.
     if metadata is None:
         conn.execute(
             """
             UPDATE arclink_llm_budget_reservations
             SET status = ?, settled_cents = ?, settled_at = ?
-            WHERE reservation_id = ? AND status = 'reserved'
+            WHERE reservation_id = ? AND status IN ('reserved', 'expired')
             """,
             (status, max(0, int(settled_cents)), _utc_now_iso(), reservation_id),
         )
@@ -1029,11 +1254,127 @@ def _release_budget_reservation(
             """
             UPDATE arclink_llm_budget_reservations
             SET status = ?, settled_cents = ?, metadata_json = ?, settled_at = ?
-            WHERE reservation_id = ? AND status = 'reserved'
+            WHERE reservation_id = ? AND status IN ('reserved', 'expired')
             """,
             (status, max(0, int(settled_cents)), _metadata_json(metadata), _utc_now_iso(), reservation_id),
         )
     conn.commit()
+
+
+# C2: the reaper measures HEARTBEAT staleness, not total age. The heartbeat is
+# stamped at reservation creation and refreshed ONLY after a streamed chunk -- so
+# the longest a LIVE request can go without refreshing is bounded by the upstream
+# httpx READ timeout: time-to-first-byte, the inter-chunk gap, AND a whole
+# non-streaming call are each capped at that read timeout (one read window can
+# elapse with zero heartbeat refresh). The TTL must therefore be STRICTLY GREATER
+# than that read window plus margin, or a legitimately-slow live request whose
+# first/next chunk is up to read_timeout away gets false-expired -> dropped from
+# the C1 open-reservation headroom sum -> budget over-reserved.
+DEFAULT_RESERVATION_HEARTBEAT_TTL_SECONDS = 120
+# Throttle: refresh the on-row heartbeat at most this often per reservation, so a
+# fast token stream does not issue a DB write per chunk.
+RESERVATION_HEARTBEAT_REFRESH_SECONDS = 15
+# Slack added on top of the upstream read window so a single read-timeout gap (no
+# refresh) can never by itself trip the reaper.
+RESERVATION_REAPER_TTL_MARGIN_SECONDS = 120
+
+
+def _reservation_reaper_ttl_seconds(config: RouterConfig) -> int:
+    """Max tolerable heartbeat staleness before a reservation is presumed leaked.
+
+    The heartbeat refreshes only AFTER a streamed chunk, while httpx bounds the
+    time-to-first-byte, the inter-chunk gap, and a whole non-streaming call to the
+    upstream READ timeout. So a LIVE request can legitimately go up to
+    ``upstream_read_timeout_seconds`` without refreshing its heartbeat. The TTL is
+    therefore set strictly GREATER than one such read window
+    (``read_timeout + margin``) so a single read-timeout gap can never false-expire
+    an in-flight reservation; a worker that actually died stops refreshing and ages
+    past this larger window. Floored at the legacy fixed window so a tiny configured
+    read timeout still leaves comfortable refresh + settlement slack.
+    """
+    return max(
+        DEFAULT_RESERVATION_HEARTBEAT_TTL_SECONDS,
+        RESERVATION_HEARTBEAT_REFRESH_SECONDS * 4,
+        int(config.upstream_read_timeout_seconds) + RESERVATION_REAPER_TTL_MARGIN_SECONDS,
+    )
+
+
+def _touch_reservation_heartbeat(
+    config: RouterConfig,
+    reservation: Mapping[str, Any] | dict[str, Any],
+) -> None:
+    """Refresh a live reservation's heartbeat (throttled, best-effort).
+
+    Called from the active/streaming path. Writes ``heartbeat_at`` at most once
+    per ``RESERVATION_HEARTBEAT_REFRESH_SECONDS`` per reservation (tracked on the
+    in-memory ``reservation`` dict) so a fast token stream does not issue a DB
+    write per chunk. Never raises into the inference path -- a missed heartbeat
+    at worst lets the reaper expire a genuinely-stalled row, which settlement
+    still reconciles by id.
+    """
+    reservation_id = str((reservation or {}).get("reservation_id") or "").strip()
+    if not reservation_id:
+        return
+    now = datetime.now(timezone.utc)
+    last_raw = str((reservation or {}).get("heartbeat_at") or "").strip()
+    if last_raw:
+        try:
+            last = datetime.fromisoformat(last_raw)
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+            if (now - last) < timedelta(seconds=RESERVATION_HEARTBEAT_REFRESH_SECONDS):
+                return
+        except ValueError:
+            pass
+    now_iso = now.replace(microsecond=0).isoformat()
+    try:
+        conn = _open_control_conn(config)
+        try:
+            conn.execute(
+                """
+                UPDATE arclink_llm_budget_reservations
+                SET heartbeat_at = ?
+                WHERE reservation_id = ? AND status = 'reserved'
+                """,
+                (now_iso, reservation_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return
+    if isinstance(reservation, dict):
+        reservation["heartbeat_at"] = now_iso
+
+
+def _reap_stale_reservations(conn: sqlite3.Connection, config: RouterConfig, *, commit: bool = True) -> int:
+    """Expire reservations whose heartbeat went stale past the TTL (idempotent).
+
+    C2 leaked-reservation fix: a worker that dies between forwarding and
+    settlement -- or stalls -- stops refreshing ``heartbeat_at``. Once the
+    heartbeat is older than the TTL the row can only be leaked, so it is flipped
+    to 'expired' (distinct from a clean 'released'): it stops counting against the
+    C1 ``status='reserved'`` headroom sum and the concurrency limit, but a
+    reaped-but-returning request can still reconcile it by id (settlement matches
+    'reserved' OR 'expired'). Keyed on heartbeat staleness -- NOT total age -- so a
+    long but live stream that keeps yielding chunks is never expired mid-flight.
+    Pure UPDATE, safe to run on every preflight and at startup.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=_reservation_reaper_ttl_seconds(config))).replace(
+        microsecond=0
+    ).isoformat()
+    cursor = conn.execute(
+        """
+        UPDATE arclink_llm_budget_reservations
+        SET status = 'expired', settled_at = ?
+        WHERE status = 'reserved'
+          AND COALESCE(NULLIF(heartbeat_at, ''), created_at) < ?
+        """,
+        (_utc_now_iso(), cutoff),
+    )
+    if commit:
+        conn.commit()
+    return int(cursor.rowcount or 0)
 
 
 def _money(cents: int) -> str:
@@ -1215,6 +1556,22 @@ def _preflight_chat_request(
     if not _router_model_allowed(config, model, allowed_models, allow_default_model=allow_default_model):
         return None, _router_error(403, "model_not_allowed", "Requested model is not allowed for this ArcPod.")
     upstream_model, catalog_entry, model_resolution = _resolve_router_model(conn, config, model, allowed_models)
+    # H2 default-model catalog bypass fix: ``_router_model_allowed`` admits the
+    # configured default model regardless of catalog status, and the catalog can
+    # mark a model 'unavailable'/'deprecated' (e.g. the sync worker pulled it).
+    # Even for the default, never forward an upstream model whose catalog row
+    # exists and is NOT 'active' -- a deprecated row with a replacement is already
+    # redirected by _resolve_router_model, so a non-active entry here means it was
+    # withdrawn with no live replacement. Break-glass env reopens it for incident
+    # response only.
+    if not config.allow_inactive_models and catalog_entry is not None:
+        upstream_status = str(catalog_entry.get("status") or "").strip().lower()
+        if upstream_status and upstream_status != "active":
+            return None, _router_error(
+                403,
+                "model_unavailable",
+                "Resolved model is marked unavailable in the ArcLink model catalog.",
+            )
     disallowed_model = _disallowed_router_model(
         config,
         _router_fallback_candidates(config, upstream_model),
@@ -1230,11 +1587,23 @@ def _preflight_chat_request(
     max_tokens = _requested_max_tokens(payload)
     if max_tokens > config.max_tokens_cap:
         return None, _router_error(400, "max_tokens_too_large", "Requested max_tokens exceeds the ArcLink LLM router cap.")
+    # C1 multi-completion fix: a caller can fan one request into several sampled
+    # completions via ``n`` (or ``best_of``), each up to the per-completion output
+    # cap. Clamp to ``1..config.max_completions`` and price the EFFECTIVE worst-case
+    # output (per-completion cap x this count); the SAME clamped value is forwarded
+    # (via ``_prepare_upstream_payload``) so the upstream fan-out can never exceed
+    # what was reserved.
+    effective_completions = _effective_completions(config, payload)
 
     transaction_started = False
     try:
         conn.execute("BEGIN IMMEDIATE")
         transaction_started = True
+        # C2: release any reservation leaked by a worker that died mid-request
+        # before we read open reservations / enforce concurrency below. Done
+        # inside the write lock so the reap is serialized with this request's own
+        # reservation accounting (no commit here -- the whole preflight commits once).
+        _reap_stale_reservations(conn, config, commit=False)
         metadata, billing_state = _load_deployment_context(conn, auth_record)
         deployment_id = str(auth_record.get("deployment_id") or "")
         user_id = str(auth_record.get("user_id") or "")
@@ -1307,12 +1676,21 @@ def _preflight_chat_request(
             primary_entry=catalog_entry,
             input_tokens=prompt_tokens,
             max_tokens=max_tokens,
+            completions=effective_completions,
         )
         selected_pricing = dict(pricing_choice["selected"])
         reserved_cents = int(selected_pricing.get("reserved_cents") or config.min_reservation_cents)
+        # C1 over-spend fix: ``boundary.remaining_cents`` is computed from SETTLED
+        # usage only, so concurrent in-flight requests (each holding an OPEN
+        # reservation not yet charged) could collectively reserve past the budget.
+        # Subtract the still-open reservation total -- read inside this same
+        # BEGIN IMMEDIATE txn so it is serialized against other reservers -- before
+        # testing the request's own reservation against the available headroom.
+        open_reserved_cents = _open_reserved_cents(conn, deployment_id)
+        available_cents = int(boundary.remaining_cents) - open_reserved_cents
         # Observed-unlimited Pods (the Operator's own Pod) are metered but never reservation-
         # blocked, so Raven inference cannot be silenced by a budget cap.
-        if str(getattr(boundary, "budget_status", "") or "") != "unlimited" and boundary.remaining_cents < reserved_cents:
+        if str(getattr(boundary, "budget_status", "") or "") != "unlimited" and available_cents < reserved_cents:
             _queue_arc_pod_fuel_notice(
                 conn,
                 deployment_id=str(auth_record.get("deployment_id") or ""),
@@ -1345,6 +1723,7 @@ def _preflight_chat_request(
             "reservation_pricing_candidates": pricing_choice["choices"],
             "pricing_adjusted_at_settlement": False,
             "model_resolution": model_resolution,
+            "effective_completions": effective_completions,
         }
         reservation = _create_budget_reservation(
             conn,
@@ -1363,6 +1742,10 @@ def _preflight_chat_request(
         raise
     reservation["input_token_estimate"] = prompt_tokens
     reservation["output_token_estimate"] = max_tokens if max_tokens > 0 else min(config.max_tokens_cap, 1024)
+    # C1 multi-completion fix: carry the clamped completion count so the forward
+    # path clamps the outgoing ``n``/``best_of`` to the SAME value the reservation
+    # priced -- the upstream can never sample more completions than were reserved.
+    reservation["effective_completions"] = effective_completions
     reservation["requested_model"] = model
     reservation["upstream_model"] = upstream_model
     reservation["model_pricing"] = dict(catalog_entry or {})
@@ -1373,10 +1756,68 @@ def _preflight_chat_request(
     return reservation, None
 
 
-def _prepare_upstream_payload(payload: Mapping[str, Any], *, model: str = "") -> dict[str, Any]:
+def _prepare_upstream_payload(
+    payload: Mapping[str, Any],
+    *,
+    model: str = "",
+    max_output_tokens: int = 0,
+    max_completions: int = 0,
+) -> dict[str, Any]:
     prepared = dict(payload)
     if model:
         prepared["model"] = model
+    # missed-H fix: when the caller omitted a usable output cap, the reservation
+    # still priced a bounded number of output tokens (``min(cap, 1024)``). Forward
+    # that same cap so the upstream cannot settle MORE output than was reserved.
+    #
+    # missed-H2 fix: a caller can set ``max_tokens: null`` (or a non-positive /
+    # non-int value). Preflight's ``_requested_max_tokens`` already treats that as
+    # 0 (priced as the bounded default), but the key still EXISTS in the body --
+    # so forwarding it verbatim would let upstream interpret ``null`` as unbounded.
+    #
+    # Round-3 fix: enforce the cap across EVERY max-output key, not just the first.
+    # A caller can send several at once (``{max_tokens: null,
+    # max_completion_tokens: 999999}`` or ``{max_tokens: 64,
+    # max_completion_tokens: 999999}``) where one key undercuts the cap and another
+    # blows past it. The reservation priced the EFFECTIVE cap (the tightest usable
+    # value, via ``_requested_max_tokens``); ``max_output_tokens`` carries that
+    # priced ceiling. So: (1) drop any present-but-unusable key (null / 0 / negative
+    # / non-int) so it can never reach upstream as "unbounded"; (2) CLAMP every
+    # remaining present key down to <= the priced ceiling; (3) if no usable key
+    # survived, inject the ceiling. No key can exceed the reservation after this.
+    ceiling = int(max_output_tokens) if max_output_tokens and int(max_output_tokens) > 0 else 0
+    any_usable_present = False
+    for name in _MAX_OUTPUT_TOKEN_KEYS:
+        if name not in prepared:
+            continue
+        usable = _usable_positive_int(prepared.get(name))
+        if usable <= 0:
+            # null / 0 / negative / non-int -> treat as omitted: drop it so a
+            # null can never reach upstream as "unbounded".
+            del prepared[name]
+            continue
+        any_usable_present = True
+        # Lower any value exceeding the priced ceiling so NO present key can settle
+        # more output than was reserved.
+        prepared[name] = min(usable, ceiling) if ceiling > 0 else usable
+    if not any_usable_present and ceiling > 0:
+        prepared["max_tokens"] = ceiling
+    # C1 multi-completion fix: the reservation priced ``per-completion cap x
+    # max_completions`` worth of output. Clamp every completion-multiplier key the
+    # caller sent (``n``, and ``best_of`` defensively) down to <= that priced count
+    # so the upstream fan-out can never settle more completions than were reserved;
+    # drop any present-but-unusable value (null / 0 / negative / non-int) so it
+    # cannot reach upstream and be defaulted to something larger.
+    completion_ceiling = int(max_completions) if max_completions and int(max_completions) > 0 else 0
+    if completion_ceiling > 0:
+        for name in _COMPLETION_MULTIPLIER_KEYS:
+            if name not in prepared:
+                continue
+            usable = _usable_positive_int(prepared.get(name))
+            if usable <= 0:
+                del prepared[name]
+                continue
+            prepared[name] = min(usable, completion_ceiling)
     if _truthy(str(prepared.get("stream") or "")):
         stream_options = prepared.get("stream_options")
         if not isinstance(stream_options, dict):
@@ -1634,6 +2075,10 @@ async def _forward_non_streaming(
 ) -> JSONResponse:
     model = str(payload.get("model") or "").strip()
     upstream_model = str(reservation.get("upstream_model") or model).strip()
+    # missed-H: cap forwarded output to the same bound the reservation priced.
+    reserved_output_tokens = int(reservation.get("output_token_estimate") or 0)
+    # C1 multi-completion: clamp the forwarded fan-out to the priced count.
+    reserved_completions = int(reservation.get("effective_completions") or 1)
     candidates = _router_fallback_candidates(config, upstream_model)
     fallback_attempts: list[dict[str, Any]] = []
     upstream = None
@@ -1644,10 +2089,22 @@ async def _forward_non_streaming(
     client = _upstream_client(config, request.app.state)
     for index, candidate_model in enumerate(candidates):
         final_model = candidate_model
+        # C2 retry-heartbeat fix: each upstream attempt can burn a whole read
+        # timeout with no streamed chunk to refresh the heartbeat, so N pre-response
+        # retries could leave a LIVE reservation un-heartbeated for N x read_timeout
+        # and the reaper would false-expire it. Refresh at the START of every attempt
+        # (throttled, best-effort) so a live request never goes longer than ONE read
+        # window without a heartbeat regardless of retry count.
+        _touch_reservation_heartbeat(config, reservation)
         try:
             upstream = await client.post(
                 _upstream_url(config, "chat/completions"),
-                json=_prepare_upstream_payload(payload, model=candidate_model),
+                json=_prepare_upstream_payload(
+                    payload,
+                    model=candidate_model,
+                    max_output_tokens=reserved_output_tokens,
+                    max_completions=reserved_completions,
+                ),
                 headers=_upstream_headers(config),
             )
         except httpx.HTTPError as exc:
@@ -1829,6 +2286,10 @@ async def _stream_upstream_response(
     model = str(payload.get("model") or "").strip()
     upstream_model = str(reservation.get("upstream_model") or model).strip()
     candidates = _router_fallback_candidates(config, upstream_model)
+    # missed-H: cap forwarded output to the same bound the reservation priced.
+    reserved_output_tokens = int(reservation.get("output_token_estimate") or 0)
+    # C1 multi-completion: clamp the forwarded fan-out to the priced count.
+    reserved_completions = int(reservation.get("effective_completions") or 1)
     input_tokens = int(reservation.get("input_token_estimate") or 0)
     output_tokens = 0
     total_tokens = input_tokens
@@ -1843,11 +2304,25 @@ async def _stream_upstream_response(
         client = _upstream_client(config, request.app.state)
         for index, candidate_model in enumerate(candidates):
             final_model = candidate_model
+            # C2 retry-heartbeat fix: the pre-first-chunk window of each streaming
+            # attempt (connect + time-to-first-byte, bounded by the read timeout)
+            # refreshes no heartbeat, so N pre-chunk retries could leave a LIVE
+            # reservation un-heartbeated for N x read_timeout and the reaper would
+            # false-expire it. Refresh at the START of every attempt (throttled,
+            # best-effort) so a live request never goes longer than ONE read window
+            # without a heartbeat regardless of retry count; the per-chunk touch
+            # below keeps a long stream fresh once chunks begin.
+            _touch_reservation_heartbeat(config, reservation)
             try:
                 async with client.stream(
                     "POST",
                     _upstream_url(config, "chat/completions"),
-                    json=_prepare_upstream_payload(payload, model=candidate_model),
+                    json=_prepare_upstream_payload(
+                        payload,
+                        model=candidate_model,
+                        max_output_tokens=reserved_output_tokens,
+                        max_completions=reserved_completions,
+                    ),
                     headers=_upstream_headers(config),
                 ) as upstream:
                     if upstream.status_code >= 400:
@@ -1912,6 +2387,10 @@ async def _stream_upstream_response(
                             input_tokens, output_tokens, total_tokens = usage
                             source_kind = "provider_usage"
                         yielded_any = True
+                        # C2: a long stream legitimately outlives the per-chunk
+                        # read timeout; refresh the reservation heartbeat (throttled)
+                        # so the reaper never expires this still-live reservation.
+                        _touch_reservation_heartbeat(config, reservation)
                         yield chunk
                     return
             except (httpx.HTTPError, OSError) as exc:
@@ -2000,6 +2479,17 @@ def create_app(
     @app.on_event("startup")
     async def router_startup() -> None:
         app.state.router_upstream_warmup = await _warm_up_upstream_pool(router_config, app.state)
+        # C2: clear reservations leaked by a worker that crashed before its prior
+        # process settled them, so a restart does not inherit phantom budget holds.
+        if router_config.configured:
+            try:
+                conn = _open_control_conn(router_config)
+                try:
+                    app.state.router_reservation_reaped = _reap_stale_reservations(conn, router_config)
+                finally:
+                    conn.close()
+            except sqlite3.Error as exc:
+                app.state.router_reservation_reaped = {"status": "failed", "error": _safe_upstream_error(str(exc))}
         if router_config.refresh_model_catalog_on_startup:
             try:
                 app.state.router_catalog_refresh = await asyncio.to_thread(
@@ -2024,6 +2514,19 @@ def create_app(
         payload = router_config.public_status()
         payload["model_catalog_refresh"] = dict(getattr(app.state, "router_catalog_refresh", {}) or {})
         payload["upstream_warmup"] = dict(getattr(app.state, "router_upstream_warmup", {}) or {})
+        # H3: surface synced-vs-fallback allow-list state, and alert the Operator
+        # once if the synced catalog collapsed to the env default-only fallback.
+        if router_config.configured:
+            try:
+                conn = _open_control_conn(router_config)
+                try:
+                    allow_list_state = _router_allow_list_state(conn, router_config)
+                    payload["allow_list"] = allow_list_state
+                    _report_allow_list_collapse(conn, allow_list_state)
+                finally:
+                    conn.close()
+            except sqlite3.Error as exc:
+                payload["allow_list"] = {"status": "unavailable", "error": _safe_upstream_error(str(exc))}
         status_code = 200 if router_config.configured else 503
         return JSONResponse(status_code=status_code, content=payload)
 

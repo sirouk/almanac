@@ -706,9 +706,14 @@ def _fallback_reservation_pricing(
     input_tokens: int,
     max_tokens: int,
     completions: int = 1,
+    candidates: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
+    # ``candidates`` lets the caller price only the candidates that will actually
+    # be forwarded (the allow-filtered list), so a disallowed fallback is neither
+    # priced nor attempted. When omitted, fall back to the raw candidate list.
+    candidate_models = candidates if candidates is not None else _router_fallback_candidates(config, primary_model)
     choices: list[dict[str, Any]] = []
-    for model in _router_fallback_candidates(config, primary_model):
+    for model in candidate_models:
         entry = primary_entry if model == primary_model else get_model_catalog_entry(conn, provider="chutes", model_id=model)
         input_price, output_price, source = _model_price_cents(config, entry)
         choices.append(
@@ -966,6 +971,69 @@ def _router_fallback_candidates(config: RouterConfig, primary_model: str) -> tup
         if clean and clean not in candidates:
             candidates.append(clean)
     return tuple(candidates)
+
+
+def _allowed_router_fallback_candidates(
+    conn: sqlite3.Connection,
+    config: RouterConfig,
+    primary_model: str,
+    allowed_models: tuple[str, ...],
+    *,
+    allow_default_model: bool,
+) -> tuple[str, ...]:
+    """Outage fix: a configured fallback that is NOT allowed for this ArcPod (or
+    is withdrawn from the catalog) must be SKIPPED, never fatal. Previously the
+    preflight HARD-REJECTED the whole request (403 model_not_allowed) whenever ANY
+    fallback was disallowed, so a key whose allow-list held only the PRIMARY (with
+    a configured fallback that key could not use) 403'd on EVERY turn -- a total
+    public-channel outage even though the allowed primary would have worked.
+
+    The resolved primary is ALWAYS kept (its allow/catalog status is validated by
+    ``_preflight_chat_request`` before this runs). Only the fallback positions are
+    filtered: each must (a) be allowed for this ArcPod and (b) -- unless the
+    break-glass ``allow_inactive_models`` env is set -- not have a non-active
+    catalog row (matching the primary's H2 guard). This is the SAME list that the
+    forward/stream loops iterate, so disallowed fallbacks are never attempted and
+    never priced.
+    """
+    full = _router_fallback_candidates(config, primary_model)
+    if not full:
+        return full
+    primary = full[0]
+    kept: list[str] = [primary]
+    for candidate in full[1:]:
+        if candidate == primary:
+            continue
+        if not _router_model_allowed(config, candidate, allowed_models, allow_default_model=allow_default_model):
+            continue
+        if not config.allow_inactive_models:
+            entry = get_model_catalog_entry(conn, provider="chutes", model_id=candidate)
+            if entry is not None:
+                status = str(entry.get("status") or "").strip().lower()
+                if status and status != "active":
+                    continue
+        kept.append(candidate)
+    return tuple(kept)
+
+
+def _reservation_fallback_candidates(
+    config: RouterConfig,
+    reservation: Mapping[str, Any],
+    upstream_model: str,
+) -> tuple[str, ...]:
+    """Return the candidate list the forward/stream loops should iterate.
+
+    Prefers the allow-filtered list stashed on the reservation at preflight so a
+    disallowed fallback is never attempted upstream. Falls back to the raw
+    candidate list only if the field is absent/empty (e.g. a reservation created
+    before this field existed), and always re-asserts that the primary leads.
+    """
+    stored = reservation.get("fallback_candidates")
+    if isinstance(stored, (list, tuple)):
+        cleaned = [str(m or "").strip() for m in stored if str(m or "").strip()]
+        if cleaned:
+            return tuple(dict.fromkeys(cleaned))
+    return _router_fallback_candidates(config, upstream_model)
 
 
 def _upstream_status_is_retryable(config: RouterConfig, status_code: int) -> bool:
@@ -1625,14 +1693,28 @@ def _preflight_chat_request(
                 "model_unavailable",
                 "Resolved model is marked unavailable in the ArcLink model catalog.",
             )
-    disallowed_model = _disallowed_router_model(
+    # The RESOLVED primary (after _resolve_router_model redirected/promoted the
+    # requested model) must itself be allowed -- a catalog replacement could point
+    # at a model this ArcPod's key cannot use. The requested model was checked at
+    # ~the top; this guards the resolved target.
+    if not _router_model_allowed(config, upstream_model, allowed_models, allow_default_model=allow_default_model):
+        return None, _router_error(403, "model_not_allowed", "Resolved model is not allowed for this ArcPod.")
+    # Outage fix: a DISALLOWED fallback must be SKIPPED, never fatal. Filter the
+    # candidate list down to the primary + only the allowed (and catalog-active)
+    # fallbacks; the forward/stream loops iterate THIS list, so an unusable
+    # fallback (e.g. a key allowing only the primary while a Kimi fallback is
+    # configured) no longer 403's the whole request -- the allowed primary works.
+    fallback_candidates = _allowed_router_fallback_candidates(
+        conn,
         config,
-        _router_fallback_candidates(config, upstream_model),
+        upstream_model,
         allowed_models,
         allow_default_model=allow_default_model,
     )
-    if disallowed_model:
-        return None, _router_error(403, "model_not_allowed", "Resolved or fallback model is not allowed for this ArcPod.")
+    if not fallback_candidates:
+        # Defensive: the primary is always kept above, so this is unreachable in
+        # normal operation. Fail closed rather than forward with an empty list.
+        return None, _router_error(403, "model_not_allowed", "No allowed model is available for this ArcPod.")
 
     prompt_tokens = _estimate_prompt_tokens(payload, body)
     if prompt_tokens > config.prompt_estimate_token_cap:
@@ -1730,6 +1812,7 @@ def _preflight_chat_request(
             input_tokens=prompt_tokens,
             max_tokens=max_tokens,
             completions=effective_completions,
+            candidates=fallback_candidates,
         )
         selected_pricing = dict(pricing_choice["selected"])
         reserved_cents = int(selected_pricing.get("reserved_cents") or config.min_reservation_cents)
@@ -1766,7 +1849,7 @@ def _preflight_chat_request(
             "primary_model": upstream_model,
             "final_model": upstream_model,
             "fallback_used": False,
-            "fallback_candidate_count": len(_router_fallback_candidates(config, upstream_model)),
+            "fallback_candidate_count": len(fallback_candidates),
             "fallback_pricing_reserved": str(selected_pricing.get("model") or "") != upstream_model,
             "reservation_pricing_model": str(selected_pricing.get("model") or upstream_model),
             "reservation_pricing_source": str(selected_pricing.get("pricing_source") or ""),
@@ -1801,6 +1884,10 @@ def _preflight_chat_request(
     reservation["effective_completions"] = effective_completions
     reservation["requested_model"] = model
     reservation["upstream_model"] = upstream_model
+    # Carry the allow-filtered candidate list so the forward/stream loops iterate
+    # ONLY the primary + permitted (catalog-active) fallbacks -- a disallowed
+    # fallback is never attempted upstream.
+    reservation["fallback_candidates"] = list(fallback_candidates)
     reservation["model_pricing"] = dict(catalog_entry or {})
     reservation["reservation_pricing_model"] = str(selected_pricing.get("model") or upstream_model)
     reservation["reservation_model_pricing"] = dict(selected_pricing.get("catalog_entry") or {})
@@ -2149,7 +2236,10 @@ async def _forward_non_streaming(
     reserved_output_tokens = int(reservation.get("output_token_estimate") or 0)
     # C1 multi-completion: clamp the forwarded fan-out to the priced count.
     reserved_completions = int(reservation.get("effective_completions") or 1)
-    candidates = _router_fallback_candidates(config, upstream_model)
+    # Outage fix: iterate the allow-filtered candidate list computed at preflight
+    # (primary + only permitted/active fallbacks). Fall back to the raw list only
+    # if a reservation predates this field, so a disallowed fallback is skipped.
+    candidates = _reservation_fallback_candidates(config, reservation, upstream_model)
     fallback_attempts: list[dict[str, Any]] = []
     upstream = None
     final_model = upstream_model
@@ -2355,7 +2445,9 @@ async def _stream_upstream_response(
 ) -> AsyncIterator[bytes]:
     model = str(payload.get("model") or "").strip()
     upstream_model = str(reservation.get("upstream_model") or model).strip()
-    candidates = _router_fallback_candidates(config, upstream_model)
+    # Outage fix: iterate the allow-filtered candidate list computed at preflight
+    # (primary + only permitted/active fallbacks); raw list only as a safe default.
+    candidates = _reservation_fallback_candidates(config, reservation, upstream_model)
     # missed-H: cap forwarded output to the same bound the reservation priced.
     reserved_output_tokens = int(reservation.get("output_token_estimate") or 0)
     # C1 multi-completion: clamp the forwarded fan-out to the priced count.

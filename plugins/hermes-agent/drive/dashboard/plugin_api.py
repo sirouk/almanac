@@ -155,8 +155,8 @@ _ROOT_METADATA = {
     "fleet": {
         "label": "Fleet",
         "icon": "fleet",
-        "tooltip": "Shared read/write space for this Captain's fleet of ArcPods, synced across machines.",
-        "description": "Shared read/write space for this Captain's fleet of ArcPods, synced across machines.",
+        "tooltip": "Shared read/write libraries for this Captain's fleet — Agents_KB, Agents_Skills, Agents_Plugins — synced across ArcPods and machines. Keep active work (Projects, Repos, Research) in Workspace.",
+        "description": "Shared read/write libraries for this Captain's fleet — Agents_KB, Agents_Skills, Agents_Plugins — synced across ArcPods and machines. Keep active work (Projects, Repos, Research) in Workspace.",
         "order": 20,
     },
     "linked": {

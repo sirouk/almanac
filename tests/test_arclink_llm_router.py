@@ -1217,6 +1217,9 @@ def test_key_allowlist_blocks_global_default_replacement_and_fallback_escape() -
     finally:
         tmp.cleanup()
 
+    # Outage fix: an ALLOWED primary with a DISALLOWED configured fallback must NOT
+    # 403 -- the allowed primary is forwarded and the disallowed fallback is simply
+    # skipped (never attempted). Previously this hard-rejected every request.
     tmp, db_path = temp_router_db()
     try:
         raw_key = _seed_router_key(db_path, allowed_models=["model-a"])
@@ -1231,14 +1234,15 @@ def test_key_allowlist_blocks_global_default_replacement_and_fallback_escape() -
             },
             upstream_transport=upstream,
         )
-        fallback_escape = client.post(
+        allowed_primary = client.post(
             "/v1/chat/completions",
             headers={"Authorization": f"Bearer {raw_key}"},
             json={"model": "model-a", "messages": [{"role": "user", "content": "hello"}]},
         )
-        expect(fallback_escape.status_code == 403, fallback_escape.text)
-        expect(fallback_escape.json()["error"]["code"] == "model_not_allowed", fallback_escape.text)
-        expect(len(upstream.requests) == 0, str(upstream.requests))  # type: ignore[attr-defined]
+        expect(allowed_primary.status_code == 200, allowed_primary.text)
+        # The disallowed fallback (model-b) is never tried; only the allowed primary.
+        expect(len(upstream.requests) == 1, str(upstream.requests))  # type: ignore[attr-defined]
+        expect(upstream.requests[0]["payload"]["model"] == "model-a", str(upstream.requests))  # type: ignore[attr-defined]
     finally:
         tmp.cleanup()
     print("PASS test_key_allowlist_blocks_global_default_replacement_and_fallback_escape")
@@ -3407,6 +3411,206 @@ def test_streaming_n_gt_1_no_usage_fallback_scales_settlement_by_completions() -
     print("PASS test_streaming_n_gt_1_no_usage_fallback_scales_settlement_by_completions")
 
 
+def test_disallowed_fallback_is_skipped_not_fatal_when_primary_is_allowed() -> None:
+    # OUTAGE REGRESSION: an operator key whose allow-list holds ONLY the primary
+    # (zai-org/GLM-5.2-TEE) while a fallback the key cannot use
+    # (moonshotai/Kimi-K2.6-TEE) is configured must NOT 403. Before the fix the
+    # preflight hard-rejected every request ("Resolved or fallback model is not
+    # allowed"), taking down ALL public-channel turns. Now the allowed primary is
+    # forwarded and the disallowed fallback is skipped (never priced, never tried).
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(db_path, allowed_models=["zai-org/GLM-5.2-TEE"])
+        upstream = fake_upstream_transport(
+            payload={
+                "id": "chatcmpl_glm_ok",
+                "object": "chat.completion",
+                "model": "zai-org/GLM-5.2-TEE",
+                "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                "usage": {"prompt_tokens": 8, "completion_tokens": 5, "total_tokens": 13},
+            }
+        )
+        client = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS": "100000",
+                "ARCLINK_LLM_ROUTER_FALLBACK_MODELS": "moonshotai/Kimi-K2.6-TEE",
+            },
+            upstream_transport=upstream,
+        )
+        ok = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "zai-org/GLM-5.2-TEE", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        # The bug: this used to be a 403 model_not_allowed on EVERY request.
+        expect(ok.status_code == 200, ok.text)
+        body = ok.json()
+        expect(body.get("error") is None, ok.text)
+        # The forward candidate list contains the allowed primary and EXCLUDES the
+        # disallowed fallback: exactly one upstream call, to GLM, never to Kimi.
+        models_tried = [r["payload"]["model"] for r in upstream.requests]  # type: ignore[attr-defined]
+        expect(models_tried == ["zai-org/GLM-5.2-TEE"], str(models_tried))
+        expect("moonshotai/Kimi-K2.6-TEE" not in models_tried, str(models_tried))
+        # The reservation settled with the allowed primary and ZERO fallback
+        # attempts -- the disallowed fallback was never priced or forwarded.
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT metadata_json FROM arclink_llm_budget_reservations ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+        finally:
+            conn.close()
+        meta = json.loads(row["metadata_json"]) if row and row["metadata_json"] else {}
+        expect(meta.get("fallback_attempt_count") == 0, str(meta))
+        expect(meta.get("final_model") == "zai-org/GLM-5.2-TEE", str(meta))
+        expect(meta.get("primary_model") == "zai-org/GLM-5.2-TEE", str(meta))
+    finally:
+        tmp.cleanup()
+
+    # Even when the allowed primary returns a RETRYABLE upstream error, the router
+    # must NOT silently fall through to the disallowed Kimi fallback -- there is no
+    # permitted fallback, so the single permitted attempt is what surfaces.
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(db_path, allowed_models=["zai-org/GLM-5.2-TEE"])
+        upstream = fake_sequence_upstream_transport(
+            [
+                {"status_code": 429, "content": "rate limited"},
+                # Any second upstream call would be a forbidden fallback to Kimi.
+                {
+                    "status_code": 200,
+                    "json": {"id": "chatcmpl_should_not_happen", "object": "chat.completion"},
+                },
+            ]
+        )
+        client = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS": "100000",
+                "ARCLINK_LLM_ROUTER_FALLBACK_MODELS": "moonshotai/Kimi-K2.6-TEE",
+                "ARCLINK_LLM_ROUTER_FALLBACK_STATUS_CODES": "429",
+            },
+            upstream_transport=upstream,
+        )
+        retried = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "zai-org/GLM-5.2-TEE", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        models_tried = [r["payload"]["model"] for r in upstream.requests]  # type: ignore[attr-defined]
+        # Exactly one attempt (the allowed primary); the disallowed fallback is
+        # never reached even though a retryable status was returned.
+        expect(models_tried == ["zai-org/GLM-5.2-TEE"], str(models_tried))
+        expect(retried.status_code != 200, retried.text)
+    finally:
+        tmp.cleanup()
+    print("PASS test_disallowed_fallback_is_skipped_not_fatal_when_primary_is_allowed")
+
+
+def test_resolved_primary_disallowed_and_unavailable_primary_still_rejected() -> None:
+    # The fix must NOT weaken the PRIMARY guards. (1) A requested model that is
+    # genuinely not allowed -> 403 model_not_allowed. (2) A requested model that
+    # the catalog REPLACES with a model this key cannot use (the resolved primary
+    # is disallowed) -> still 403 model_not_allowed. (3) A resolved primary whose
+    # catalog status != active -> still 403 model_unavailable.
+    # (1) requested model not allowed at all.
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(db_path, allowed_models=["model-a"])
+        upstream = fake_upstream_transport()
+        client = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS": "1000",
+            },
+            upstream_transport=upstream,
+        )
+        denied = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "model-z", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        expect(denied.status_code == 403, denied.text)
+        expect(denied.json()["error"]["code"] == "model_not_allowed", denied.text)
+        expect(len(upstream.requests) == 0, str(upstream.requests))  # type: ignore[attr-defined]
+    finally:
+        tmp.cleanup()
+
+    # (2) resolved primary (after catalog replacement) is disallowed for this key.
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(db_path, allowed_models=["moonshotai/Kimi-K2.6-TEE"])
+        _seed_model_catalog(db_path)  # replaces K2.6 -> K2.7 (not in the allow-list)
+        upstream = fake_upstream_transport()
+        client = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS": "100000",
+            },
+            upstream_transport=upstream,
+        )
+        replaced = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "moonshotai/Kimi-K2.6-TEE", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        expect(replaced.status_code == 403, replaced.text)
+        expect(replaced.json()["error"]["code"] == "model_not_allowed", replaced.text)
+        expect(len(upstream.requests) == 0, str(upstream.requests))  # type: ignore[attr-defined]
+    finally:
+        tmp.cleanup()
+
+    # (3) resolved primary catalog status != active -> model_unavailable (H2 guard).
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(db_path, allowed_models=["withdrawn-TEE"])
+        control = load_module("arclink_control.py", "arclink_control_resolved_primary_unavailable_test")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            control.ensure_schema(conn)
+            control.upsert_model_catalog(
+                conn,
+                provider="chutes",
+                models={"withdrawn-TEE": {"confidential_compute": True}},
+            )
+            conn.execute("UPDATE arclink_model_catalog SET status='unavailable' WHERE model_id='withdrawn-TEE'")
+            conn.commit()
+        finally:
+            conn.close()
+        upstream = fake_upstream_transport()
+        client = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS": "100000",
+            },
+            upstream_transport=upstream,
+        )
+        unavailable = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "withdrawn-TEE", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        expect(unavailable.status_code == 403, unavailable.text)
+        expect(unavailable.json()["error"]["code"] == "model_unavailable", unavailable.text)
+        expect(len(upstream.requests) == 0, str(upstream.requests))  # type: ignore[attr-defined]
+    finally:
+        tmp.cleanup()
+    print("PASS test_resolved_primary_disallowed_and_unavailable_primary_still_rejected")
+
+
 def main() -> int:
     test_router_metadata_json_rejects_plaintext_secret_material()
     test_read_json_body_rejects_chunked_body_before_buffering_past_limit()
@@ -3456,7 +3660,9 @@ def main() -> int:
     test_partial_stream_failure_settles_emitted_output_not_zero()
     test_router_pepper_misconfig_returns_clean_503_not_500()
     test_streaming_n_gt_1_no_usage_fallback_scales_settlement_by_completions()
-    print("PASS all 48 ArcLink LLM router tests")
+    test_disallowed_fallback_is_skipped_not_fatal_when_primary_is_allowed()
+    test_resolved_primary_disallowed_and_unavailable_primary_still_rejected()
+    print("PASS all 50 ArcLink LLM router tests")
     return 0
 
 

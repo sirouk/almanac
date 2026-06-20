@@ -245,7 +245,7 @@ def profile_starter() -> dict[str, Any]:
         },
         "work_surfaces": {
             "vault": {
-                "shared_knowledge_roots": ["Agents_KB", "Projects", "Research"],
+                "shared_knowledge_roots": ["Agents_KB", "Agents_Skills", "Agents_Plugins"],
                 "generated_org_profile_path": "Agents_KB/Operating_Context/org-profile.generated.md",
                 "sensitive_roots": ["Private", "Secrets"],
             },

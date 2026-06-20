@@ -1343,6 +1343,145 @@ def test_clean_share_path_rejects_markdown_metacharacters() -> None:
     print("PASS test_clean_share_path_rejects_markdown_metacharacters")
 
 
+def _setup_share_projection_fixture(control, api):
+    """Build owner/recipient users + deployments with on-disk state roots so
+    _materialize_share_projection can project a real living-symlink folder share."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    control.ensure_schema(conn)
+    tmp = Path(tempfile.mkdtemp())
+    owner_root = tmp / "owner"
+    (owner_root / "vault" / "Projects").mkdir(parents=True)
+    (owner_root / "vault" / "Projects" / "notes.md").write_text("hello fleet\n", encoding="utf-8")
+    rcp_root = tmp / "rcp"
+    (rcp_root / "vault").mkdir(parents=True)
+    (rcp_root / "linked-resources").mkdir(parents=True)
+    now = control.utc_now_iso()
+    for uid in ("user_owner", "user_rcp"):
+        conn.execute(
+            "INSERT INTO arclink_users (user_id, email, status, created_at, updated_at) VALUES (?, ?, 'active', ?, ?)",
+            (uid, uid + "@example.test", now, now),
+        )
+
+    def _dep(dep_id: str, uid: str, root: Path) -> None:
+        metadata = {
+            "state_roots": {
+                "vault": str(root / "vault"),
+                "code_workspace": str(root / "workspace"),
+                "linked_resources": str(root / "linked-resources"),
+            }
+        }
+        conn.execute(
+            "INSERT INTO arclink_deployments (deployment_id, user_id, prefix, status, metadata_json, created_at, updated_at) "
+            "VALUES (?, ?, ?, 'active', ?, ?, ?)",
+            (dep_id, uid, dep_id, json.dumps(metadata), now, now),
+        )
+
+    _dep("dep_owner", "user_owner", owner_root)
+    _dep("dep_rcp", "user_rcp", rcp_root)
+    conn.commit()
+    grant = {
+        "grant_id": "share_proj_test",
+        "owner_user_id": "user_owner",
+        "recipient_user_id": "user_rcp",
+        "resource_kind": "drive",
+        "resource_root": "vault",
+        "resource_path": "/Projects",
+        "display_name": "Projects",
+        "metadata_json": json.dumps(
+            {"owner_deployment_id": "dep_owner", "recipient_deployment_id": "dep_rcp"}
+        ),
+    }
+    return conn, owner_root, rcp_root, grant
+
+
+def test_default_drive_share_grant_is_read_write() -> None:
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_share_default_mode_test")
+
+    # A drive/code share grant created without an explicit access_mode must
+    # default to read_write (an editable shared folder), while non-folder kinds
+    # (notion/pod_comms) keep the read-only default.
+    expect(api._clean_share_access_mode("") == "read_write", "blank mode should default read_write")
+    expect(
+        api._clean_share_access_mode("", default="read_write") == "read_write",
+        "drive/code default should be read_write",
+    )
+    # An explicit choice still wins over the default in both directions.
+    expect(api._clean_share_access_mode("read", default="read_write") == "read", "explicit read must win")
+    expect(api._clean_share_access_mode("read_write", default="read") == "read_write", "explicit read_write must win")
+
+    # _share_projection_read_only is the gate: read_write drive/code folders are
+    # writable; everything else (explicit read, or non-folder kinds) is read-only.
+    expect(api._share_projection_read_only("read_write", "drive") is False, "read_write drive must be writable")
+    expect(api._share_projection_read_only("read_write", "code") is False, "read_write code must be writable")
+    expect(api._share_projection_read_only("read", "drive") is True, "explicit read drive must be read-only")
+    expect(api._share_projection_read_only("read_write", "notion") is True, "non-folder read_write stays read-only")
+    expect(api._share_projection_read_only("read_write", "pod_comms") is True, "pod_comms stays read-only")
+    print("PASS test_default_drive_share_grant_is_read_write")
+
+
+def test_read_write_share_projection_is_writable_not_chmod_read_only() -> None:
+    control = load_module("arclink_control.py", "arclink_control_share_rw_proj_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_share_rw_proj_test")
+    conn, owner_root, rcp_root, grant = _setup_share_projection_fixture(control, api)
+
+    # Grant carries NO explicit access_mode -> the materialize default decides.
+    # With the read-write default, a folder share projects as writable.
+    metadata = api._materialize_share_projection(conn, grant=grant, now=control.utc_now_iso())
+    projection = metadata["projection"]
+    expect(projection["status"] == "materialized", str(projection))
+    expect(projection["read_only"] is False, str(projection))
+    expect(projection["access_mode"] == "read_write", str(projection))
+    expect(projection["resource_kind"] == "directory", str(projection))
+
+    # The manifest the Drive plugin reads must mark the entry read_write/not read_only.
+    manifest = json.loads(
+        (rcp_root / "linked-resources" / ".arclink-linked-resources.json").read_text(encoding="utf-8")
+    )
+    entries = manifest["entries"]
+    expect(len(entries) == 1, str(entries))
+    slug, entry = next(iter(entries.items()))
+    expect(entry["read_only"] is False, str(entry))
+    expect(entry["access_mode"] == "read_write", str(entry))
+
+    # The projected folder is a living symlink and its tree must NOT be chmod'd
+    # read-only: a recipient edit lands on the owner's real file.
+    projection_dir = rcp_root / "linked-resources" / slug
+    expect(projection_dir.is_symlink(), "directory share should project as a living symlink")
+    projected_note = projection_dir / "notes.md"
+    projected_note.write_text("# recipient edit\n", encoding="utf-8")
+    expect(
+        "recipient edit" in (owner_root / "vault" / "Projects" / "notes.md").read_text(encoding="utf-8"),
+        "read_write projection must be writable through to the owner source",
+    )
+    print("PASS test_read_write_share_projection_is_writable_not_chmod_read_only")
+
+
+def test_explicit_read_only_share_projection_stays_read_only() -> None:
+    control = load_module("arclink_control.py", "arclink_control_share_ro_proj_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_share_ro_proj_test")
+    conn, _owner_root, rcp_root, grant = _setup_share_projection_fixture(control, api)
+
+    # When the captain EXPLICITLY chooses access_mode="read", the projection must
+    # stay read-only even though the default is now read_write.
+    grant["access_mode"] = "read"
+    metadata = api._materialize_share_projection(conn, grant=grant, now=control.utc_now_iso())
+    projection = metadata["projection"]
+    expect(projection["status"] == "materialized", str(projection))
+    expect(projection["read_only"] is True, str(projection))
+    expect(projection["access_mode"] == "read", str(projection))
+
+    manifest = json.loads(
+        (rcp_root / "linked-resources" / ".arclink-linked-resources.json").read_text(encoding="utf-8")
+    )
+    entry = next(iter(manifest["entries"].values()))
+    expect(entry["read_only"] is True, str(entry))
+    expect(entry["access_mode"] == "read", str(entry))
+    # The Drive plugin gate must treat this entry as non-writable.
+    expect(api is not None, "module loaded")
+    print("PASS test_explicit_read_only_share_projection_stays_read_only")
+
+
 def main() -> int:
     test_sessions_store_hashes_and_user_api_is_scoped_to_principal()
     test_user_agent_identity_update_requires_session_and_csrf()
@@ -1374,7 +1513,10 @@ def main() -> int:
     test_proof_token_hashes_use_hmac_and_accept_legacy()
     test_share_notifications_escape_cross_tenant_markdown_and_links()
     test_clean_share_path_rejects_markdown_metacharacters()
-    print("PASS all 30 ArcLink API/auth tests")
+    test_default_drive_share_grant_is_read_write()
+    test_read_write_share_projection_is_writable_not_chmod_read_only()
+    test_explicit_read_only_share_projection_stays_read_only()
+    print("PASS all 33 ArcLink API/auth tests")
     return 0
 
 

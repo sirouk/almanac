@@ -1130,7 +1130,6 @@
                   "div",
                   { className: "hermes-terminal-session-tools" },
                   h("button", { type: "button", title: "New workspace shell", onClick: function () { createSession("shell"); }, disabled: !status.available }, "+Shell"),
-                  h("button", { type: "button", title: "New machine terminal", onClick: function () { createSession("ssh"); }, disabled: !capabilities.machine_terminal_sessions }, "+Machine"),
                   h("button", { type: "button", title: "Open Hermes TUI", onClick: function () { createSession("tui"); }, disabled: !capabilities.hermes_tui_sessions }, "+TUI")
                 )
               ),
@@ -1220,17 +1219,7 @@
               { className: "hermes-terminal-pane" },
               selected
                 ? h("div", { ref: hostRef, className: "hermes-terminal-screen", "data-session-state": selected.state || "" })
-                : h("div", { ref: hostRef, className: "hermes-terminal-screen muted" }, status.available ? "$ " : "Terminal backend unavailable"),
-              h(
-                "div",
-                { className: "hermes-terminal-statusbar" },
-                h("span", null, "Workspace: " + (status.workspace_root || "[workspace]")),
-                h("span", null, "Shell: " + (selected && selected.shell ? selected.shell : status.shell || "")),
-                h("span", null, "Transport: " + ((status.transport && status.transport.mode) || "sse")),
-                h("span", null, "Scrollback: " + ((status.limits && status.limits.scrollback_lines) || "") + " lines"),
-                h("span", null, "History cap: " + ((status.limits && status.limits.scrollback_bytes) || "") + " bytes"),
-                h("span", null, "Confirm close: on")
-              )
+                : h("div", { ref: hostRef, className: "hermes-terminal-screen muted" }, status.available ? "$ " : "Terminal backend unavailable")
             )
           ),
       renderSessionMenu(),

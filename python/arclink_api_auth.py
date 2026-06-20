@@ -3081,7 +3081,11 @@ def _materialize_share_projection(
     recipient_user = str(grant.get("recipient_user_id") or "").strip()
     resource_root = str(grant.get("resource_root") or "").strip().lower()
     resource_kind = str(grant.get("resource_kind") or "").strip().lower()
-    access_mode = _clean_share_access_mode(str(grant.get("access_mode") or ""), default="read")
+    # Shared folders default to read-write so the recipient can edit them. Only
+    # an explicit access_mode="read" grant materializes read-only; non-folder
+    # kinds (notion/pod_comms) are still forced read-only by
+    # _share_projection_read_only's drive/code kind guard below.
+    access_mode = _clean_share_access_mode(str(grant.get("access_mode") or ""), default="read_write")
     projection_read_only = _share_projection_read_only(access_mode, resource_kind)
     source_key = "vault" if resource_root == "vault" else "code_workspace"
     metadata = json_loads_safe(str(grant.get("metadata_json") or "{}"))
@@ -4017,7 +4021,7 @@ def claim_share_nonce_for_recipient(
             resource_root=str(nonce_row.get("resource_root") or ""),
             resource_path=str(nonce_row.get("resource_path") or ""),
             display_name=str(nonce_row.get("display_name") or ""),
-            access_mode=str(nonce_row.get("access_mode") or "read"),
+            access_mode=str(nonce_row.get("access_mode") or "read_write"),
             metadata=grant_metadata,
             now=now,
             actor_id=str(actor_id or recipient),

@@ -8,7 +8,7 @@
     "hermes-agent": {
       "kind": "git-commit",
       "repo": "https://github.com/NousResearch/hermes-agent.git",
-      "ref": "3c6e70aef18f59f1d67b7e2be83ab51be7a35673",
+      "ref": "2bd1977d8fad185c9b4be47884f7e87f1add0ce3",
       "ref_kind": "commit",
       "branch": "main",
       "extras": [
@@ -23,7 +23,7 @@
     "hermes-docs": {
       "kind": "git-commit",
       "repo": "https://github.com/NousResearch/hermes-agent.git",
-      "ref": "3c6e70aef18f59f1d67b7e2be83ab51be7a35673",
+      "ref": "2bd1977d8fad185c9b4be47884f7e87f1add0ce3",
       "ref_kind": "commit",
       "branch": "main",
       "subdir": "website/docs",

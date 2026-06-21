@@ -25,6 +25,7 @@ from arclink_boundary import (
 )
 from arclink_broker_signing import NonceStore, verify_broker_request
 from arclink_rejection_incidents import record_rejection_incident, state_root_rejection_path
+from arclink_secrets_regex import redact_then_truncate
 import arclink_notification_delivery as delivery
 
 
@@ -73,12 +74,21 @@ def _is_authorized(headers: Any, raw_body: bytes) -> bool:
     return ok
 
 
+_TIMEOUT_FLOOR_SECONDS = 30
+# A freshly-recreated gateway's FIRST turn after a deploy does heavy init (Hermes
+# config load, model warmup, plugin discovery) and routinely exceeds ~210s. The
+# broker must honor a caller-supplied long ceiling rather than capping it low and
+# timing out that first turn. Keep the cap well above any first-turn cold start
+# (and the worker's long ceiling) while staying bounded -- never run unbounded.
+_TIMEOUT_CEILING_SECONDS = 7200
+
+
 def _clean_timeout(value: Any) -> int:
     try:
         raw = int(value)
     except (TypeError, ValueError):
         raw = 240
-    return max(30, min(86400, raw))
+    return max(_TIMEOUT_FLOOR_SECONDS, min(_TIMEOUT_CEILING_SECONDS, raw))
 
 
 def _docker_binary() -> str:
@@ -286,6 +296,42 @@ def _build_gateway_exec_command(request_body: dict[str, Any]) -> tuple[list[str]
     return cmd, payload, timeout_seconds, project_name
 
 
+def _bridge_failure_error(proc: subprocess.CompletedProcess[str], *, bot_token: str = "") -> str:
+    # The bridge exits 1 for EVERY structured failure and prints
+    # {"ok": false, "error": "<real reason>"} to stdout (bad chat_id, LLM 403,
+    # config error, ...). Surface that STRUCTURED reason instead of a bare
+    # "exit status 1" that hides the cause -- but REDACT it: the bridge's own
+    # error text can carry the bot token verbatim (e.g. "The token `<bot_token>`
+    # was rejected by the server"), and the generic secret regex does NOT match
+    # the Telegram bot-token shape, so we ALSO scrub the exact bot_token (which
+    # the broker holds in the request payload) before the generic redactor. We
+    # deliberately do NOT surface raw stdout/stderr tails (they can leak arbitrary
+    # container output); a crash with no structured error stays a generic message
+    # and the operator reads the per-turn bridge log. This keeps the no-raw-output
+    # security posture while making the common, real failure reason visible.
+    rc = proc.returncode
+    structured = ""
+    for line in reversed(str(proc.stdout or "").splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            break
+        if isinstance(parsed, dict) and str(parsed.get("error") or "").strip():
+            structured = str(parsed["error"]).strip()
+        break
+    if structured:
+        clean_token = str(bot_token or "").strip()
+        if clean_token and len(clean_token) >= 8:
+            structured = structured.replace(clean_token, "<redacted-bot-token>")
+        safe = redact_then_truncate(structured, limit=300)
+        if safe:
+            return f"Hermes public gateway bridge: {safe}"
+    return f"Hermes public gateway bridge failed with exit status {rc}"
+
+
 def run_gateway_exec_request_payload(request_body: dict[str, Any]) -> dict[str, Any]:
     try:
         require_docker_trusted_host_risk_accepted(service=SERVICE_NAME, error_cls=ValueError)
@@ -307,7 +353,7 @@ def run_gateway_exec_request_payload(request_body: dict[str, Any]) -> dict[str, 
     except OSError as exc:
         return {"ok": False, "error": f"could not start Hermes public gateway bridge: {str(exc)[:180]}"}
     if proc.returncode != 0:
-        return {"ok": False, "error": f"Hermes public gateway bridge failed with exit status {proc.returncode}"}
+        return {"ok": False, "error": _bridge_failure_error(proc, bot_token=str(payload.get("bot_token") or ""))}
     try:
         payload_out = json.loads(str(proc.stdout or "{}").strip().splitlines()[-1])
     except (IndexError, json.JSONDecodeError):

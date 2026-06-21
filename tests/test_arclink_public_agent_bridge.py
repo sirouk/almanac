@@ -11,13 +11,16 @@ symbols.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import importlib.util
+import json
 import os
 import re
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -247,13 +250,460 @@ def test_bridge_root_drop_closure_asserts_and_does_not_swallow_setgroups() -> No
     print("PASS test_bridge_root_drop_closure_asserts_and_does_not_swallow_setgroups")
 
 
+class _RecordingRest:
+    """Minimal in-memory stand-in for ``_DiscordRest`` request capture."""
+
+    def __init__(self, *, getme: dict | None = None) -> None:
+        self.calls: list[tuple[str, str, dict | None]] = []
+        self._getme = getme or {"id": "999000111222333444", "username": "arclink-bot"}
+        self._post_seq = 0
+
+    async def request(self, method: str, path: str, *, payload=None):
+        self.calls.append((method, path, payload))
+        if method == "GET" and path == "/users/@me":
+            return dict(self._getme)
+        if method == "POST" and path.endswith("/messages"):
+            self._post_seq += 1
+            return {"id": f"new-{self._post_seq}"}
+        return {}
+
+
+def test_bridge_internal_deadline_fires_structured_error() -> None:
+    # C-4: a wedged turn must hit the bridge's OWN internal deadline and surface
+    # a structured error (not hang forever / not pin the agent).
+    bridge = _load_module(BRIDGE_PY, "arclink_public_agent_bridge_c4_deadline_test")
+    old_env = os.environ.copy()
+    try:
+        os.environ["ARCLINK_PUBLIC_AGENT_BRIDGE_DEADLINE_SECONDS"] = "1"
+
+        async def _never_returns(_payload):
+            await asyncio.sleep(3600)
+            return {}
+
+        bridge._dispatch_platform = _never_returns  # type: ignore[assignment]
+
+        raised = False
+        try:
+            asyncio.run(bridge._run({"platform": "telegram"}))
+        except bridge._BridgeDeadlineExceeded as exc:
+            raised = True
+            expect(
+                str(exc) == bridge.BRIDGE_DEADLINE_EXCEEDED_MESSAGE,
+                f"deadline error must carry the structured message: {exc!r}",
+            )
+        expect(raised, "a hung turn must raise _BridgeDeadlineExceeded, not hang")
+
+        # main() must translate that into a non-zero exit + the structured JSON,
+        # reading the payload from stdin.
+        old_stdin, old_stdout = sys.stdin, sys.stdout
+        import io
+
+        sys.stdin = io.StringIO(json.dumps({"platform": "telegram"}))
+        sys.stdout = captured = io.StringIO()
+        try:
+            rc = bridge.main()
+        finally:
+            sys.stdin, sys.stdout = old_stdin, old_stdout
+        expect(rc == 1, f"deadline must exit non-zero, got {rc}")
+        out = json.loads(captured.getvalue().strip())
+        expect(out.get("ok") is False, f"structured failure must report ok=false: {out}")
+        expect(
+            out.get("error") == bridge.BRIDGE_DEADLINE_EXCEEDED_MESSAGE,
+            f"structured error must be the deadline message: {out}",
+        )
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+    print("PASS test_bridge_internal_deadline_fires_structured_error")
+
+
+def test_interim_streaming_edit_failure_is_nonfatal_final_still_fatal() -> None:
+    # H-3: an INTERIM streaming edit (finalize=False) that raises (429/400) must
+    # NOT fail the turn -- it is swallowed + a non-raising failed result returned
+    # so streaming continues. A FINAL edit (finalize=True) and ``send`` failures
+    # remain FATAL (re-raise) so a genuinely-failed final delivery fails the turn.
+    bridge = _load_module(BRIDGE_PY, "arclink_public_agent_bridge_h3_interim_test")
+    evidence = bridge._DeliveryEvidence()
+
+    state = {"raise_until_call": 0, "calls": 0}
+
+    class _Adapter:
+        async def edit_message(self, chat_id, message_id, content, *, finalize=False, **_kw):
+            state["calls"] += 1
+            if state["calls"] <= state["raise_until_call"]:
+                raise RuntimeError("discord http 429: rate limited")
+            return bridge.SimpleNamespace(success=True, message_id=message_id, error="", raw_response=None)
+
+        async def send(self, chat_id, content, *args, **_kw):
+            raise RuntimeError("discord http 500: send failed")
+
+    adapter = _Adapter()
+    bridge._install_delivery_evidence(adapter, evidence)
+
+    # (a) interim edit raises -> swallowed, returns non-raising failed result.
+    state["raise_until_call"] = 1
+    result = asyncio.run(adapter.edit_message("c", "m", "interim", finalize=False))
+    expect(result is not None and result.success is False, "interim edit failure must be swallowed (non-raising failed result)")
+
+    # (b) FINAL edit raises -> must propagate (turn fails).
+    state["raise_until_call"] = 99
+    raised_final = False
+    try:
+        asyncio.run(adapter.edit_message("c", "m", "final", finalize=True))
+    except RuntimeError:
+        raised_final = True
+    expect(raised_final, "a FINAL (finalize=True) edit failure must re-raise and fail the turn")
+
+    # (c) send raises -> must propagate (a real send is the final delivery).
+    raised_send = False
+    try:
+        asyncio.run(adapter.send("c", "hi"))
+    except RuntimeError:
+        raised_send = True
+    expect(raised_send, "a send failure must re-raise so we never falsely report delivered")
+    print("PASS test_interim_streaming_edit_failure_is_nonfatal_final_still_fatal")
+
+
+def test_interim_429_retry_after_honored_with_bounded_backoff() -> None:
+    # H-3: a Telegram-style 429 with retry_after is honored with ONE bounded
+    # retry rather than raising; if the retry succeeds the interim edit succeeds.
+    bridge = _load_module(BRIDGE_PY, "arclink_public_agent_bridge_h3_retry_test")
+    evidence = bridge._DeliveryEvidence()
+
+    class _RetryAfter(Exception):
+        def __init__(self) -> None:
+            super().__init__("Flood control exceeded. Retry after 2")
+            self.retry_after = 2
+
+    # retry_after must be clamped to the bounded max.
+    wait = bridge._retry_after_seconds(_RetryAfter())
+    expect(wait is not None, "retry_after error must be recognized")
+    expect(wait <= bridge.BRIDGE_INTERIM_RETRY_AFTER_MAX_SECONDS, f"retry_after must be bounded, got {wait}")
+    # A non-429 error must NOT be treated as a retry.
+    expect(bridge._retry_after_seconds(RuntimeError("discord http 400: bad")) is None, "non-429 must not retry")
+
+    state = {"calls": 0}
+
+    class _Adapter:
+        async def edit_message(self, chat_id, message_id, content, *, finalize=False, **_kw):
+            state["calls"] += 1
+            if state["calls"] == 1:
+                raise _RetryAfter()
+            return bridge.SimpleNamespace(success=True, message_id=message_id, error="", raw_response=None)
+
+    adapter = _Adapter()
+    # Avoid actually sleeping the bounded backoff in the test.
+    orig_sleep = bridge.asyncio.sleep
+
+    async def _fast_sleep(_seconds):
+        return None
+
+    bridge.asyncio.sleep = _fast_sleep  # type: ignore[assignment]
+    try:
+        bridge._install_delivery_evidence(adapter, evidence)
+        result = asyncio.run(adapter.edit_message("c", "m", "interim", finalize=False))
+    finally:
+        bridge.asyncio.sleep = orig_sleep  # type: ignore[assignment]
+    expect(state["calls"] == 2, f"429 must trigger exactly one bounded retry, calls={state['calls']}")
+    expect(result.success is True, "a successful retry after 429 must yield a successful interim edit")
+    print("PASS test_interim_429_retry_after_honored_with_bounded_backoff")
+
+
+def test_malformed_id_fails_fast_before_agent_runs() -> None:
+    # H-4: a malformed (non-numeric) chat_id/channel_id/user_id must fail fast
+    # with a structured error BEFORE the agent turn runs (before any gateway
+    # import). Strict shape enforcement is gated ON via the env flag (default-off
+    # so existing placeholder-id harnesses stay unaffected).
+    bridge = _load_module(BRIDGE_PY, "arclink_public_agent_bridge_h4_validate_test")
+    old_env = os.environ.copy()
+    try:
+        # Default-off: legacy non-empty behavior, non-numeric placeholder allowed.
+        os.environ.pop("ARCLINK_PUBLIC_AGENT_BRIDGE_VALIDATE_IDS", None)
+        expect(
+            bridge._require_numeric_id({"chat_id": "tg-chat"}, "chat_id", negatives_ok=True) == "tg-chat",
+            "with the gate OFF a placeholder id must pass (legacy behavior preserved)",
+        )
+
+        os.environ["ARCLINK_PUBLIC_AGENT_BRIDGE_VALIDATE_IDS"] = "1"
+
+        # Direct shape checks: telegram chat ids may be negative; non-numeric rejected.
+        expect(
+            bridge._require_numeric_id({"chat_id": "-100200300"}, "chat_id", negatives_ok=True) == "-100200300",
+            "negative telegram chat_id ok",
+        )
+        for bad in ("abc", "12ab", "@user", "tg-chat", "", "  "):
+            rejected = False
+            try:
+                bridge._require_numeric_id({"chat_id": bad}, "chat_id", negatives_ok=True)
+            except RuntimeError:
+                rejected = True
+            expect(rejected, f"malformed chat_id {bad!r} must be rejected when the gate is ON")
+        # Discord ids must be positive snowflakes -> a negative is malformed.
+        neg_rejected = False
+        try:
+            bridge._require_numeric_id({"channel_id": "-5"}, "channel_id")
+        except RuntimeError:
+            neg_rejected = True
+        expect(neg_rejected, "discord channel_id must reject a negative id")
+
+        # End-to-end: _run_telegram must raise the malformed-id error fast. We
+        # rely on the fact that validation precedes _add_runtime_paths(): if it
+        # did NOT run first the error would be the runtime-missing sentinel.
+        sentinel = "Hermes runtime source is missing"
+        err = ""
+        try:
+            asyncio.run(bridge._run_telegram({"bot_token": "t", "chat_id": "not-a-number", "text": "hi"}))
+        except Exception as exc:  # noqa: BLE001
+            err = str(exc)
+        expect("malformed chat_id" in err, f"malformed chat_id must fail fast with its own error, got: {err!r}")
+        expect(sentinel not in err, "validation must run BEFORE the runtime/gateway path is touched")
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+    print("PASS test_malformed_id_fails_fast_before_agent_runs")
+
+
+def test_discord_getme_resolves_real_bot_user_id() -> None:
+    # H-2: the Discord bot user id must come from getMe (/users/@me), not the
+    # hard-coded placeholder; getMe failure falls back to the placeholder.
+    bridge = _load_module(BRIDGE_PY, "arclink_public_agent_bridge_h2_getme_test")
+
+    rest = _RecordingRest(getme={"id": "424242424242424242", "username": "realbot"})
+    resolved = asyncio.run(bridge._resolve_discord_bot_user_id(rest, "bot-token"))
+    expect(resolved == "424242424242424242", f"must use the REAL getMe id, got {resolved!r}")
+    expect(("GET", "/users/@me", None) in rest.calls, "must call Discord getMe")
+
+    class _FailingRest:
+        async def request(self, method, path, *, payload=None):
+            raise RuntimeError("discord http 401: unauthorized")
+
+    fallback = asyncio.run(bridge._resolve_discord_bot_user_id(_FailingRest(), "bot-token"))
+    expect(fallback == bridge.DISCORD_BRIDGE_FALLBACK_USER_ID, f"getMe failure must fall back, got {fallback!r}")
+    print("PASS test_discord_getme_resolves_real_bot_user_id")
+
+
+def _install_fake_gateway(bridge, *, rest: _RecordingRest, drive) -> None:
+    """Install a minimal fake ``gateway.*`` + ``aiohttp`` so ``_run_discord``
+    runs end-to-end with our recording REST and a fake adapter that streams via
+    the REAL bridge-installed ``edit_message`` (``drive`` does the streaming)."""
+
+    class _Platform:
+        DISCORD = "discord"
+        TELEGRAM = "telegram"
+
+    class _PlatformConfig:
+        def __init__(self) -> None:
+            self.enabled = False
+            self.token = ""
+            self.gateway_restart_notification = True
+            self.reply_to_mode = "first"
+            self.home_channel = None
+
+    class _HomeChannel:
+        def __init__(self, **kw) -> None:
+            self.__dict__.update(kw)
+
+    class _Cfg:
+        def __init__(self) -> None:
+            self.platforms = {}
+            self.streaming = bridge.SimpleNamespace(enabled=False, transport="")
+
+    def _load_gateway_config():
+        return _Cfg()
+
+    class _MessageType:
+        COMMAND = "command"
+        TEXT = "text"
+
+    class _SendResult:
+        def __init__(self, success=False, message_id=None, error=None, raw_response=None, continuation_message_ids=()):
+            self.success = success
+            self.message_id = message_id
+            self.error = error
+            self.raw_response = raw_response
+            self.continuation_message_ids = continuation_message_ids
+
+    class _MessageEvent:
+        def __init__(self, **kw) -> None:
+            self.__dict__.update(kw)
+
+    class _SessionSource:
+        def __init__(self, **kw) -> None:
+            self.__dict__.update(kw)
+
+    class _Adapter:
+        MAX_MESSAGE_LENGTH = 2000
+        _reply_to_mode = "first"
+
+        def __init__(self) -> None:
+            self.send = None
+            self.edit_message = None
+            self.send_typing = None
+            self.stop_typing = None
+            self._client = None
+
+        def format_message(self, content):
+            return content
+
+        def truncate_message(self, content, _limit):
+            # Force a 3-chunk overflow regardless of length so the test is
+            # deterministic about the overflow-send behavior.
+            return ["CHUNK-A", "CHUNK-B", "CHUNK-C"]
+
+        def set_message_handler(self, *_a, **_k):
+            pass
+
+        def set_fatal_error_handler(self, *_a, **_k):
+            pass
+
+        def set_session_store(self, *_a, **_k):
+            pass
+
+        def set_busy_session_handler(self, *_a, **_k):
+            pass
+
+        async def handle_message(self, _event):
+            # Stream one interim edit through the REAL bridge-installed closure.
+            await drive(self)
+
+    class _Runner:
+        def __init__(self, _cfg) -> None:
+            self.adapters = {}
+            self.session_store = object()
+
+        def _create_adapter(self, _platform, _cfg):
+            return _Adapter()
+
+        def _handle_message(self, *_a, **_k):
+            pass
+
+        def _handle_adapter_fatal_error(self, *_a, **_k):
+            pass
+
+        def _handle_active_session_busy_message(self, *_a, **_k):
+            pass
+
+    gateway = types.ModuleType("gateway")
+    gateway_config = types.ModuleType("gateway.config")
+    gateway_config.HomeChannel = _HomeChannel
+    gateway_config.Platform = _Platform
+    gateway_config.PlatformConfig = _PlatformConfig
+    gateway_config.load_gateway_config = _load_gateway_config
+    gateway_platforms = types.ModuleType("gateway.platforms")
+    gateway_platforms_base = types.ModuleType("gateway.platforms.base")
+    gateway_platforms_base.MessageEvent = _MessageEvent
+    gateway_platforms_base.MessageType = _MessageType
+    gateway_platforms_base.SendResult = _SendResult
+    gateway_run = types.ModuleType("gateway.run")
+    gateway_run.GatewayRunner = _Runner
+    gateway_session = types.ModuleType("gateway.session")
+    gateway_session.SessionSource = _SessionSource
+
+    # aiohttp stand-in: _DiscordRest.__aenter__ builds a session, but we patch
+    # the whole class so the bridge uses our recording REST instead.
+    aiohttp = types.ModuleType("aiohttp")
+    aiohttp.ClientSession = lambda *a, **k: None
+    aiohttp.ClientTimeout = lambda *a, **k: None
+
+    for name, mod in {
+        "gateway": gateway,
+        "gateway.config": gateway_config,
+        "gateway.platforms": gateway_platforms,
+        "gateway.platforms.base": gateway_platforms_base,
+        "gateway.run": gateway_run,
+        "gateway.session": gateway_session,
+        "aiohttp": aiohttp,
+    }.items():
+        sys.modules[name] = mod
+
+
+def test_discord_edit_overflow_sends_all_chunks() -> None:
+    # H-2: a streamed Discord edit whose content exceeds 2000 chars must send the
+    # overflow chunks as ADDITIONAL messages instead of silently dropping them.
+    bridge = _load_module(BRIDGE_PY, "arclink_public_agent_bridge_h2_overflow_test")
+    rest = _RecordingRest()
+
+    captured: dict = {}
+
+    async def _drive(adapter) -> None:
+        # Call the REAL bridge-installed edit_message closure with overflow
+        # content; truncate_message returns 3 chunks deterministically.
+        result = await adapter.edit_message("123456789", "orig-msg", "x" * 6000, finalize=True)
+        captured["result"] = result
+
+    # Patch _DiscordRest + _add_runtime_paths + getMe so _run_discord runs.
+    orig_rest_cls = bridge._DiscordRest
+    orig_add_paths = bridge._add_runtime_paths
+    orig_resolve = bridge._resolve_discord_bot_user_id
+
+    class _RestCtx:
+        def __init__(self, _token) -> None:
+            pass
+
+        async def __aenter__(self):
+            return rest
+
+        async def __aexit__(self, *_a):
+            return None
+
+    async def _fake_resolve(_rest, _token):
+        return "555"
+
+    _install_fake_gateway(bridge, rest=rest, drive=_drive)
+    bridge._DiscordRest = _RestCtx  # type: ignore[assignment]
+    bridge._add_runtime_paths = lambda: None  # type: ignore[assignment]
+    bridge._resolve_discord_bot_user_id = _fake_resolve  # type: ignore[assignment]
+    old_env = os.environ.copy()
+    try:
+        summary = asyncio.run(
+            bridge._run_discord(
+                {
+                    "bot_token": "t",
+                    "channel_id": "123456789",
+                    "user_id": "987654321",
+                    "text": "hello",
+                }
+            )
+        )
+    finally:
+        bridge._DiscordRest = orig_rest_cls  # type: ignore[assignment]
+        bridge._add_runtime_paths = orig_add_paths  # type: ignore[assignment]
+        bridge._resolve_discord_bot_user_id = orig_resolve  # type: ignore[assignment]
+        for name in list(sys.modules):
+            if name == "aiohttp" or name == "gateway" or name.startswith("gateway."):
+                sys.modules.pop(name, None)
+        os.environ.clear()
+        os.environ.update(old_env)
+
+    # One PATCH for chunk[0], then a POST for each of the 2 overflow chunks.
+    patches = [c for c in rest.calls if c[0] == "PATCH"]
+    posts = [c for c in rest.calls if c[0] == "POST" and c[1].endswith("/messages")]
+    expect(len(patches) == 1, f"first chunk must be PATCHed into the existing message, got {len(patches)}")
+    expect(len(posts) == 2, f"both overflow chunks must be POSTed as new messages, got {len(posts)}: {posts}")
+    # The overflow chunks must carry the actual chunk content, not be dropped.
+    post_contents = [(p[2] or {}).get("content") for p in posts]
+    expect(post_contents == ["CHUNK-B", "CHUNK-C"], f"overflow content must be sent, got {post_contents}")
+    # The result must report continuation ids so the gateway keeps full visibility.
+    result = captured["result"]
+    expect(result.continuation_message_ids == ("new-1", "new-2"), f"continuation ids must be reported: {result.continuation_message_ids}")
+    expect(result.message_id == "new-2", f"message_id must be the LAST visible chunk: {result.message_id}")
+    expect(isinstance(summary, dict), "run must still return an evidence summary")
+    print("PASS test_discord_edit_overflow_sends_all_chunks")
+
+
 def main() -> int:
     test_bridge_replay_dispatch_uses_known_handler_names()
     test_pinned_hermes_source_still_exposes_bridge_coupling()
     test_getme_cache_secret_uses_only_dedicated_secret_and_disables_on_missing()
     test_bridge_root_runtime_uid_gid_requires_resolution()
     test_bridge_root_drop_closure_asserts_and_does_not_swallow_setgroups()
-    print("PASS all 5 public agent bridge pin tests")
+    test_bridge_internal_deadline_fires_structured_error()
+    test_interim_streaming_edit_failure_is_nonfatal_final_still_fatal()
+    test_interim_429_retry_after_honored_with_bounded_backoff()
+    test_malformed_id_fails_fast_before_agent_runs()
+    test_discord_getme_resolves_real_bot_user_id()
+    test_discord_edit_overflow_sends_all_chunks()
+    print("PASS all 11 public agent bridge pin tests")
     return 0
 
 

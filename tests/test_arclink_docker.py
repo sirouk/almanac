@@ -8021,6 +8021,91 @@ def test_gateway_exec_broker_rejects_unsafe_docker_binary_before_subprocess() ->
     print("PASS test_gateway_exec_broker_rejects_unsafe_docker_binary_before_subprocess")
 
 
+def test_gateway_exec_broker_surfaces_real_bridge_failure_reason() -> None:
+    # C-2: on a non-zero bridge exit the broker must surface the bridge's real
+    # structured error (last stdout JSON line), or the stderr tail when stdout
+    # has no parseable error -- never a bare "exit status 1" that hides the cause.
+    broker = load_python_module(
+        PYTHON_DIR / "arclink_gateway_exec_broker.py",
+        "arclink_gateway_exec_broker_failure_reason_test",
+    )
+    old_run = broker.subprocess.run
+    old_build = broker._build_gateway_exec_command
+    old_risk = broker.require_docker_trusted_host_risk_accepted
+
+    fixed_payload = {"platform": "telegram", "text": "hi"}
+
+    def fake_build(_request_body):
+        return (["docker", "exec", "container", "bridge"], fixed_payload, 210, "arclink-dep-one")
+
+    next_proc = {"value": None}
+
+    def fake_run(command, *args, **kwargs):
+        del command, args, kwargs
+        return next_proc["value"]
+
+    try:
+        broker.require_docker_trusted_host_risk_accepted = lambda **kwargs: None
+        broker._build_gateway_exec_command = fake_build
+        broker.subprocess.run = fake_run
+
+        # Structured JSON error on stdout (the every-failure path).
+        next_proc["value"] = subprocess.CompletedProcess(
+            ["docker"],
+            1,
+            stdout='{"ok": false, "error": "Chutes model provider returned 403 Forbidden"}\n',
+            stderr="",
+        )
+        json_result = broker.run_gateway_exec_request_payload({"deployment_id": "dep-one"})
+
+        # Only stderr available (no parseable stdout JSON).
+        next_proc["value"] = subprocess.CompletedProcess(
+            ["docker"],
+            1,
+            stdout="not-json garbage line\n",
+            stderr="Traceback (most recent call last):\nImportError: no module named hermes\n",
+        )
+        stderr_result = broker.run_gateway_exec_request_payload({"deployment_id": "dep-one"})
+    finally:
+        broker.subprocess.run = old_run
+        broker._build_gateway_exec_command = old_build
+        broker.require_docker_trusted_host_risk_accepted = old_risk
+
+    expect(json_result.get("ok") is False, str(json_result))
+    expect("Chutes model provider returned 403 Forbidden" in str(json_result.get("error")), str(json_result))
+    expect("exit status 1" not in str(json_result.get("error")), str(json_result))
+
+    expect(stderr_result.get("ok") is False, str(stderr_result))
+    # No parseable structured error -> the broker deliberately does NOT surface the
+    # raw stderr tail (it can leak arbitrary container output); it falls back to a
+    # generic exit-status message and the operator reads the per-turn bridge log.
+    expect("exit status 1" in str(stderr_result.get("error")), str(stderr_result))
+    expect("ImportError" not in str(stderr_result.get("error")), str(stderr_result))
+    print("PASS test_gateway_exec_broker_surfaces_real_bridge_failure_reason")
+
+
+def test_gateway_exec_broker_clean_timeout_honors_long_caller_ceiling() -> None:
+    # C-3: cold-start first turn after a deploy needs a long timeout. The broker
+    # must honor a caller-supplied long ceiling (worker passes a real long value)
+    # without lowering the floor or running unbounded.
+    broker = load_python_module(
+        PYTHON_DIR / "arclink_gateway_exec_broker.py",
+        "arclink_gateway_exec_broker_clean_timeout_test",
+    )
+    # Floor preserved.
+    expect(broker._clean_timeout(1) == 30, str(broker._clean_timeout(1)))
+    expect(broker._clean_timeout(-5) == 30, str(broker._clean_timeout(-5)))
+    expect(broker._clean_timeout("nonsense") == 240, str(broker._clean_timeout("nonsense")))
+    # A long caller-supplied ceiling (well above the old ~210s cold-start) is honored.
+    expect(broker._clean_timeout(3600) == 3600, str(broker._clean_timeout(3600)))
+    expect(broker._clean_timeout(7200) == 7200, str(broker._clean_timeout(7200)))
+    # Absurd values are still clamped (bounded, never unbounded).
+    capped = broker._clean_timeout(10**9)
+    expect(capped == broker._TIMEOUT_CEILING_SECONDS, str(capped))
+    expect(capped <= 7200 and capped >= 3600, str(capped))
+    print("PASS test_gateway_exec_broker_clean_timeout_honors_long_caller_ceiling")
+
+
 def test_agent_supervisor_broker_rejects_unsafe_docker_binary_before_subprocess() -> None:
     broker = load_python_module(
         PYTHON_DIR / "arclink_agent_supervisor_broker.py",
@@ -8513,6 +8598,8 @@ def main() -> int:
     test_agent_supervisor_broker_rejects_unsafe_private_bind_roots_before_dashboard_proxy()
     test_deployment_exec_broker_rejects_unsafe_docker_binary_before_subprocess()
     test_gateway_exec_broker_rejects_unsafe_docker_binary_before_subprocess()
+    test_gateway_exec_broker_surfaces_real_bridge_failure_reason()
+    test_gateway_exec_broker_clean_timeout_honors_long_caller_ceiling()
     test_agent_supervisor_broker_rejects_unsafe_docker_binary_before_subprocess()
     test_docker_entrypoint_generates_fresh_secrets()
     test_docker_entrypoint_quotes_generated_config_values()

@@ -377,6 +377,10 @@ def _strip_public_channel_prefix(target_id: str, prefix: str) -> str:
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 PUBLIC_AGENT_BRIDGE_DEFERRED = "DEFERRED_TO_PUBLIC_AGENT_BRIDGE"
 PUBLIC_AGENT_BRIDGE_UNCONFIRMED = "PROCESSED_UNCONFIRMED_BY_PUBLIC_AGENT_BRIDGE"
+# H1: payload-building sentinel for a transient Discord DM-open failure. The turn
+# functions map it to a clean DEFER (retry next cycle) instead of a hard turn failure,
+# so a Discord 403/429/500 during the snappy webhook path never burns a terminal error.
+PUBLIC_AGENT_GATEWAY_DM_DEFERRED = "DEFERRED_PUBLIC_AGENT_GATEWAY_DM_OPEN"
 PUBLIC_AGENT_BRIDGE_PYTHON = "/opt/arclink/runtime/hermes-venv/bin/python3"
 PUBLIC_AGENT_BRIDGE_SCRIPT = "/home/arclink/arclink/python/arclink_public_agent_bridge.py"
 PUBLIC_AGENT_BRIDGE_ROOT_WRAPPER_SCRIPT = "/home/arclink/arclink/python/arclink_public_agent_bridge_root.py"
@@ -1411,11 +1415,22 @@ def _public_agent_gateway_payload(
         if not bot_token:
             return {}, "DISCORD_BOT_TOKEN is not configured for Hermes public gateway bridge"
         if not chat_id and user_id:
+            # H1 fix: opening a Discord DM channel is a BLOCKING network call (20s
+            # timeout) on the hot webhook/live-trigger thread, BEFORE the turn
+            # detaches. A Discord 403/429/500 here previously failed the WHOLE turn
+            # (and defeated the snappy-webhook design) -- Telegram has no such
+            # pre-dispatch network call. Make it BEST-EFFORT: on ANY DM-open failure
+            # we do NOT hard-fail; we surface the transient-defer sentinel so the
+            # caller DEFERS the turn for a clean retry next cycle instead of burning a
+            # terminal failure + quiet fallback. The recipient (user_id) is carried in
+            # the payload below so a later bridge revision can resolve the DM itself.
             try:
                 dm = discord_create_dm_channel(bot_token=bot_token, recipient_id=user_id)
                 chat_id = str(dm.get("id") or "").strip() if isinstance(dm, dict) else ""
-            except Exception as exc:  # noqa: BLE001
-                return {}, f"discord public gateway bridge could not open DM: {str(exc)[:180]}"
+            except Exception:  # noqa: BLE001 - best-effort: never fail the turn on a DM-open error.
+                chat_id = ""
+            if not chat_id:
+                return {}, PUBLIC_AGENT_GATEWAY_DM_DEFERRED
     else:
         return {}, f"Hermes public gateway bridge is not implemented for {clean_channel or 'blank'}"
     if not bot_token:
@@ -1486,17 +1501,29 @@ def _run_public_agent_gateway_turn(
         extra=extra,
     )
     if error:
+        # H1: a transient Discord DM-open failure is non-terminal -- DEFER the turn so
+        # it retries next cycle (and a healthy Discord recovers) rather than failing
+        # the turn before it ever detaches.
+        if error == PUBLIC_AGENT_GATEWAY_DM_DEFERRED:
+            return True, PUBLIC_AGENT_BRIDGE_DEFERRED
         return False, error
     project_name = _compose_project_name(deployment_id)
     if not project_name:
         return False, "deployment id is missing"
     timeout_seconds = _int_env("ARCLINK_PUBLIC_AGENT_TURN_TIMEOUT_SECONDS", 180, minimum=15, maximum=900)
+    # C3 cold-start fix: the broker path runs the turn in the shared gateway container
+    # and a FIRST turn after any deploy is a cold start that easily exceeds the 210s
+    # (turn_timeout+30) budget -- the broker would then kill the subprocess and the
+    # first turn fails. The broker request drives the broker's per-turn budget (see
+    # _run_gateway_exec_broker_request), so embed the long ceiling here. The local
+    # synchronous ``docker exec`` fallback below keeps its own short ``timeout_seconds
+    # + 30`` wall-clock; only the BROKER request carries the long ceiling.
     broker_request = _gateway_exec_broker_request(
         deployment_id=deployment_id,
         prefix=prefix,
         project_name=project_name,
         payload=payload,
-        timeout_seconds=timeout_seconds + 30,
+        timeout_seconds=_public_agent_bridge_max_seconds(),
     )
     if _gateway_exec_broker_url():
         if _public_agent_bridge_detached_enabled() and notification_id is not None:
@@ -1583,15 +1610,23 @@ def _run_operator_agent_gateway_turn(
         extra=extra,
     )
     if error:
+        # H1: see _run_public_agent_gateway_turn -- a transient Discord DM-open failure
+        # DEFERS the turn for a clean retry instead of failing it before detaching.
+        if error == PUBLIC_AGENT_GATEWAY_DM_DEFERRED:
+            return True, PUBLIC_AGENT_BRIDGE_DEFERRED
         return False, error
     project_name = config_env_value("ARCLINK_CONTROL_COMPOSE_PROJECT", "").strip() or "arclink"
     if not PUBLIC_AGENT_BRIDGE_PROJECT_RE.fullmatch(project_name):
         return False, "operator Hermes gateway Compose project is not allowlisted"
     timeout_seconds = _int_env("ARCLINK_PUBLIC_AGENT_TURN_TIMEOUT_SECONDS", 180, minimum=15, maximum=900)
+    # C3 cold-start fix (see _run_public_agent_gateway_turn): the broker request drives
+    # the broker's per-turn budget, so embed the long ceiling so a cold-start Operator
+    # turn after a deploy is not killed at 210s. The synchronous container-exec
+    # fallback below keeps its own short wall-clock.
     broker_request = _operator_gateway_exec_broker_request(
         project_name=project_name,
         payload=payload,
-        timeout_seconds=timeout_seconds + 30,
+        timeout_seconds=_public_agent_bridge_max_seconds(),
     )
     if _gateway_exec_broker_url():
         if _public_agent_bridge_detached_enabled() and notification_id is not None:
@@ -2210,12 +2245,24 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
             raise RuntimeError("public Agent bridge job is missing notification_id")
         cfg = Config.from_env()
         if gateway_exec_request is not None:
+            # C3: log the ACTUAL per-turn timeout the broker will honour (the value
+            # embedded in the broker request) rather than the worker-level job
+            # timeout. The two used to diverge -- the worker logged the long job
+            # ceiling while the broker request carried a short ~210s budget that
+            # killed cold-start turns -- so the log was misleading. They now agree
+            # (the broker request carries the long ceiling, see the turn builders),
+            # and this records the value the broker actually uses.
+            broker_timeout_seconds = gateway_exec_request.get("timeout_seconds")
+            try:
+                broker_timeout_seconds = int(broker_timeout_seconds)
+            except (TypeError, ValueError):
+                broker_timeout_seconds = timeout_seconds
             _append_public_agent_bridge_log(
                 json.dumps(
                     {
                         "event": "public_agent_bridge_broker_started",
                         "notification_id": notification_id,
-                        "timeout_seconds": timeout_seconds,
+                        "timeout_seconds": broker_timeout_seconds,
                     },
                     sort_keys=True,
                 )
@@ -2951,6 +2998,141 @@ def _absorb_telegram_album_siblings(
         _time.sleep(0.4)
 
 
+def _public_agent_single_flight_defer_seconds() -> int:
+    """Short re-arm window for a turn deferred by the per-chat single-flight gate.
+
+    A turn deferred behind an in-flight sibling must be retried SOON (when the
+    in-flight turn likely finished), not held for the full detached lease (~2h).
+    The claim already pushed ``next_attempt_at`` ~lease_seconds out, so we pull it
+    back to this small window so the next periodic/live cycle re-evaluates the chat.
+    """
+    return _int_env("ARCLINK_PUBLIC_AGENT_SINGLE_FLIGHT_DEFER_SECONDS", 30, minimum=1, maximum=900)
+
+
+def _reschedule_public_agent_turn_soon(cfg: Config, notification_id: int) -> None:
+    """Pull a deferred turn's ``next_attempt_at`` back to a short retry window.
+
+    Best-effort: a reschedule failure just means the row retries on its existing
+    (long) lease expiry, so it can never break delivery. Guarded on ``delivered_at
+    IS NULL``; the deferred row never carries a detached-worker token yet (we defer
+    BEFORE spawning), so no token guard is needed here.
+    """
+    if int(notification_id or 0) <= 0:
+        return
+    try:
+        with _db_session(cfg) as conn:
+            conn.execute(
+                """
+                UPDATE notification_outbox
+                SET next_attempt_at = ?
+                WHERE id = ? AND delivered_at IS NULL
+                """,
+                (utc_after_seconds_iso(_public_agent_single_flight_defer_seconds()), int(notification_id)),
+            )
+            conn.commit()
+    except Exception:  # noqa: BLE001 - reschedule is best-effort; never break delivery.
+        return
+
+
+def _public_agent_chat_has_inflight_sibling(
+    cfg: Config,
+    *,
+    channel_kind: str,
+    target_id: str,
+    own_id: int,
+) -> bool:
+    """C1 per-chat single-flight gate: is another turn for THIS chat already in flight?
+
+    Every public-agent turn spawns a fresh short-lived bridge process that runs an
+    agent against the ONE shared Hermes gateway container. Hermes' concurrent-turn
+    protection is a per-process in-memory sentinel, so it is EMPTY in every fresh
+    bridge process -- two bridge processes for the SAME ``(channel_kind, target_id)``
+    chat race the session transcript and garble/empty the reply. The per-row outbox
+    lease (``_claim_notification_for_delivery``) is atomic but PER ROW, so two
+    DIFFERENT undelivered rows for the same chat can each pass it and dispatch
+    concurrently. This gate serialises bridge turns per chat: only ONE public-agent
+    turn per chat may be IN-FLIGHT, siblings DEFER to the next cycle.
+
+    A sibling row (different id, same chat, undelivered) counts as IN-FLIGHT when:
+      * it carries an active ``_public_agent_bridge_worker`` token whose recorded pid
+        is a live bridge worker (a detached turn is genuinely running), OR
+      * it was JUST CLAIMED THIS CYCLE -- it has a RECENT ``last_attempt_at`` (within
+        the lease window) AND ``next_attempt_at`` still in the future (the lease) AND
+        it is OLDER (lower id) than this row. The recent-``last_attempt_at`` test is
+        what distinguishes a genuinely-leased-in-flight sibling from a row merely
+        SCHEDULED for a later retry (backoff/manual defer): a scheduled-later row has
+        a future ``next_attempt_at`` but NO recent attempt, so it does NOT gate. FIFO
+        (older id wins) keeps two rows leased in the same cycle from BOTH deferring:
+        the older runs, the newer defers. A leased-but-NEWER sibling does not gate
+        this (older) row.
+
+    The whole check runs inside ONE ``_db_session`` read so two workers cannot both
+    pass the gate for the same chat: the in-flight worker has already stamped its
+    lease token / future ``next_attempt_at`` (with a fresh ``last_attempt_at``) on its
+    row -- the claim + token-stamp commit before its bridge spawns -- so a sibling
+    worker that started after sees it. Returns True => this row should DEFER.
+    """
+    clean_channel = str(channel_kind or "").strip().lower()
+    clean_target = str(target_id or "").strip()
+    if not clean_channel or not clean_target or int(own_id or 0) <= 0:
+        return False
+    lease_window = _public_agent_turn_lease_seconds()
+    now_ts = utc_now().timestamp()
+    try:
+        with _db_session(cfg) as conn:
+            rows = conn.execute(
+                """
+                SELECT id, extra_json, next_attempt_at, last_attempt_at
+                FROM notification_outbox
+                WHERE delivered_at IS NULL
+                  AND target_kind = 'public-agent-turn'
+                  AND channel_kind = ?
+                  AND target_id = ?
+                  AND id != ?
+                ORDER BY id ASC
+                """,
+                (clean_channel, clean_target, int(own_id)),
+            ).fetchall()
+    except Exception:  # noqa: BLE001 - a gate read failure must not fail the turn; fall through.
+        return False
+    for raw_sibling in rows:
+        sibling = dict(raw_sibling)
+        sibling_id = int(sibling["id"]) if str(sibling.get("id") or "").isdigit() else 0
+        if sibling_id <= 0:
+            continue
+        try:
+            sibling_extra = json.loads(str(sibling.get("extra_json") or "{}"))
+        except ValueError:
+            sibling_extra = {}
+        if not isinstance(sibling_extra, dict):
+            sibling_extra = {}
+        worker = sibling_extra.get("_public_agent_bridge_worker")
+        if isinstance(worker, dict):
+            token = str(worker.get("token") or "").strip()
+            pid = int(worker.get("pid") or 0)
+            job_path = str(worker.get("job_path") or "").strip()
+            # A detached bridge turn is genuinely RUNNING when the row still carries a
+            # lease token AND its recorded pid is alive on THIS row's job. That is an
+            # in-flight turn for the chat regardless of FIFO order -- defer behind it.
+            if token and pid > 0 and _public_agent_bridge_worker_pid_active(pid, expected_job_path=job_path):
+                return True
+        # No live detached worker: an OLDER sibling counts as in-flight only when it was
+        # JUST CLAIMED this cycle -- a recent last_attempt_at AND a future
+        # next_attempt_at (the lease). A row merely SCHEDULED for a later retry has a
+        # future next_attempt_at but a stale/absent last_attempt_at, so it never gates.
+        if sibling_id < int(own_id):
+            next_attempt = parse_utc_iso(str(sibling.get("next_attempt_at") or "").strip())
+            last_attempt = parse_utc_iso(str(sibling.get("last_attempt_at") or "").strip())
+            if (
+                next_attempt is not None
+                and next_attempt.timestamp() > now_ts
+                and last_attempt is not None
+                and (now_ts - last_attempt.timestamp()) <= lease_window
+            ):
+                return True
+    return False
+
+
 def _deliver_public_agent_turn(cfg: Config, row: dict[str, Any], extra: dict[str, Any]) -> str | None:
     channel_kind = str(row.get("channel_kind") or "").lower()
     target_id = str(row.get("target_id") or "")
@@ -2975,6 +3157,25 @@ def _deliver_public_agent_turn(cfg: Config, row: dict[str, Any], extra: dict[str
                 return PUBLIC_AGENT_BRIDGE_DEFERRED
             if extra.get("telegram_update_json_list"):
                 extra["telegram_album_size"] = len(extra["telegram_update_json_list"])
+    # C1 per-chat single-flight: even after album coalescing, two DIFFERENT undelivered
+    # rows for the SAME chat can each pass the atomic per-ROW lease and each spawn a
+    # bridge process that races the shared Hermes session transcript. Serialise per
+    # chat: if another turn for this chat is already in flight (a live detached bridge
+    # worker, or an older leased-and-not-yet-due sibling), DEFER this row for the next
+    # cycle so only one bridge turn per chat runs at a time. The album leader already
+    # coalesced its siblings (they are delivered), so this gate only sees genuine
+    # separate turns. notification_id is None only for synthetic rows that never spawn.
+    if notification_id is not None and _public_agent_chat_has_inflight_sibling(
+        cfg,
+        channel_kind=channel_kind,
+        target_id=target_id,
+        own_id=notification_id,
+    ):
+        # Pull next_attempt_at back to a short window so this deferred turn is
+        # re-evaluated soon (after the in-flight sibling likely finished) instead of
+        # waiting out the full detached lease.
+        _reschedule_public_agent_turn_soon(cfg, notification_id)
+        return PUBLIC_AGENT_BRIDGE_DEFERRED
     if bool(extra.get("operator_turn")) or str(extra.get("source_kind") or "").strip() == "operator_chat":
         bridged, _bridge_error = _run_operator_agent_gateway_turn(
             channel_kind=channel_kind,

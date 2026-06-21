@@ -15,6 +15,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -129,20 +130,95 @@ def _content_arg(args: tuple[Any, ...], kwargs: Mapping[str, Any], index: int, *
     return ""
 
 
+def _retry_after_seconds(exc: BaseException) -> float | None:
+    """Extract a Telegram 429 retry_after (seconds) from a raised error, if any.
+
+    Telegram ``RetryAfter`` carries a ``retry_after`` attribute; some wrappers
+    only surface ``... retry after N`` / ``Too Many Requests`` in the message.
+    Returns a bounded wait, or ``None`` when this is not a rate-limit error.
+    """
+    raw = getattr(exc, "retry_after", None)
+    if raw is None:
+        text = str(exc).lower()
+        if "too many requests" not in text and "retry after" not in text:
+            return None
+        match = re.search(r"retry after\s+(\d+(?:\.\d+)?)", text)
+        raw = match.group(1) if match else 1.0
+    try:
+        wait = float(raw)
+    except (TypeError, ValueError):
+        wait = 1.0
+    if wait <= 0:
+        wait = 1.0
+    return min(wait, BRIDGE_INTERIM_RETRY_AFTER_MAX_SECONDS)
+
+
+def _failed_send_result(error: str) -> Any:
+    """Build a non-raising failed SendResult so the stream consumer can fall
+    back gracefully when an INTERIM edit/send is swallowed (H-3)."""
+    try:
+        from gateway.platforms.base import SendResult
+
+        return SendResult(success=False, error=str(error)[:240])
+    except Exception:
+        return SimpleNamespace(success=False, message_id=None, error=str(error)[:240], raw_response=None)
+
+
 def _install_delivery_evidence(adapter: Any, evidence: _DeliveryEvidence) -> None:
     def _wrap(method_name: str, *, content_index: int, force_visible: bool = False) -> None:
         original = getattr(adapter, method_name, None)
         if not callable(original):
             return
 
+        async def _call_original(args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> Any:
+            # H-3: honor a Telegram 429 retry_after with ONE bounded retry
+            # before giving up, rather than letting the rate limit raise.
+            try:
+                return await original(*args, **kwargs)
+            except Exception as exc:  # noqa: BLE001 - classified below
+                wait = _retry_after_seconds(exc)
+                if wait is None:
+                    raise
+                await asyncio.sleep(wait)
+                return await original(*args, **kwargs)
+
         async def _wrapped(*args: Any, **kwargs: Any) -> Any:
-            result = await original(*args, **kwargs)
+            finalize = bool(kwargs.get("finalize"))
+            # H-3: an INTERIM streaming edit (finalize=False) is NON-FATAL.
+            # A 429/400 mid-stream must not fail the WHOLE turn -- log + swallow
+            # and return a non-raising failed result so streaming/fallback
+            # continues and the FINAL delivery alone decides turn success.
+            # ``send`` and the FINAL (finalize=True) edit stay fatal so a
+            # genuinely-failed final delivery still fails the turn (we must not
+            # falsely report delivered).
+            interim = method_name == "edit_message" and not finalize
+            try:
+                result = await _call_original(args, kwargs)
+            except Exception as exc:  # noqa: BLE001 - interim is swallowed, final re-raises
+                content = _content_arg(args, kwargs, content_index, "content", "message", "description", "title")
+                if not interim:
+                    evidence.record_result(
+                        method_name,
+                        _failed_send_result(str(exc)),
+                        content=content,
+                        finalize=finalize,
+                        force_visible=force_visible,
+                    )
+                    raise
+                try:
+                    sys.stderr.write(
+                        f"arclink-public-agent-bridge: interim {method_name} failed "
+                        f"(non-fatal, continuing stream): {str(exc)[:200]}\n"
+                    )
+                except Exception:  # noqa: BLE001 - logging must never break the bridge
+                    pass
+                return _failed_send_result(str(exc))
             content = _content_arg(args, kwargs, content_index, "content", "message", "description", "title")
             evidence.record_result(
                 method_name,
                 result,
                 content=content,
-                finalize=bool(kwargs.get("finalize")),
+                finalize=finalize,
                 force_visible=force_visible,
             )
             return result
@@ -251,6 +327,37 @@ def _required(payload: Mapping[str, Any], key: str) -> str:
     return value
 
 
+def _bridge_validate_ids_enabled() -> bool:
+    """H-4 fast-fail id-shape validation gate.
+
+    Default-OFF, opt-in via ARCLINK_PUBLIC_AGENT_BRIDGE_VALIDATE_IDS, matching
+    this repo's "new in-container behavior ships default-off + operator opt-in"
+    lesson. The live deploy enables it so a malformed (non-numeric) id fails
+    fast BEFORE the expensive agent turn instead of 400ing at the platform API
+    after the turn; harnesses that pass placeholder ids stay unaffected.
+    """
+    return _bool_env("ARCLINK_PUBLIC_AGENT_BRIDGE_VALIDATE_IDS", default=False)
+
+
+def _require_numeric_id(payload: Mapping[str, Any], key: str, *, negatives_ok: bool = False) -> str:
+    """Fetch a required id and validate its SHAPE before the agent runs (H-4).
+
+    A malformed (non-numeric) chat_id/channel_id/user_id otherwise flows into
+    the agent turn and only 400s at the platform API AFTER the expensive turn
+    has run. Telegram chat ids can be negative (groups/channels); Discord
+    snowflakes are always positive integers. Strict shape enforcement is gated
+    by ``_bridge_validate_ids_enabled`` (default-off); when disabled we keep the
+    legacy behavior of only requiring the id to be non-empty.
+    """
+    value = _required(payload, key)
+    if not _bridge_validate_ids_enabled():
+        return value
+    candidate = value[1:] if (negatives_ok and value.startswith("-")) else value
+    if not candidate.isdigit():
+        raise RuntimeError(f"bridge payload has malformed {key} (expected numeric id)")
+    return value
+
+
 def _is_slash_command(text: str) -> bool:
     return str(text or "").lstrip().startswith("/")
 
@@ -263,6 +370,23 @@ BRIDGE_GETME_CACHE_DEFAULT_TTL_SECONDS = 180
 BRIDGE_GETME_CACHE_MAX_TTL_SECONDS = 300
 BRIDGE_GETME_CACHE_DEFAULT_DIR = "/var/cache/arclink-public-agent-bridge/getme"
 BRIDGE_GETME_PRELOADED_USER_ENV = "ARCLINK_BRIDGE_GETME_PRELOADED_USER_JSON"
+
+# C-4: the bridge gets its OWN hard internal deadline so a wedged platform call
+# fails fast with a structured error instead of pinning the single shared
+# gateway agent up to the outer subprocess timeout (210s broker / 7200s direct).
+# Default sits just under the broker's per-turn budget so the structured error
+# wins the race over an opaque outer SIGKILL; tunable up for the direct path.
+BRIDGE_DEADLINE_ENV = "ARCLINK_PUBLIC_AGENT_BRIDGE_DEADLINE_SECONDS"
+BRIDGE_DEADLINE_DEFAULT_SECONDS = 200
+BRIDGE_DEADLINE_MIN_SECONDS = 15
+BRIDGE_DEADLINE_MAX_SECONDS = 7200
+# C-4: never let a debounce flush or an aiohttp call block forever.
+BRIDGE_DRAIN_TIMEOUT_SECONDS = 60
+BRIDGE_HTTP_TOTAL_TIMEOUT_SECONDS = 60
+BRIDGE_DEADLINE_EXCEEDED_MESSAGE = "bridge turn exceeded deadline"
+# H-3: bound Telegram 429 retry_after honoring so a hostile/huge retry_after
+# can't itself become the hang we are guarding against.
+BRIDGE_INTERIM_RETRY_AFTER_MAX_SECONDS = 5.0
 
 
 def _bool_env(name: str, *, default: bool = False) -> bool:
@@ -282,6 +406,21 @@ def _int_env_clamped(name: str, *, default: int, minimum: int, maximum: int) -> 
     except (TypeError, ValueError):
         value = default
     return max(minimum, min(maximum, value))
+
+
+def _bridge_deadline_seconds() -> int:
+    """Resolve the bridge's OWN hard internal turn deadline (C-4).
+
+    Read at call time (not import) so tests and operators can tune it without
+    re-importing the module. Clamped so a malformed value still yields a sane,
+    finite deadline.
+    """
+    return _int_env_clamped(
+        BRIDGE_DEADLINE_ENV,
+        default=BRIDGE_DEADLINE_DEFAULT_SECONDS,
+        minimum=BRIDGE_DEADLINE_MIN_SECONDS,
+        maximum=BRIDGE_DEADLINE_MAX_SECONDS,
+    )
 
 
 BRIDGE_SINGLE_PLATFORM_CONFIG_ENABLED = _bool_env("ARCLINK_BRIDGE_SINGLE_PLATFORM_CONFIG", default=False)
@@ -850,7 +989,13 @@ async def _drain_bridge_adapter_tasks(adapter: Any) -> None:
     as the update handler returns can cancel that pending flush before Hermes
     starts the Agent turn. Drain both those platform batch timers and the
     standard gateway background tasks they may spawn.
+
+    C-4: bounded by ``BRIDGE_DRAIN_TIMEOUT_SECONDS`` so a never-quiescing
+    debounce (a task that keeps re-spawning, or an awaited send that wedges)
+    can't hang the whole turn here. The outer turn deadline is the real
+    backstop; this just keeps the drain itself finite.
     """
+    drain_deadline = time.monotonic() + BRIDGE_DRAIN_TIMEOUT_SECONDS
     while True:
         pending: list[asyncio.Task[Any]] = []
         background_tasks = getattr(adapter, "_background_tasks", None)
@@ -862,21 +1007,37 @@ async def _drain_bridge_adapter_tasks(adapter: Any) -> None:
                 pending.extend(task for task in list(task_map.values()) if task and not task.done())
         if not pending:
             return
-        results = await asyncio.gather(*pending, return_exceptions=True)
+        remaining = drain_deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*pending, return_exceptions=True), timeout=remaining
+            )
+        except asyncio.TimeoutError:
+            # A debounce that never quiesces: stop draining and let the turn
+            # finish with whatever evidence we have rather than hang.
+            return
         for result in results:
             if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
                 raise result
 
 
 async def _run_telegram(payload: Mapping[str, Any]) -> dict[str, Any]:
-    _add_runtime_paths()
-
     bot_token = _required(payload, "bot_token")
-    chat_id = _required(payload, "chat_id")
-    user_id = str(payload.get("user_id") or chat_id).strip()
+    # H-4: validate id SHAPE BEFORE touching the runtime / running the agent.
+    # Telegram chat ids may be negative (groups/supergroups/channels); user ids
+    # are positive. A malformed id must fail fast here, not 400 after the turn.
+    chat_id = _require_numeric_id(payload, "chat_id", negatives_ok=True)
+    if str(payload.get("user_id") or "").strip():
+        user_id = _require_numeric_id(payload, "user_id")
+    else:
+        user_id = chat_id
     text = _required(payload, "text")
     message_id = str(payload.get("message_id") or "").strip() or None
     display_name = str(payload.get("display_name") or "").strip() or None
+
+    _add_runtime_paths()
 
     os.environ["TELEGRAM_BOT_TOKEN"] = bot_token
     os.environ["TELEGRAM_HOME_CHANNEL"] = chat_id
@@ -1104,6 +1265,88 @@ async def _try_replay_native_telegram_update(adapter: Any, bot: Any, payload: Ma
     return False
 
 
+DISCORD_BRIDGE_FALLBACK_USER_ID = "arclink-public-bridge"
+
+
+def _discord_getme_cache_path(bot_token: str) -> Path | None:
+    """Per-token L2 cache path for the Discord getMe (/users/@me) response.
+
+    Mirrors the Telegram getMe L2 cache but uses a ``.discord`` suffix so the
+    two platforms never collide on the same bot token's cache file. Returns
+    None (cache disabled) exactly when the secure cache dir / dedicated secret
+    are unavailable, matching the Telegram path's safety posture.
+    """
+    cache_dir = _bridge_getme_secure_cache_dir()
+    if cache_dir is None:
+        return None
+    key = _bridge_getme_cache_key(bot_token)
+    if not key:
+        return None
+    return cache_dir / f"{key}.discord.json"
+
+
+def _write_discord_getme_cache(path: Path, bot_user: Mapping[str, Any]) -> None:
+    if not isinstance(bot_user, Mapping) or not str(bot_user.get("id") or "").strip():
+        return
+    now = int(time.time())
+    try:
+        _json_write(
+            path,
+            {
+                "cached_at": now,
+                "expires_at": now + BRIDGE_GETME_CACHE_TTL_SECONDS,
+                "bot_user": dict(bot_user),
+            },
+        )
+    except Exception:
+        return
+
+
+async def _resolve_discord_bot_user_id(rest: "_DiscordRest", bot_token: str) -> str:
+    """Resolve the REAL Discord bot user id via getMe (/users/@me) (H-2).
+
+    Best-effort and never fatal: a preloaded user / L2 cache hit short-circuits
+    the call; on any getMe failure we fall back to the historical placeholder so
+    the turn still runs. The cache reuses the Telegram getMe L2 posture (same
+    dedicated secret + secure dir), so a missing cache just means a live call.
+    """
+    preloaded = _preloaded_getme_user()
+    preloaded_id = str(preloaded.get("id") or "").strip()
+    if preloaded_id:
+        return preloaded_id
+
+    cache_path: Path | None = None
+    if BRIDGE_GETME_CACHE_ENABLED:
+        try:
+            cache_path = _discord_getme_cache_path(bot_token)
+            if cache_path is not None:
+                cached = _read_getme_cache(cache_path)
+                cached_id = str(cached.get("id") or "").strip()
+                if cached_id:
+                    return cached_id
+        except Exception:
+            cache_path = None
+
+    try:
+        bot_user = await rest.request("GET", "/users/@me")
+    except Exception:
+        return DISCORD_BRIDGE_FALLBACK_USER_ID
+    if not isinstance(bot_user, Mapping):
+        return DISCORD_BRIDGE_FALLBACK_USER_ID
+    bot_user_id = str(bot_user.get("id") or "").strip()
+    if not bot_user_id:
+        return DISCORD_BRIDGE_FALLBACK_USER_ID
+
+    if BRIDGE_GETME_CACHE_ENABLED:
+        try:
+            cache_path = cache_path or _discord_getme_cache_path(bot_token)
+            if cache_path is not None:
+                _write_discord_getme_cache(cache_path, bot_user)
+        except Exception:
+            pass
+    return bot_user_id
+
+
 class _DiscordRest:
     def __init__(self, token: str) -> None:
         self.token = token
@@ -1112,13 +1355,16 @@ class _DiscordRest:
     async def __aenter__(self) -> "_DiscordRest":
         import aiohttp
 
+        # C-4: an explicit total timeout so a wedged Discord REST call cannot
+        # hang the turn (the default aiohttp ClientSession has NO timeout).
         self._session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=BRIDGE_HTTP_TOTAL_TIMEOUT_SECONDS),
             headers={
                 "Authorization": f"Bot {self.token}",
                 "Accept": "application/json",
                 "Content-Type": "application/json",
                 "User-Agent": "ArcLinkPublicAgentBridge/1.0",
-            }
+            },
         )
         return self
 
@@ -1167,14 +1413,29 @@ class _DiscordRawMessage:
 
 
 async def _run_discord(payload: Mapping[str, Any]) -> dict[str, Any]:
-    _add_runtime_paths()
-
+    # NOTE (deferred Discord parity gaps -- intentionally NOT addressed in this
+    # pass; tracked for a future hardening round):
+    #   * Durable exec-approval state: the Telegram path persists approval
+    #     mappings + watches for a durable choice (see
+    #     _install_telegram_bridge_state / _watch_durable_approval) so an
+    #     approval survives the short-lived bridge process. Discord has no
+    #     equivalent yet -- a Discord exec approval that outlives the turn is
+    #     lost.
+    #   * Native callback/component replay: the Telegram path replays raw
+    #     callback_query updates through Hermes' native _handle_callback_query
+    #     (durable-choice aware). Discord interaction/component callbacks are
+    #     not replayed natively here.
     bot_token = _required(payload, "bot_token")
-    channel_id = _required(payload, "channel_id")
-    user_id = _required(payload, "user_id")
+    # H-4: Discord channel/user ids are numeric snowflakes -- validate SHAPE
+    # BEFORE touching the runtime / running the agent so a malformed id fails
+    # fast here instead of 400ing at the platform API after the turn.
+    channel_id = _require_numeric_id(payload, "channel_id")
+    user_id = _require_numeric_id(payload, "user_id")
     text = _required(payload, "text")
     message_id = str(payload.get("message_id") or "").strip()
     display_name = str(payload.get("display_name") or "").strip() or None
+
+    _add_runtime_paths()
 
     os.environ["DISCORD_BOT_TOKEN"] = bot_token
     os.environ.setdefault("DISCORD_REACTIONS", "true")
@@ -1257,12 +1518,40 @@ async def _run_discord(payload: Mapping[str, Any]) -> dict[str, Any]:
         async def _edit_message(chat_id: str, message_id_arg: str, content: str, *, finalize: bool = False) -> SendResult:
             target_channel = str(chat_id or channel_id)
             chunks = adapter.truncate_message(adapter.format_message(content), getattr(adapter, "MAX_MESSAGE_LENGTH", 2000))
+            # H-2: edit the first chunk into the existing message, then send any
+            # overflow chunks as additional messages instead of silently
+            # DROPPING them. Mirrors Telegram's chunked-edit contract: report the
+            # LAST visible message id (so subsequent edits target the newest
+            # chunk) plus continuation_message_ids for full delivery visibility.
             await rest.request(
                 "PATCH",
                 f"/channels/{target_channel}/messages/{message_id_arg}",
                 payload={"content": (chunks[0] if chunks else "")},
             )
-            result = SendResult(success=True, message_id=message_id_arg)
+            continuation_ids: list[str] = []
+            prev_id = str(message_id_arg)
+            for chunk in (chunks[1:] if len(chunks) > 1 else []):
+                body: dict[str, Any] = {
+                    "content": chunk,
+                    "allowed_mentions": {"parse": ["users"], "replied_user": True},
+                }
+                if prev_id and getattr(adapter, "_reply_to_mode", "first") != "off":
+                    body["message_reference"] = {
+                        "message_id": prev_id,
+                        "channel_id": target_channel,
+                        "fail_if_not_exists": False,
+                    }
+                sent = await rest.request("POST", f"/channels/{target_channel}/messages", payload=body)
+                sent_id = str(sent.get("id") or "")
+                if sent_id:
+                    continuation_ids.append(sent_id)
+                    prev_id = sent_id
+            last_id = continuation_ids[-1] if continuation_ids else message_id_arg
+            result = SendResult(
+                success=True,
+                message_id=last_id,
+                continuation_message_ids=tuple(continuation_ids),
+            )
             evidence.record_result("edit_message", result, content=content, finalize=finalize)
             return result
 
@@ -1277,7 +1566,11 @@ async def _run_discord(payload: Mapping[str, Any]) -> dict[str, Any]:
         adapter.edit_message = _edit_message  # type: ignore[method-assign]
         adapter.send_typing = _send_typing  # type: ignore[method-assign]
         adapter.stop_typing = _stop_typing  # type: ignore[method-assign]
-        adapter._client = SimpleNamespace(user=SimpleNamespace(id="arclink-public-bridge"))  # type: ignore[attr-defined]
+        # H-2: use the REAL bot user id (Discord getMe) instead of a placeholder,
+        # so mention/self-detection logic matches native Hermes. Best-effort:
+        # falls back to the historical placeholder if getMe fails.
+        bot_user_id = await _resolve_discord_bot_user_id(rest, bot_token)
+        adapter._client = SimpleNamespace(user=SimpleNamespace(id=bot_user_id))  # type: ignore[attr-defined]
         adapter.set_message_handler(runner._handle_message)
         adapter.set_fatal_error_handler(runner._handle_adapter_fatal_error)
         adapter.set_session_store(runner.session_store)
@@ -1305,8 +1598,11 @@ async def _run_discord(payload: Mapping[str, Any]) -> dict[str, Any]:
         return evidence.summary()
 
 
-async def _run(payload: Mapping[str, Any]) -> dict[str, Any]:
-    _apply_public_bridge_options(payload)
+class _BridgeDeadlineExceeded(RuntimeError):
+    """The bridge's OWN hard internal turn deadline fired (C-4)."""
+
+
+async def _dispatch_platform(payload: Mapping[str, Any]) -> dict[str, Any]:
     platform = str(payload.get("platform") or "").strip().lower()
     if platform == "telegram":
         return await _run_telegram(payload)
@@ -1315,10 +1611,26 @@ async def _run(payload: Mapping[str, Any]) -> dict[str, Any]:
     raise RuntimeError(f"public agent gateway bridge does not support platform {platform or 'blank'} yet")
 
 
+async def _run(payload: Mapping[str, Any]) -> dict[str, Any]:
+    _apply_public_bridge_options(payload)
+    # C-4: the bridge enforces its OWN hard internal deadline so a wedged
+    # platform call fails fast with a structured error instead of pinning the
+    # single shared gateway agent until the outer subprocess timeout.
+    deadline = _bridge_deadline_seconds()
+    try:
+        return await asyncio.wait_for(_dispatch_platform(payload), timeout=deadline)
+    except asyncio.TimeoutError as exc:
+        raise _BridgeDeadlineExceeded(BRIDGE_DEADLINE_EXCEEDED_MESSAGE) from exc
+
+
 def main() -> int:
     try:
         payload = _payload_from_stdin()
         result = asyncio.run(_run(payload))
+    except _BridgeDeadlineExceeded:
+        # Structured, deterministic deadline error so callers can distinguish a
+        # self-aborted hung turn from an opaque outer SIGKILL, and exit non-zero.
+        return _json_error(BRIDGE_DEADLINE_EXCEEDED_MESSAGE)
     except Exception as exc:  # noqa: BLE001 - boundary process returns structured failure
         return _json_error(str(exc))
     response = {"ok": True}

@@ -1112,6 +1112,281 @@ def test_public_agent_live_trigger_skips_not_due_head_of_line() -> None:
             os.environ.update(old_env)
 
 
+def _single_flight_test_config(root: Path, extra: dict[str, str] | None = None) -> Path:
+    config_path = root / "config" / "arclink.env"
+    values = {
+        "ARCLINK_USER": "arclink",
+        "ARCLINK_HOME": str(root / "home-arclink"),
+        "ARCLINK_REPO_DIR": str(REPO),
+        "ARCLINK_PRIV_DIR": str(root / "priv"),
+        "STATE_DIR": str(root / "state"),
+        "RUNTIME_DIR": str(root / "state" / "runtime"),
+        "VAULT_DIR": str(root / "vault"),
+        "ARCLINK_DB_PATH": str(root / "state" / "arclink-control.sqlite3"),
+        "ARCLINK_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+        "ARCLINK_CURATOR_DIR": str(root / "state" / "curator"),
+        "ARCLINK_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+        "ARCLINK_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+        "ARCLINK_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+        "ARCLINK_RELEASE_STATE_FILE": str(root / "state" / "arclink-release.json"),
+        "ARCLINK_QMD_URL": "http://127.0.0.1:8181/mcp",
+        "TELEGRAM_BOT_TOKEN": "telegram-public-token",
+    }
+    if extra:
+        values.update(extra)
+    write_config(config_path, values)
+    return config_path
+
+
+def test_public_agent_single_flight_defers_second_turn_for_same_chat() -> None:
+    # C1: two undelivered public-agent-turn rows for the SAME chat must NOT both
+    # dispatch a bridge process concurrently (that races the shared Hermes session
+    # transcript and garbles/empties the reply). Only the oldest in-flight turn runs;
+    # the sibling DEFERS for the next cycle.
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_single_flight_same_chat_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_single_flight_same_chat_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = _single_flight_test_config(root)
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            with control.connect_db(cfg) as conn:
+                first = control.queue_notification(
+                    conn,
+                    target_kind="public-agent-turn",
+                    target_id="tg:777",
+                    channel_kind="telegram",
+                    message="first turn",
+                    extra={"deployment_id": "arcdep_test", "prefix": "arc-testpod"},
+                )
+                second = control.queue_notification(
+                    conn,
+                    target_kind="public-agent-turn",
+                    target_id="tg:777",
+                    channel_kind="telegram",
+                    message="second turn",
+                    extra={"deployment_id": "arcdep_test", "prefix": "arc-testpod"},
+                )
+
+            prompts: list[str] = []
+
+            def fake_gateway_turn(**kwargs):
+                # Mimic the real detached-bridge path: the turn detaches and leaves the
+                # row LEASED (not delivered) until the worker finishes.
+                prompts.append(str(kwargs.get("prompt") or ""))
+                return True, delivery.PUBLIC_AGENT_BRIDGE_DEFERRED
+
+            delivery._run_public_agent_gateway_turn = fake_gateway_turn
+            # One cycle that can see both due rows. The oldest (first) dispatches and
+            # detaches; the newer (second) hits the per-chat single-flight gate and
+            # defers -- only ONE bridge turn runs for the chat.
+            summary = delivery.run_public_agent_turns_once(
+                cfg, channel_kind="telegram", target_id="tg:777", limit=5
+            )
+            expect(prompts == ["first turn"], str(prompts))
+            expect(summary["processed"] == 2, str(summary))
+            expect(summary["deferred_public_agent_bridge"] == 2, str(summary))
+            expect(summary["delivered"] == 0 and summary["errors"] == 0, str(summary))
+            with control.connect_db(cfg) as conn:
+                rows = {
+                    int(r["id"]): dict(r)
+                    for r in conn.execute(
+                        "SELECT id, delivered_at, next_attempt_at FROM notification_outbox ORDER BY id ASC"
+                    ).fetchall()
+                }
+            expect(rows[first]["delivered_at"] is None, str(rows))
+            expect(rows[second]["delivered_at"] is None, str(rows))
+            # The deferred sibling was pulled back to a SHORT retry window (not the full
+            # ~2h detached lease) so it re-runs soon after the in-flight turn finishes.
+            second_next = control.parse_utc_iso(str(rows[second]["next_attempt_at"] or ""))
+            expect(second_next is not None, str(rows))
+            soon = control.utc_now() + timedelta(seconds=delivery._public_agent_single_flight_defer_seconds() + 5)
+            expect(second_next <= soon, str(rows))
+            print("PASS test_public_agent_single_flight_defers_second_turn_for_same_chat")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_public_agent_single_flight_allows_concurrent_turns_for_different_chats() -> None:
+    # C1: the single-flight gate is PER-CHAT. Two turns for DIFFERENT chats must both
+    # dispatch concurrently -- the gate must not serialize unrelated chats.
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_single_flight_diff_chat_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_single_flight_diff_chat_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = _single_flight_test_config(root)
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            with control.connect_db(cfg) as conn:
+                control.queue_notification(
+                    conn,
+                    target_kind="public-agent-turn",
+                    target_id="tg:111",
+                    channel_kind="telegram",
+                    message="chat one",
+                    extra={"deployment_id": "arcdep_test", "prefix": "arc-testpod"},
+                )
+                control.queue_notification(
+                    conn,
+                    target_kind="public-agent-turn",
+                    target_id="tg:222",
+                    channel_kind="telegram",
+                    message="chat two",
+                    extra={"deployment_id": "arcdep_test", "prefix": "arc-testpod"},
+                )
+
+            prompts: list[str] = []
+
+            def fake_gateway_turn(**kwargs):
+                prompts.append(str(kwargs.get("prompt") or ""))
+                return True, delivery.PUBLIC_AGENT_BRIDGE_DEFERRED
+
+            delivery._run_public_agent_gateway_turn = fake_gateway_turn
+            # No channel/target filter so the single cycle sees both chats.
+            summary = delivery.run_public_agent_turns_once(cfg, limit=5)
+            expect(sorted(prompts) == ["chat one", "chat two"], str(prompts))
+            expect(summary["processed"] == 2, str(summary))
+            expect(summary["deferred_public_agent_bridge"] == 2, str(summary))
+            print("PASS test_public_agent_single_flight_allows_concurrent_turns_for_different_chats")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_public_agent_broker_request_carries_long_cold_start_timeout() -> None:
+    # C3: the brokered turn must embed the LONG cold-start ceiling
+    # (_public_agent_bridge_max_seconds, default 7200) in the broker request, not the
+    # short ~210s (turn_timeout+30) budget that killed first-turn-after-deploy turns.
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_broker_timeout_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = _single_flight_test_config(
+            root,
+            extra={
+                "ARCLINK_GATEWAY_EXEC_BROKER_URL": "http://gateway-exec-broker:8911",
+                "ARCLINK_GATEWAY_EXEC_BROKER_TOKEN": "broker-token",
+            },
+        )
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            requests: list[dict[str, object]] = []
+
+            def fake_broker_request(request_body):
+                requests.append(dict(request_body))
+                return True, ""
+
+            def forbidden_container_lookup(*, project_name, service):
+                raise AssertionError("brokered turn must not inspect Docker")
+
+            delivery._run_gateway_exec_broker_request = fake_broker_request
+            delivery._deployment_service_container = forbidden_container_lookup
+            # Public (deployment) turn -- non-detached broker path (no notification_id).
+            ok, error = delivery._run_public_agent_gateway_turn(
+                deployment_id="arcdep_test",
+                prefix="arc-test",
+                channel_kind="telegram",
+                target_id="tg:123",
+                prompt="cold start please",
+                extra={},
+            )
+            expect(ok is True and error == "", error)
+            expect(len(requests) == 1, str(requests))
+            long_ceiling = delivery._public_agent_bridge_max_seconds()
+            expect(long_ceiling == 7200, long_ceiling)
+            embedded = int(requests[0]["timeout_seconds"])
+            expect(embedded == long_ceiling, str(requests[0]))
+            # Regression guard: it must NOT be the old short 210s (turn_timeout 180 + 30).
+            expect(embedded != 210, str(requests[0]))
+
+            # Operator (control-stack) turn must carry the same long ceiling.
+            requests.clear()
+            os.environ["ARCLINK_CONTROL_COMPOSE_PROJECT"] = "arclink"
+            ok2, error2 = delivery._run_operator_agent_gateway_turn(
+                channel_kind="telegram",
+                target_id="tg:123",
+                prompt="operator cold start",
+                extra={"operator_turn": True},
+            )
+            expect(ok2 is True and error2 == "", error2)
+            expect(len(requests) == 1, str(requests))
+            expect(int(requests[0]["timeout_seconds"]) == long_ceiling, str(requests[0]))
+            print("PASS test_public_agent_broker_request_carries_long_cold_start_timeout")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_public_agent_discord_dm_open_failure_defers_instead_of_failing_turn() -> None:
+    # H1: a Discord turn WITHOUT a channel_id used to call discord_create_dm_channel
+    # synchronously while building the payload (a blocking network call on the hot
+    # webhook thread). A Discord 403/429/500 there failed the WHOLE turn before it
+    # detached. It must now be best-effort: a DM-open failure DEFERS the turn for a
+    # clean retry instead of producing a hard failure.
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_discord_dm_defer_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = _single_flight_test_config(
+            root, extra={"DISCORD_BOT_TOKEN": "discord-public-token"}
+        )
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            dm_calls: list[str] = []
+
+            def exploding_dm(*, bot_token, recipient_id):
+                dm_calls.append(str(recipient_id))
+                raise RuntimeError("Discord 429: rate limited")
+
+            def forbidden_broker_request(request_body):
+                raise AssertionError("a deferred DM-open turn must not reach the broker")
+
+            delivery.discord_create_dm_channel = exploding_dm
+            delivery._run_gateway_exec_broker_request = forbidden_broker_request
+
+            # No discord_channel_id in extra -> payload-building would try to open a DM.
+            ok, error = delivery._run_public_agent_gateway_turn(
+                deployment_id="arcdep_test",
+                prefix="arc-test",
+                channel_kind="discord",
+                target_id="discord:456",
+                prompt="dm please",
+                extra={"discord_user_id": "456"},
+            )
+            # Best-effort: the turn DEFERS (does not hard-fail) on the DM-open error.
+            expect(ok is True, f"DM-open failure should DEFER, not fail: ok={ok} error={error}")
+            expect(error == delivery.PUBLIC_AGENT_BRIDGE_DEFERRED, error)
+            expect(dm_calls == ["456"], str(dm_calls))
+
+            # Sanity: a payload BUILT directly returns the defer sentinel (not a hard
+            # error string) so the turn functions can map it to a clean defer.
+            payload, payload_error = delivery._public_agent_gateway_payload(
+                channel_kind="discord",
+                target_id="discord:456",
+                prompt="dm please",
+                extra={"discord_user_id": "456"},
+            )
+            expect(payload == {}, str(payload))
+            expect(payload_error == delivery.PUBLIC_AGENT_GATEWAY_DM_DEFERRED, payload_error)
+            print("PASS test_public_agent_discord_dm_open_failure_defers_instead_of_failing_turn")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_public_agent_turn_runner_prefers_running_gateway_container() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -4721,6 +4996,10 @@ def main() -> int:
     test_public_agent_turn_delivery_bridges_discord_channel_metadata()
     test_public_agent_live_trigger_claims_and_defers_until_detached_bridge_finishes()
     test_public_agent_live_trigger_skips_not_due_head_of_line()
+    test_public_agent_single_flight_defers_second_turn_for_same_chat()
+    test_public_agent_single_flight_allows_concurrent_turns_for_different_chats()
+    test_public_agent_broker_request_carries_long_cold_start_timeout()
+    test_public_agent_discord_dm_open_failure_defers_instead_of_failing_turn()
     test_public_agent_turn_runner_prefers_running_gateway_container()
     test_public_agent_gateway_bridge_detaches_long_running_turns()
     test_public_agent_gateway_bridge_unlinks_job_when_worker_spawn_fails()

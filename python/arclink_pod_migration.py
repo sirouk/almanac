@@ -1036,18 +1036,15 @@ def _ensure_llm_router_key_for_intent(
     if secret_store_dir is None:
         return None
     raw_key = _router_key_value(secret_store_dir, secret_ref)
-    model = str(
-        (env or os.environ).get("ARCLINK_LLM_ROUTER_DEFAULT_MODEL")
-        or (env or os.environ).get("ARCLINK_CHUTES_DEFAULT_MODEL")
-        or ""
-    ).strip()
+    # Policy: keep allowed_models EMPTY ([]) so the pod uses the global -TEE allow-list
+    # (incl. the fallback). [default_model] would disallow the fallback and 403 turns.
     return ensure_llm_router_key(
         conn,
         deployment_id=deployment_id,
         user_id=user_id,
         secret_ref=secret_ref,
         raw_key=raw_key,
-        allowed_models=[model] if model else None,
+        allowed_models=None,
         metadata={"source": "pod_migration"},
     )
 

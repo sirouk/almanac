@@ -2445,18 +2445,19 @@ def _ensure_llm_router_key_registered(
         materialization_root=Path("/tmp/arclink-llm-router-key-registration"),
     )
     raw_key = resolver._value_for_ref(secret_ref)
-    model = str(
-        worker.env.get("ARCLINK_LLM_ROUTER_DEFAULT_MODEL")
-        or worker.env.get("ARCLINK_CHUTES_DEFAULT_MODEL")
-        or ""
-    ).strip()
+    # Policy: per-key allowed_models stays EMPTY ([]) so the pod falls back to the
+    # global synced -TEE allow-list, which INCLUDES the configured fallback model(s).
+    # Registering [default_model] (the old behavior) restricted the key to ONLY the
+    # primary and DISALLOWED the fallback -- 403'ing every public-channel turn (the
+    # operator-stack outage). The pod still DEFAULTS to its selected model via the
+    # router's default-model logic; [] only avoids forbidding the failover model.
     return ensure_llm_router_key(
         conn,
         deployment_id=deployment_id,
         user_id=user_id,
         secret_ref=secret_ref,
         raw_key=raw_key,
-        allowed_models=[model] if model else None,
+        allowed_models=None,
         metadata={"source": "sovereign_worker"},
     )
 

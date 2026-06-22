@@ -82,6 +82,7 @@ def worker_config(worker_mod, tmpdir, *, enabled=True, register_local=True, ingr
         local_capacity_slots=2,
         secret_store_dir=Path(tmpdir) / "secrets",
         env={
+            "ARCLINK_SOVEREIGN_HANDOFF_READINESS_TIMEOUT_SECONDS": "0",
             "ARCLINK_BASE_DOMAIN": "example.test",
             "ARCLINK_PRIMARY_PROVIDER": "chutes",
             "ARCLINK_CHUTES_BASE_URL": "https://llm.chutes.ai/v1",
@@ -546,6 +547,7 @@ def test_live_sovereign_worker_reconciles_compose_ps_health() -> None:
                 "tailscale_dns_name": "worker.example.test",
                 "tailscale_host_strategy": "path",
                 "env": {
+                    "ARCLINK_SOVEREIGN_HANDOFF_READINESS_TIMEOUT_SECONDS": "0",
                     **dict(cfg.env),
                     "ARCLINK_INGRESS_MODE": "tailscale",
                     "ARCLINK_TAILSCALE_DNS_NAME": "worker.example.test",
@@ -566,6 +568,75 @@ def test_live_sovereign_worker_reconciles_compose_ps_health() -> None:
     expect(statuses["notification-delivery"] == "healthy", str(statuses))
     expect(("ps", "--all", "--format", "json") in [tuple(run["args"]) for run in runner.runs], str(runner.runs))
     print("PASS test_live_sovereign_worker_reconciles_compose_ps_health")
+
+
+def test_handoff_poll_waits_for_slow_nextcloud_then_succeeds() -> None:
+    # Regression: ``docker compose up`` returns when containers START, not when
+    # they are HEALTHY. A fresh Nextcloud is "starting" for 2-3 min, so the FIRST
+    # post-apply snapshot falsely fails the handoff ("0/N ready, needs repair").
+    # The bounded readiness poll must re-read live ``compose ps`` and SUCCEED once
+    # nextcloud goes healthy, instead of failing on the first snapshot.
+    control = load_module("arclink_control.py", "arclink_control_handoff_poll")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_handoff_poll")
+    import arclink_executor as executor_mod
+
+    def _ps_rows(nextcloud_health: str) -> str:
+        rows = []
+        for service in worker_mod.ARCLINK_PROVISIONING_SERVICE_NAMES:
+            row = {"Service": service, "State": "running", "Health": "", "Status": "Up 1 second", "Name": f"{service}-1", "Project": "arclink-dep_1"}
+            if service == "nextcloud":
+                row["Health"] = nextcloud_health
+                row["Status"] = f"Up 1 second ({nextcloud_health})" if nextcloud_health else "Up 1 second"
+            if service == "managed-context-install":
+                row["State"] = "exited"; row["ExitCode"] = 0; row["Status"] = "Exited (0)"
+            rows.append(row)
+        return "\n".join(json.dumps(r) for r in rows)
+
+    class StartingThenHealthyRunner(executor_mod.FakeDockerRunner):
+        def __init__(self):
+            super().__init__(); self.ps_calls = 0
+        def run(self, args, *, deployment_id: str, project_name: str, env_file: str, compose_file: str):
+            self.runs.append({"args": args})
+            if tuple(args) == ("ps", "--all", "--format", "json"):
+                self.ps_calls += 1
+                # nextcloud is "starting" on the first read, "healthy" thereafter
+                return {"status": "ok", "stdout": _ps_rows("starting" if self.ps_calls == 1 else "healthy")}
+            return {"status": "ok", "stdout": ""}
+
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    runner = StartingThenHealthyRunner()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = worker_config(worker_mod, tmpdir)
+        executor = executor_mod.ArcLinkExecutor(
+            config=executor_mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="local", state_root_base=cfg.state_root_base),
+            secret_resolver=AnySecretResolver(executor_mod),
+            docker_runner=runner,
+        )
+        cfg = worker_mod.SovereignWorkerConfig(
+            **{
+                **cfg.__dict__,
+                "ingress_mode": "tailscale",
+                "base_domain": "worker.example.test",
+                "edge_target": "worker.example.test",
+                "tailscale_dns_name": "worker.example.test",
+                "tailscale_host_strategy": "path",
+                "env": {
+                    **dict(cfg.env),
+                    # Re-enable the poll (the shared worker_config sets it to 0):
+                    "ARCLINK_SOVEREIGN_HANDOFF_READINESS_TIMEOUT_SECONDS": "10",
+                    "ARCLINK_SOVEREIGN_HANDOFF_READINESS_POLL_SECONDS": "1",
+                    "ARCLINK_INGRESS_MODE": "tailscale",
+                    "ARCLINK_TAILSCALE_DNS_NAME": "worker.example.test",
+                    "ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY": "path",
+                },
+            }
+        )
+        results = worker_mod.process_sovereign_batch(conn, worker=cfg, executor=executor)
+
+    expect(results[0]["status"] == "applied", str(results))
+    expect(runner.ps_calls >= 2, f"handoff must POLL ps (starting->healthy), got {runner.ps_calls} call(s)")
+    print("PASS test_handoff_poll_waits_for_slow_nextcloud_then_succeeds")
 
 
 def test_sovereign_worker_blocks_handoff_when_dashboard_is_created() -> None:
@@ -630,6 +701,7 @@ def test_sovereign_worker_blocks_handoff_when_dashboard_is_created() -> None:
                 "tailscale_dns_name": "worker.example.test",
                 "tailscale_host_strategy": "path",
                 "env": {
+                    "ARCLINK_SOVEREIGN_HANDOFF_READINESS_TIMEOUT_SECONDS": "0",
                     **dict(cfg.env),
                     "ARCLINK_INGRESS_MODE": "tailscale",
                     "ARCLINK_TAILSCALE_DNS_NAME": "worker.example.test",
@@ -702,6 +774,7 @@ def _provisioning_gate_worker_cfg(worker_mod, executor_mod, tmpdir):
             "tailscale_dns_name": "worker.example.test",
             "tailscale_host_strategy": "path",
             "env": {
+                    "ARCLINK_SOVEREIGN_HANDOFF_READINESS_TIMEOUT_SECONDS": "0",
                 **dict(cfg.env),
                 "ARCLINK_INGRESS_MODE": "tailscale",
                 "ARCLINK_TAILSCALE_DNS_NAME": "worker.example.test",
@@ -967,6 +1040,7 @@ def test_tailscale_sovereign_worker_skips_cloudflare_dns() -> None:
                 "tailscale_dns_name": "worker.example.test",
                 "tailscale_host_strategy": "path",
                 "env": {
+                    "ARCLINK_SOVEREIGN_HANDOFF_READINESS_TIMEOUT_SECONDS": "0",
                     **dict(cfg.env),
                     "ARCLINK_INGRESS_MODE": "tailscale",
                     "ARCLINK_TAILSCALE_DNS_NAME": "worker.example.test",
@@ -1012,6 +1086,7 @@ def test_private_mesh_sovereign_worker_uses_selected_remote_host_private_dns() -
                 "tailscale_dns_name": "control.tailnet.ts.net",
                 "tailscale_host_strategy": "path",
                 "env": {
+                    "ARCLINK_SOVEREIGN_HANDOFF_READINESS_TIMEOUT_SECONDS": "0",
                     **dict(cfg.env),
                     "ARCLINK_INGRESS_MODE": "tailscale",
                     "ARCLINK_PRIVATE_DNS_NAME": "control.wg.internal",
@@ -1193,6 +1268,7 @@ def test_tailnet_port_allocation_ignores_released_deployments() -> None:
                 "tailscale_dns_name": "worker.example.test",
                 "tailscale_host_strategy": "path",
                 "env": {
+                    "ARCLINK_SOVEREIGN_HANDOFF_READINESS_TIMEOUT_SECONDS": "0",
                     **dict(cfg.env),
                     "ARCLINK_INGRESS_MODE": "tailscale",
                     "ARCLINK_TAILSCALE_DNS_NAME": "worker.example.test",
@@ -1234,6 +1310,7 @@ def test_tailnet_port_allocation_avoids_same_worker_deployment_ports() -> None:
                 "tailscale_dns_name": "worker.example.test",
                 "tailscale_host_strategy": "path",
                 "env": {
+                    "ARCLINK_SOVEREIGN_HANDOFF_READINESS_TIMEOUT_SECONDS": "0",
                     **dict(cfg.env),
                     "ARCLINK_INGRESS_MODE": "tailscale",
                     "ARCLINK_TAILSCALE_DNS_NAME": "worker.example.test",
@@ -1280,6 +1357,7 @@ def test_tailnet_port_allocation_avoids_live_worker_ports_missing_from_db() -> N
                 "tailscale_dns_name": "worker.example.test",
                 "tailscale_host_strategy": "path",
                 "env": {
+                    "ARCLINK_SOVEREIGN_HANDOFF_READINESS_TIMEOUT_SECONDS": "0",
                     **dict(cfg.env),
                     "ARCLINK_INGRESS_MODE": "tailscale",
                     "ARCLINK_TAILSCALE_DNS_NAME": "worker.example.test",
@@ -1329,6 +1407,7 @@ def test_tailnet_port_allocation_reassigns_existing_conflicting_port() -> None:
                 "tailscale_dns_name": "worker.example.test",
                 "tailscale_host_strategy": "path",
                 "env": {
+                    "ARCLINK_SOVEREIGN_HANDOFF_READINESS_TIMEOUT_SECONDS": "0",
                     **dict(cfg.env),
                     "ARCLINK_INGRESS_MODE": "tailscale",
                     "ARCLINK_TAILSCALE_DNS_NAME": "worker.example.test",
@@ -2042,6 +2121,7 @@ if __name__ == "__main__":
     test_teardown_refreshes_sibling_crew_dashboard_switchers()
     test_fake_sovereign_worker_applies_ready_deployment()
     test_live_sovereign_worker_reconciles_compose_ps_health()
+    test_handoff_poll_waits_for_slow_nextcloud_then_succeeds()
     test_sovereign_worker_blocks_handoff_when_dashboard_is_created()
     test_provisioning_post_health_error_on_serving_pod_does_not_page()
     test_provisioning_exhausted_without_runtime_pages_once()

@@ -13,6 +13,7 @@ import fcntl
 import hashlib
 import json
 import os
+import time
 import secrets
 import shutil
 import socket
@@ -1074,6 +1075,50 @@ def process_sovereign_deployment(
 ARCLINK_SERVICE_RUNTIME_INDETERMINATE = "unknown"
 _RUNTIME_SERVING_STATES = {"healthy", "running", "ready", "active"}
 
+# Handoff readiness poll. ``docker compose up`` returns when containers START, not
+# when they are HEALTHY. A fresh ArcPod's Nextcloud (PHP + its own healthcheck +
+# Postgres + Redis) takes 2-3 min to go healthy, so an immediate post-apply
+# snapshot ALWAYS sees nextcloud="starting" and falsely fails the handoff -- the
+# Captain sees "0/N ready, needs repair" even though the pod is fine and comes up
+# moments later. We re-read the LIVE ``compose ps`` status on a bounded poll so a
+# slow-but-fine cold start is given time; only a service still blocking AFTER the
+# deadline fails the handoff. Env-tunable.
+_HANDOFF_READINESS_DEADLINE_DEFAULT_SECONDS = 300
+_HANDOFF_READINESS_POLL_DEFAULT_SECONDS = 10
+_HANDOFF_SERVICE_BLOCKER_STATUSES = {
+    "failed",
+    "unhealthy",
+    "missing",
+    "starting",
+    ARCLINK_SERVICE_RUNTIME_INDETERMINATE,
+}
+
+
+def _handoff_service_blockers(service_statuses: Mapping[str, str]) -> dict[str, str]:
+    return {
+        service: status
+        for service, status in service_statuses.items()
+        if status in _HANDOFF_SERVICE_BLOCKER_STATUSES
+    }
+
+
+def _handoff_readiness_deadline_seconds(worker: "SovereignWorkerConfig") -> int:
+    raw = str((worker.env or {}).get("ARCLINK_SOVEREIGN_HANDOFF_READINESS_TIMEOUT_SECONDS") or "").strip()
+    try:
+        value = int(raw) if raw else _HANDOFF_READINESS_DEADLINE_DEFAULT_SECONDS
+    except ValueError:
+        value = _HANDOFF_READINESS_DEADLINE_DEFAULT_SECONDS
+    return max(0, value)
+
+
+def _handoff_readiness_poll_seconds(worker: "SovereignWorkerConfig") -> int:
+    raw = str((worker.env or {}).get("ARCLINK_SOVEREIGN_HANDOFF_READINESS_POLL_SECONDS") or "").strip()
+    try:
+        value = int(raw) if raw else _HANDOFF_READINESS_POLL_DEFAULT_SECONDS
+    except ValueError:
+        value = _HANDOFF_READINESS_POLL_DEFAULT_SECONDS
+    return max(1, value)
+
 # Sentinel for "no runtime snapshot was passed" -- distinct from a snapshot whose
 # value is None (INDETERMINATE). Without this we could not tell "caller did not
 # pass a snapshot, read live health" apart from "caller passed an indeterminate
@@ -1824,21 +1869,35 @@ def _apply_deployment(
         docker_result=docker_result,
     )
     if _truthy(str(worker.env.get("ARCLINK_SOVEREIGN_HANDOFF_REQUIRES_HEALTHY_SERVICES") or "1")):
-        blockers = {
-            service: status
-            for service, status in service_statuses.items()
-            # ``unknown`` (BUG #2 indeterminate -- compose up ok but ps inspection
-            # failed) also blocks handoff: we cannot confirm the pod is ready, so we
-            # must not hand off (false silence on handoff is acceptable). This raise
-            # lands in the except-block, where the durable-runtime snapshot reports
-            # the runtime as indeterminate (None) so the exhausted gate RETAINS the
-            # placement and does NOT page -- never released/paged on an unreadable
-            # runtime.
-            if status in {"failed", "unhealthy", "missing", "starting", ARCLINK_SERVICE_RUNTIME_INDETERMINATE}
-        }
+        # ``unknown`` (BUG #2 indeterminate -- compose up ok but ps inspection
+        # failed), ``starting`` (healthcheck not yet passed), and the genuine
+        # failure states all block handoff. But ``docker compose up`` returns when
+        # containers START, not when they are HEALTHY: a fresh Nextcloud takes
+        # 2-3 min to go healthy, so the FIRST snapshot always shows it "starting"
+        # and falsely fails the handoff ("needs repair"). Re-read the LIVE
+        # ``compose ps`` status on a bounded poll so a slow-but-fine cold start is
+        # given time; a still-blocking service AFTER the deadline genuinely fails
+        # and lands in the except-block, where the durable-runtime snapshot reports
+        # indeterminate so the exhausted gate RETAINS the placement and does NOT
+        # page on an unreadable runtime.
+        readiness_deadline = _handoff_readiness_deadline_seconds(worker)
+        poll_interval = _handoff_readiness_poll_seconds(worker)
+        waited = 0.0
+        blockers = _handoff_service_blockers(service_statuses)
+        while blockers and waited < readiness_deadline:
+            time.sleep(min(float(poll_interval), max(0.0, readiness_deadline - waited)))
+            waited += poll_interval
+            service_statuses = _record_service_status_after_compose(
+                conn,
+                deployment_id=deployment_id,
+                job_id=str(job["job_id"]),
+                executor=selected_executor,
+                docker_result=docker_result,
+            )
+            blockers = _handoff_service_blockers(service_statuses)
         if blockers:
             raise ArcLinkSovereignWorkerError(
-                "ArcLink deployment compose services are not ready for handoff: "
+                f"ArcLink deployment compose services are not ready for handoff after {int(waited)}s: "
                 + ", ".join(f"{service}={status}" for service, status in sorted(blockers.items()))
             )
     if _truthy(str(worker.env.get("ARCLINK_SOVEREIGN_HANDOFF_REQUIRES_HERMES_HOME_READY") or "1")):

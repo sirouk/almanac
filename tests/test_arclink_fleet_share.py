@@ -275,10 +275,14 @@ def test_member_working_copy_seeds_fleet_shared_resource_layout() -> None:
     runner = fleet.SubprocessGitRunner()
     fleet.ensure_hub_repo(runner, hub)
     fleet.ensure_member_working_copy(runner, hub_ref=hub, working_path=str(working))
-    expected = {"Projects", "Research", "Repos", "Agents_KB", "Agents_Skills", "Agents_Plugins"}
+    # Fleet holds ONLY the shared libraries; per-agent work folders (Projects, Repos,
+    # Research) must NOT be seeded into the shared root (no Fleet/Workspace duplication).
+    expected = {"Agents_KB", "Agents_Skills", "Agents_Plugins"}
     for dirname in expected:
         readme = working / dirname / "README.md"
         expect(readme.is_file(), f"missing Fleet layout readme: {dirname}")
+    for absent in ("Projects", "Repos", "Research"):
+        expect(not (working / absent).exists(), f"Fleet must not seed per-agent work folder: {absent}")
     fleet.sync_member(runner, working_path=str(working), hub_ref=hub, deployment_id="dep_a")
     clone = tmp / "agent_b"
     fleet.ensure_member_working_copy(runner, hub_ref=hub, working_path=str(clone))

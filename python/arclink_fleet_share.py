@@ -46,10 +46,11 @@ DEFAULT_HUB_ROOT = "/arcdata/captains"
 _GIT_TIMEOUT_SECONDS = 120
 _SEGMENT_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _GIT_REMOTE_HELPER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*::")
+# Fleet holds ONLY the shared libraries (Agents_KB / Agents_Skills / Agents_Plugins).
+# Projects, Repos, and Research are per-agent WORKSPACE folders -- they live in one
+# agent's Workspace at a time and must NOT be seeded into the shared Fleet root, or
+# the Drive UI shows the same folders duplicated under both Fleet and Workspace.
 FLEET_LAYOUT_READMES = {
-    "Projects": "Shared project workspaces for the Captain's fleet. Prefer one folder per collaborative project.\n",
-    "Research": "Fleet-wide research notes, source maps, and durable findings that multiple agents can reuse.\n",
-    "Repos": "Fleet-visible repository notes and managed mirrors. Avoid concurrent edits inside the same repo without pulling first.\n",
     "Agents_KB": "Fleet-wide agent knowledge base material, including shared operating references and reusable role notes.\n",
     "Agents_Skills": "Fleet-shared Hermes skill workspaces. Contributing agents may enable skills explicitly in their own Hermes config.\n",
     "Agents_Plugins": "Fleet-shared plugin notes and rollout records. Runtime plugin enablement remains per agent.\n",

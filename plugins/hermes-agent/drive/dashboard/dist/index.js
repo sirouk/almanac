@@ -657,21 +657,28 @@
       loadTreeNode(rootId, folder);
     }
 
-    function refreshFolder(rootId, path) {
+    function refreshFolder(rootId, path, options) {
       const folder = normalizeFolder(path || state.path || "/");
       const activeRoot = rootId || state.root;
       loadTreeNode(activeRoot, folder);
       loadTreeNode(activeRoot, parentPath(folder));
-      loadItems(folder, state.query, activeRoot);
+      loadItems(folder, state.query, activeRoot, options);
     }
 
-    function loadItems(nextPath, nextQuery, nextRoot) {
+    function loadItems(nextPath, nextQuery, nextRoot, options) {
       const targetPath = nextPath || state.path;
       const targetRoot = nextRoot || state.root;
       const query = typeof nextQuery === "string" ? nextQuery : state.query;
       const token = listRequestToken.current + 1;
       listRequestToken.current = token;
-      patch({ loading: true, root: targetRoot, path: targetPath, location: "files", query: query, errorMessage: "" });
+      // A "silent" refresh (e.g. after drag-drop upload/move) re-fetches the listing
+      // in place WITHOUT flipping the loading flag, so the view does not blank out and
+      // re-render -- the dropped items just appear. The non-silent path keeps the
+      // loading state for explicit navigation.
+      const silent = !!(options && options.silent);
+      patch(silent
+        ? { root: targetRoot, path: targetPath, location: "files", query: query, errorMessage: "" }
+        : { loading: true, root: targetRoot, path: targetPath, location: "files", query: query, errorMessage: "" });
       const params = new URLSearchParams({ path: targetPath, query: query });
       if (targetRoot) params.set("root", targetRoot);
       fetchJSON(api("/items?" + params.toString()))
@@ -911,26 +918,48 @@
       fetchJSON(api("/upload"), { method: "POST", body: body })
         .then(function () {
           patch({ busy: false });
-          refreshFolder(rootId, targetFolder);
+          refreshFolder(rootId, targetFolder, { silent: true });
         })
         .catch(function (error) {
           patch({ busy: false, errorMessage: error.message || "Upload failed" });
         });
     }
 
+    // New File / New Folder land in the folder you are working in: the SELECTED
+    // folder if one is highlighted, otherwise the currently OPEN folder -- never
+    // silently at the root of Workspace. After creating, navigate into that folder
+    // so the new item is visible.
+    function writeTargetFolder() {
+      const sel = state.selected;
+      if (
+        sel &&
+        sel.kind === "folder" &&
+        !sel.trashed &&
+        !sel.root_overview &&
+        itemRoot(sel) === state.root &&
+        typeof sel.path === "string" &&
+        sel.path
+      ) {
+        return { root: itemRoot(sel), path: sel.path };
+      }
+      return { root: state.root, path: state.path };
+    }
+
     function createFolder() {
+      const target = writeTargetFolder();
       const name = (window.prompt("Folder name") || "").trim();
       if (!name) return;
-      requestJSON("/mkdir", { root: state.root, path: state.path, name: name }).then(function (data) {
-        if (data) refreshFolder(state.root, state.path);
+      requestJSON("/mkdir", { root: target.root, path: target.path, name: name }).then(function (data) {
+        if (data) selectFolder(target.root, target.path);
       });
     }
 
     function createFile() {
+      const target = writeTargetFolder();
       const name = (window.prompt("File name") || "").trim();
       if (!name) return;
-      requestJSON("/new-file", { root: state.root, path: state.path, name: name, content: "" }).then(function (data) {
-        if (data) refreshFolder(state.root, state.path);
+      requestJSON("/new-file", { root: target.root, path: target.path, name: name, content: "" }).then(function (data) {
+        if (data) selectFolder(target.root, target.path);
       });
     }
 
@@ -974,7 +1003,7 @@
           return;
         }
         requestJSON("/move", { root: itemRoot(item), path: item.path, destination_path: destination }).then(function (data) {
-          if (data) refreshFolder(itemRoot(item), state.path);
+          if (data) refreshFolder(itemRoot(item), state.path, { silent: true });
         });
       });
     }

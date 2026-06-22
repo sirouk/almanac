@@ -47,6 +47,7 @@ from arclink_control import (
 )
 from arclink_control import _notification_token_guard_sql
 from arclink_discord import discord_create_dm_channel, discord_edit_message, discord_send_message
+from arclink_fleet import fleet_host_ssh_endpoint, fleet_host_ssh_user, host_is_control_plane_reserve
 from arclink_http import http_request
 from arclink_telegram import telegram_edit_message_text, telegram_send_message
 from arclink_broker_signing import sign_broker_request
@@ -866,13 +867,155 @@ def _gateway_exec_broker_request(
     payload: dict[str, Any],
     timeout_seconds: int,
 ) -> dict[str, Any]:
-    return {
+    request: dict[str, Any] = {
         "deployment_id": str(deployment_id or "").strip(),
         "prefix": str(prefix or "").strip(),
         "project_name": str(project_name or "").strip(),
         "payload": payload,
         "timeout_seconds": int(timeout_seconds),
     }
+    # Placement-aware bridge: the gateway-exec-broker owns LOCAL (control-node)
+    # Docker exec authority and is network-isolated, so it can only reach pods on
+    # the control node. A Scale Captain's pod is normally placed on a FLEET WORKER
+    # (the control node has only a couple of slots), where the broker cannot reach
+    # it -- the bridge then fails forever ("exit status 1") and the Captain answers
+    # zero public messages. When the pod is on a worker, attach the SSH target so
+    # the delivery worker runs the bridge IN the pod over the same fleet SSH
+    # transport the provisioner uses to deploy there; control-node pods keep using
+    # the isolated broker untouched.
+    remote = _deployment_remote_bridge_target(request["deployment_id"], request["prefix"])
+    if remote:
+        request["_remote_bridge"] = remote
+    return request
+
+
+def _deployment_remote_bridge_target(deployment_id: str, prefix: str) -> dict[str, str] | None:
+    """Return the SSH target + worker-side compose paths when this deployment's pod
+    is placed on a FLEET WORKER (not the control node); else None (use the local
+    broker). None is also returned when the fleet SSH key is unavailable so the
+    local path stays the default and nothing regresses for control-node pods.
+    """
+    deployment_id = str(deployment_id or "").strip()
+    if not deployment_id:
+        return None
+    key_path = config_env_value("ARCLINK_FLEET_SSH_KEY_PATH", "").strip()
+    if not key_path or not Path(key_path).is_file():
+        return None
+    try:
+        cfg = Config.from_env()
+        with _db_session(cfg) as conn:
+            row = conn.execute(
+                """
+                SELECT h.*
+                FROM arclink_deployment_placements p
+                JOIN arclink_fleet_hosts h ON h.host_id = p.host_id
+                WHERE p.deployment_id = ? AND p.status = 'active'
+                ORDER BY p.placed_at DESC
+                LIMIT 1
+                """,
+                (deployment_id,),
+            ).fetchone()
+    except Exception:
+        return None
+    if row is None:
+        return None
+    host = dict(row)
+    # The control node is the only host the local broker can reach; everything else
+    # is a remote worker. host_is_control_plane_reserve marks the control node.
+    if host_is_control_plane_reserve(host):
+        return None
+    ssh_host = fleet_host_ssh_endpoint(host)
+    if not ssh_host or ssh_host in {"localhost", "127.0.0.1", "::1"}:
+        return None
+    state_base = (config_env_value("ARCLINK_STATE_ROOT_BASE", "/arcdata/deployments") or "/arcdata/deployments").rstrip("/")
+    root = f"{state_base}/{deployment_id}-{prefix}" if prefix else f"{state_base}/{deployment_id}"
+    return {
+        "ssh_user": fleet_host_ssh_user(host),
+        "ssh_host": ssh_host,
+        "key_path": key_path,
+        "known_hosts": config_env_value("ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE", "").strip(),
+        "project_name": _compose_project_name(deployment_id),
+        "env_file": f"{root}/config/arclink.env",
+        "compose_file": f"{root}/config/compose.yaml",
+    }
+
+
+def _run_remote_bridge_over_ssh(request_body: dict[str, Any]) -> tuple[bool, str]:
+    """Run the public-agent bridge IN a worker-placed pod over SSH (the broker is
+    control-node-only). The bridge bot token rides on stdin -- never argv -- exactly
+    as in the local path. The bridge's structured {"delivered": ...} JSON on stdout
+    is parsed with the SAME delivery-result semantics as the broker path.
+    """
+    target = request_body.get("_remote_bridge") or {}
+    payload = request_body.get("payload") or {}
+    ssh_host = str(target.get("ssh_host") or "").strip()
+    ssh_user = str(target.get("ssh_user") or "arclink").strip() or "arclink"
+    key_path = str(target.get("key_path") or "").strip()
+    project_name = str(target.get("project_name") or "").strip()
+    env_file = str(target.get("env_file") or "").strip()
+    compose_file = str(target.get("compose_file") or "").strip()
+    if not (ssh_host and key_path and project_name and env_file and compose_file):
+        return False, "Hermes public gateway bridge (worker) target is incomplete"
+    ssh_opts = [
+        "-i", key_path,
+        "-o", "BatchMode=yes",
+        "-o", "IdentitiesOnly=yes",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "ConnectTimeout=15",
+        "-o", "ServerAliveInterval=15",
+        "-o", "ServerAliveCountMax=4",
+    ]
+    known_hosts = str(target.get("known_hosts") or "").strip()
+    if known_hosts:
+        ssh_opts += ["-o", f"UserKnownHostsFile={known_hosts}"]
+    remote_cmd = [
+        "docker", "compose", "-p", project_name,
+        "--env-file", env_file, "-f", compose_file,
+        "exec", "-T", "hermes-gateway",
+        PUBLIC_AGENT_BRIDGE_PYTHON, PUBLIC_AGENT_BRIDGE_SCRIPT,
+    ]
+    cmd = ["ssh", *ssh_opts, f"{ssh_user}@{ssh_host}", *remote_cmd]
+    timeout_seconds = _int_env("ARCLINK_GATEWAY_EXEC_BROKER_TIMEOUT_SECONDS", 240, minimum=15, maximum=900)
+    raw_timeout = request_body.get("timeout_seconds")
+    try:
+        timeout_seconds = max(timeout_seconds, min(86400, int(raw_timeout) + 30))
+    except (TypeError, ValueError):
+        pass
+    try:
+        proc = subprocess.run(
+            cmd,
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "Hermes public gateway bridge (worker) timed out before the turn completed"
+    except Exception as exc:  # noqa: BLE001 - surface a generic, non-leaking message
+        return False, f"Hermes public gateway bridge (worker) could not start: {str(exc)[:160]}"
+    parsed: dict[str, Any] = {}
+    for line in reversed(str(proc.stdout or "").splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            candidate = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, dict) and ("delivered" in candidate or "ok" in candidate or "error" in candidate):
+            parsed = candidate
+            break
+    if proc.returncode == 0 and parsed.get("ok") is True:
+        result = public_agent_bridge_delivery_result(parsed)
+        if result.get("delivered") is True:
+            return True, ""
+        if _public_agent_bridge_should_hold_for_reconciliation(result):
+            return False, _public_agent_bridge_unconfirmed_error(result)
+        return False, _public_agent_bridge_delivery_error(result, label="Hermes public gateway bridge")
+    structured = str(parsed.get("error") or "").strip()
+    if structured:
+        return False, structured[:500]
+    return False, f"Hermes public gateway bridge (worker) failed with exit status {proc.returncode}"
 
 
 def _operator_gateway_exec_broker_request(
@@ -972,6 +1115,12 @@ def _is_public_agent_bridge_unconfirmed(error: Any) -> bool:
 
 
 def _run_gateway_exec_broker_request(request_body: dict[str, Any]) -> tuple[bool, str]:
+    # Placement-aware path: a worker-placed pod (the broker cannot reach it) carries
+    # a resolved SSH target -- run the bridge there directly instead of POSTing to the
+    # control-node-only broker. Both the synchronous and detached worker paths route
+    # through here, so this covers both.
+    if request_body.get("_remote_bridge"):
+        return _run_remote_bridge_over_ssh(request_body)
     broker_url = _gateway_exec_broker_url()
     if not broker_url:
         return False, "gateway exec broker URL is not configured"

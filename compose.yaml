@@ -1088,6 +1088,11 @@ services:
       - ./arclink-priv/published:/home/arclink/arclink/arclink-priv/published
       - ./arclink-priv/quarto:/home/arclink/arclink/arclink-priv/quarto
       - ./arclink-priv/secrets/container:/home/arclink/arclink/arclink-priv/secrets
+      # Read-only fleet SSH key so the delivery worker can run the public-agent
+      # bridge IN a Captain pod that is placed on a FLEET WORKER (the gateway-exec
+      # broker is control-node-only and network-isolated, so it cannot reach
+      # worker pods). Same key + transport the provisioner uses to deploy there.
+      - ./arclink-priv/secrets/ssh:/home/arclink/arclink/arclink-priv/secrets/ssh:ro
       - arclink-qmd:/home/arclink/.qmd
       - ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
     command: ["./bin/docker-job-loop.sh", "notification-delivery", "1", "./bin/arclink-notification-delivery.sh"]

@@ -4983,7 +4983,82 @@ def test_dedicated_public_agent_loop_does_not_count_delivered_on_no_op_write() -
             os.environ.update(old_env)
 
 
+def test_worker_placed_pod_bridges_over_ssh_with_token_on_stdin() -> None:
+    # Regression: a Captain pod placed on a FLEET WORKER cannot be reached by the
+    # control-node-only gateway-exec broker. When the broker request carries a
+    # resolved _remote_bridge SSH target, _run_gateway_exec_broker_request must run
+    # the bridge over SSH (NOT POST to the broker), keep the bot token on stdin (not
+    # argv), and map the bridge's structured result the same way as the broker path.
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_remote_bridge_test")
+    captured: dict[str, object] = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = 'noisy plugin line\n{"delivered": true, "delivery_status": "confirmed", "ok": true, "message_ids": ["42"]}\n'
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["input"] = kwargs.get("input")
+        return _Proc()
+
+    original_run = delivery.subprocess.run
+    delivery.subprocess.run = fake_run
+    try:
+        request = {
+            "deployment_id": "arcdep_x",
+            "prefix": "p",
+            "project_name": "arclink-arcdep_x",
+            "payload": {"bot_token": "SECRET-TOKEN", "text": "hi", "platform": "telegram"},
+            "timeout_seconds": 7200,
+            "_remote_bridge": {
+                "ssh_user": "arclink",
+                "ssh_host": "10.44.0.12",
+                "key_path": "/k/id_ed25519",
+                "known_hosts": "/k/known_hosts",
+                "project_name": "arclink-arcdep_x",
+                "env_file": "/arcdata/deployments/arcdep_x-p/config/arclink.env",
+                "compose_file": "/arcdata/deployments/arcdep_x-p/config/compose.yaml",
+            },
+        }
+        ok, error = delivery._run_gateway_exec_broker_request(request)
+        expect(ok is True and error == "", f"remote bridge should deliver: {(ok, error)}")
+        cmd = captured["cmd"]
+        joined = " ".join(cmd)
+        expect(cmd[0] == "ssh", f"must invoke ssh: {cmd}")
+        expect("arclink@10.44.0.12" in cmd, f"must target the worker: {cmd}")
+        expect("hermes-gateway" in cmd and "exec" in cmd, f"must compose-exec the gateway: {cmd}")
+        expect("SECRET-TOKEN" not in joined, "bot token must NEVER appear in argv")
+        expect(json.loads(captured["input"])["bot_token"] == "SECRET-TOKEN", "bot token must ride on stdin")
+
+        # Non-zero exit with no structured error -> generic failure (not a false success).
+        class _Fail:
+            returncode = 1
+            stdout = "garbage\n"
+            stderr = "boom"
+
+        delivery.subprocess.run = lambda cmd, **kwargs: _Fail()
+        ok2, error2 = delivery._run_gateway_exec_broker_request(request)
+        expect(ok2 is False and "exit status 1" in error2, f"failure should surface: {(ok2, error2)}")
+
+        # Structured bridge error is surfaced verbatim.
+        class _Err:
+            returncode = 1
+            stdout = '{"ok": false, "error": "bad chat id"}\n'
+            stderr = ""
+
+        delivery.subprocess.run = lambda cmd, **kwargs: _Err()
+        ok3, error3 = delivery._run_gateway_exec_broker_request(request)
+        expect(ok3 is False and error3 == "bad chat id", f"structured error should surface: {(ok3, error3)}")
+    finally:
+        delivery.subprocess.run = original_run
+    print("PASS test_worker_placed_pod_bridges_over_ssh_with_token_on_stdin")
+
+
 def main() -> int:
+    test_worker_placed_pod_bridges_over_ssh_with_token_on_stdin()
     test_discord_operator_delivery_supports_channel_ids()
     test_public_bot_user_delivery_supports_telegram_and_discord_dm()
     test_captain_wrapped_delivery_uses_public_channel_and_marks_report_delivered()

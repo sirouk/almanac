@@ -5052,6 +5052,18 @@ def test_worker_placed_pod_bridges_over_ssh_with_token_on_stdin() -> None:
         delivery.subprocess.run = lambda cmd, **kwargs: _Err()
         ok3, error3 = delivery._run_gateway_exec_broker_request(request)
         expect(ok3 is False and error3 == "bad chat id", f"structured error should surface: {(ok3, error3)}")
+
+        # ssh exit 255 is a TRANSPORT failure (host unreachable / key rejected), not a
+        # bridge turn failure -- it must be surfaced distinctly so a fleet/SSH problem
+        # is diagnosable (review hardening).
+        class _Ssh255:
+            returncode = 255
+            stdout = ""
+            stderr = "ssh: connect to host x port 22: No route to host"
+
+        delivery.subprocess.run = lambda cmd, **kwargs: _Ssh255()
+        ok4, error4 = delivery._run_gateway_exec_broker_request(request)
+        expect(ok4 is False and "SSH transport" in error4, f"ssh 255 should be classified: {(ok4, error4)}")
     finally:
         delivery.subprocess.run = original_run
     print("PASS test_worker_placed_pod_bridges_over_ssh_with_token_on_stdin")

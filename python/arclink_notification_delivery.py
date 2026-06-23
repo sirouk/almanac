@@ -388,6 +388,14 @@ PUBLIC_AGENT_BRIDGE_ROOT_WRAPPER_SCRIPT = "/home/arclink/arclink/python/arclink_
 PUBLIC_AGENT_BRIDGE_ROOT_USER = "0:0"
 PUBLIC_AGENT_BRIDGE_CONTAINER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 PUBLIC_AGENT_BRIDGE_PROJECT_RE = re.compile(r"^arclink(?:-[a-z0-9][a-z0-9_-]{0,80})?$")
+# DiD for the worker-pod SSH bridge: deployment_id/prefix feed the remote compose/env
+# file PATHS, and ssh_user/ssh_host feed the ssh argv. They are system-generated and
+# DB-sourced, but delivery trusts queued extra_json + fleet-host metadata, so we
+# revalidate at the boundary. Path segments forbid dots (no "..") and slashes; SSH
+# fields must START alphanumeric so a value can never be read as an ssh option.
+_BRIDGE_PATH_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+_BRIDGE_SSH_HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,253}$")
+_BRIDGE_SSH_USER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 GATEWAY_EXEC_BROKER_TOKEN_HEADER = "X-ArcLink-Gateway-Exec-Token"
 
 # --- Operator hiccup: public-Agent bridge TERMINAL delivery failure ---------
@@ -896,10 +904,10 @@ def _deployment_remote_bridge_target(deployment_id: str, prefix: str) -> dict[st
     local path stays the default and nothing regresses for control-node pods.
     """
     deployment_id = str(deployment_id or "").strip()
-    if not deployment_id:
+    prefix = str(prefix or "").strip()
+    if not deployment_id or not _BRIDGE_PATH_SEGMENT_RE.fullmatch(deployment_id):
         return None
-    key_path = config_env_value("ARCLINK_FLEET_SSH_KEY_PATH", "").strip()
-    if not key_path or not Path(key_path).is_file():
+    if prefix and not _BRIDGE_PATH_SEGMENT_RE.fullmatch(prefix):
         return None
     try:
         cfg = Config.from_env()
@@ -917,6 +925,7 @@ def _deployment_remote_bridge_target(deployment_id: str, prefix: str) -> dict[st
             ).fetchone()
     except Exception:
         return None
+    # No active placement -> treat as control-node-local (the broker is correct).
     if row is None:
         return None
     host = dict(row)
@@ -924,13 +933,39 @@ def _deployment_remote_bridge_target(deployment_id: str, prefix: str) -> dict[st
     # is a remote worker. host_is_control_plane_reserve marks the control node.
     if host_is_control_plane_reserve(host):
         return None
+    # Worker-placed pod: the control-node broker CANNOT reach it, so the SSH path is
+    # required. If we cannot build a usable, validated SSH target, do NOT silently
+    # fall back to the broker (it would fail opaquely and retry forever) -- log the
+    # specific reason so the misconfiguration is diagnosable.
     ssh_host = fleet_host_ssh_endpoint(host)
+    ssh_user = fleet_host_ssh_user(host)
+    key_path = config_env_value("ARCLINK_FLEET_SSH_KEY_PATH", "").strip()
+    unreachable = ""
     if not ssh_host or ssh_host in {"localhost", "127.0.0.1", "::1"}:
+        unreachable = "no usable SSH endpoint"
+    elif not _BRIDGE_SSH_HOST_RE.fullmatch(ssh_host):
+        unreachable = "invalid SSH endpoint"
+    elif not _BRIDGE_SSH_USER_RE.fullmatch(ssh_user or ""):
+        unreachable = "invalid SSH user"
+    elif not key_path or not Path(key_path).is_file():
+        unreachable = "fleet SSH key unavailable"
+    if unreachable:
+        _append_public_agent_bridge_log(
+            json.dumps(
+                {
+                    "event": "public_agent_bridge_worker_unreachable",
+                    "deployment_id": deployment_id,
+                    "host_id": str(host.get("host_id") or ""),
+                    "reason": unreachable,
+                },
+                sort_keys=True,
+            )
+        )
         return None
     state_base = (config_env_value("ARCLINK_STATE_ROOT_BASE", "/arcdata/deployments") or "/arcdata/deployments").rstrip("/")
     root = f"{state_base}/{deployment_id}-{prefix}" if prefix else f"{state_base}/{deployment_id}"
     return {
-        "ssh_user": fleet_host_ssh_user(host),
+        "ssh_user": ssh_user,
         "ssh_host": ssh_host,
         "key_path": key_path,
         "known_hosts": config_env_value("ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE", "").strip(),
@@ -1015,6 +1050,11 @@ def _run_remote_bridge_over_ssh(request_body: dict[str, Any]) -> tuple[bool, str
     structured = str(parsed.get("error") or "").strip()
     if structured:
         return False, structured[:500]
+    # Exit 255 is ssh's own transport failure (host unreachable / key rejected / auth)
+    # -- the bridge never ran, so there is no structured output. Surface it distinctly
+    # from a real in-pod bridge failure so a fleet/SSH problem is diagnosable.
+    if proc.returncode == 255:
+        return False, "Hermes public gateway bridge (worker): SSH transport to the worker host failed (unreachable or key rejected)"
     return False, f"Hermes public gateway bridge (worker) failed with exit status {proc.returncode}"
 
 

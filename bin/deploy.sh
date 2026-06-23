@@ -8504,7 +8504,7 @@ operator_upgrade_host_runner_interval() {
 }
 
 install_control_operator_upgrade_host_runner_timer() {
-  local docker_env="" interval="" service_file="" timer_file=""
+  local docker_env="" interval="" service_file="" timer_file="" deploy_key_trusted_uid=""
 
   if [[ ! -d /run/systemd/system ]] || ! command_exists systemctl; then
     return 0
@@ -8513,6 +8513,18 @@ install_control_operator_upgrade_host_runner_timer() {
   interval="$(operator_upgrade_host_runner_interval)"
   service_file="/etc/systemd/system/arclink-operator-upgrade-host-runner.service"
   timer_file="/etc/systemd/system/arclink-operator-upgrade-host-runner.timer"
+
+  # The upstream deploy key is legitimately owned by the configured deploy-key user
+  # (deploy.sh creates + chmods it as that user via run_as_user), but the host runner
+  # runs as root and its key-ownership confinement excludes the arclink account by
+  # default. Declare the deploy-key user's uid as a HOST-IMMUTABLE trusted uid in the
+  # systemd unit (root-written; the arclink user cannot alter it) so the root host
+  # runner accepts the legitimate key. The URL allowlist remains the load-bearing
+  # control. Left blank (harmless: the runner skips empty entries) when no SSH deploy
+  # key is configured.
+  if [[ "${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}" == "1" ]]; then
+    deploy_key_trusted_uid="$(id -u "${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-$(upstream_deploy_key_user_default)}" 2>/dev/null || true)"
+  fi
 
   cat >"$service_file" <<EOF
 [Unit]
@@ -8527,6 +8539,7 @@ Environment=ARCLINK_OPERATOR_UPGRADE_HOST_REPO_DIR=$BOOTSTRAP_DIR
 Environment=ARCLINK_OPERATOR_UPGRADE_HOST_PRIV_DIR=$BOOTSTRAP_DIR/arclink-priv
 Environment=ARCLINK_OPERATOR_UPGRADE_HOST_QUEUE_DIR=$BOOTSTRAP_DIR/arclink-priv/state/operator-upgrade-host-runner
 Environment=ARCLINK_CONFIG_FILE=$docker_env
+Environment=ARCLINK_OPERATOR_UPGRADE_HOST_DEPLOY_KEY_TRUSTED_UIDS=$deploy_key_trusted_uid
 ExecStart=$BOOTSTRAP_DIR/bin/arclink-operator-upgrade-host-runner.sh --once
 EOF
 

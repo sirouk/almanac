@@ -305,6 +305,33 @@ def test_url_normalization_accepts_dot_git_and_trailing_slash_equivalence() -> N
     print("PASS test_url_normalization_accepts_dot_git_and_trailing_slash_equivalence")
 
 
+def test_normalize_repo_url_treats_ssh_and_https_of_same_repo_as_equal() -> None:
+    # Rename regression: the configured/queued upstream is the SSH form (deploy key)
+    # while the compiled-in canonical is HTTPS. The host runner refused a legitimate
+    # upgrade ("upstream repo URL is not allowlisted") because the SSH and HTTPS forms
+    # of the SAME repo did not compare equal. They must now canonicalize identically --
+    # while a different host/owner/repo must STILL never match.
+    runner = load_runner()
+    n = runner._normalize_repo_url
+    canonical = n(runner.CANONICAL_UPSTREAM_REPO_URL)
+    expect(canonical == "github.com/sirouk/arclink", f"canonical normalized form: {canonical}")
+    for same in (
+        "git@github.com:sirouk/arclink.git",
+        "https://github.com/sirouk/arclink.git",
+        "ssh://git@github.com/sirouk/arclink.git",
+        "https://github.com/sirouk/arclink/",
+    ):
+        expect(n(same) == canonical, f"same repo must match canonical: {same} -> {n(same)}")
+    for evil in (
+        "git@evil.com:sirouk/arclink.git",
+        "git@github.com:attacker/arclink.git",
+        "git@github.com:sirouk/almanac.git",
+        "https://github.com/sirouk/arclink-fork.git",
+    ):
+        expect(n(evil) != canonical, f"different repo must NOT match canonical: {evil} -> {n(evil)}")
+    print("PASS test_normalize_repo_url_treats_ssh_and_https_of_same_repo_as_equal")
+
+
 def test_rejects_request_url_equal_to_poisoned_git_origin() -> None:
     """ROUND-2 fix 1: a poisoned git origin must NOT authorize a queued upstream override.
 
@@ -488,6 +515,7 @@ def main() -> int:
     test_accepts_legit_broker_shaped_request()
     test_rejects_request_without_created_at()
     test_url_normalization_accepts_dot_git_and_trailing_slash_equivalence()
+    test_normalize_repo_url_treats_ssh_and_https_of_same_repo_as_equal()
     test_rejects_request_url_equal_to_poisoned_git_origin()
     test_omitted_upstream_pins_canonical_not_poisoned_origin()
     test_omitted_upstream_pins_host_env_when_set()

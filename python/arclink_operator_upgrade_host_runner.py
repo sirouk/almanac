@@ -271,7 +271,33 @@ def _require_existing_trusted_deploy_key(value: str) -> None:
 
 
 def _normalize_repo_url(value: str) -> str:
+    """Canonicalize a git remote URL to ``host/owner/repo`` (lowercased, no scheme,
+    no credentials, no ``.git``) so the SSH and HTTPS forms of the SAME repository
+    compare equal. The allowlist's intent is "this repository", not a byte-exact URL
+    string: the configured/queued upstream is the SSH form (deploy key) while the
+    compiled-in canonical is the HTTPS form, and the almanac->arclink rename left them
+    in different string forms -- without canonicalization a legitimate upgrade is
+    wrongly refused with "upstream repo URL is not allowlisted". This stays SECURE:
+    a different host, owner, or repo still produces a different normalized value and
+    never matches (verified by tests).
+    """
     clean = str(value or "").strip()
+    if not clean:
+        return ""
+    for scheme in ("https://", "http://", "ssh://", "git+ssh://", "git://"):
+        if clean.lower().startswith(scheme):
+            clean = clean[len(scheme):]
+            break
+    # Drop any "user@" / "user:pass@" credential prefix (e.g. git@github.com:...).
+    if "@" in clean:
+        clean = clean.rsplit("@", 1)[1]
+    # scp-style "host:owner/repo" -> "host/owner/repo", but preserve an explicit
+    # "host:port" (a colon followed by a digit).
+    if ":" in clean:
+        host, _, rest = clean.partition(":")
+        if not rest[:1].isdigit():
+            clean = f"{host}/{rest}"
+    clean = clean.rstrip("/").lower()
     if clean.endswith(".git"):
         clean = clean[:-4]
     return clean.rstrip("/")

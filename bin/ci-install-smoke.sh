@@ -1114,7 +1114,11 @@ from pathlib import Path
 
 repo_dir = Path(sys.argv[1])
 vault_dir = Path(sys.argv[2])
-required_dirs = ["Research", "Agents_KB", "Agents_Skills", "Projects", "Repos", "Agents_Plugins"]
+# The Workspace vault now holds only the workspace surfaces. The Agents_* library
+# folders (KB/Skills/Plugins) are no longer scaffolded into the vault; on the
+# single-host install path their dynamic notes still land in the vault, but they
+# carry no managed .vault/README.md scaffold of their own.
+required_dirs = ["Research", "Projects", "Repos"]
 for name in required_dirs:
     target = vault_dir / name
     if not target.is_dir():
@@ -1123,6 +1127,11 @@ for name in required_dirs:
         path = target / rel
         if not path.is_file():
             raise SystemExit(f"expected default vault file to exist: {path}")
+
+for name in ("Agents_KB", "Agents_Skills", "Agents_Plugins"):
+    scaffold = vault_dir / name / ".vault"
+    if scaffold.is_file():
+        raise SystemExit(f"expected Agents_* scaffold to be absent from the vault: {scaffold}")
 
 for legacy in ("Inbox", "People", "Teams"):
     if (vault_dir / legacy).exists():

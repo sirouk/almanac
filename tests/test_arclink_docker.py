@@ -6827,7 +6827,7 @@ def test_docker_operator_commands_are_present() -> None:
     expect("sso_secret_for_subject" in body and "secrets.token_urlsafe(32)" in body, body)
     expect("os.chown(path, owner.st_uid, owner.st_gid)" in body and "path.chmod(0o600)" in body, body)
     expect("default_arclink_agent_profile" in body and "deployment_identities = load_deployment_identities()" in body, body)
-    expect('"VAULT_DIR": "/srv/vault"' in body and '"/srv/vault/Agents_KB/hermes-agent-docs"' in body, body)
+    expect('"VAULT_DIR": "/srv/vault"' in body and '"/fleet-shared/Agents_KB/hermes-agent-docs"' in body, body)
     expect('services.pop("code-server", None)' in body, body)
     expect('compose_secrets.pop("code_server_password", None)' in body, body)
     expect('env.pop("CODE_SERVER_PASSWORD_REF", None)' in body, body)

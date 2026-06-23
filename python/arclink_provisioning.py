@@ -1343,7 +1343,10 @@ def _render_services(
                 "DRIVE_FLEET_SHARED_ROOT": CONTAINER_FLEET_SHARED_DIR,
                 "CODE_FLEET_SHARED_ROOT": CONTAINER_FLEET_SHARED_DIR,
                 "ARCLINK_HERMES_DOCS_STATE_DIR": "/tmp/arclink-hermes-docs-src",
-                "ARCLINK_HERMES_DOCS_VAULT_DIR": f"{CONTAINER_VAULT_DIR}/Agents_KB/hermes-agent-docs",
+                "ARCLINK_HERMES_DOCS_VAULT_DIR": f"{CONTAINER_FLEET_SHARED_DIR}/Agents_KB/hermes-agent-docs",
+                # arclink-docs is the sibling reference set in the same sync script;
+                # it must move to Fleet too or vault/Agents_KB persists.
+                "ARCLINK_DOCS_VAULT_DIR": f"{CONTAINER_FLEET_SHARED_DIR}/Agents_KB/arclink-docs",
                 "ARCLINK_DEPLOYMENT_ID": deployment_id,
                 "ARCLINK_PREFIX": prefix,
                 "ARCLINK_AGENT_NAME": env["ARCLINK_AGENT_NAME"],

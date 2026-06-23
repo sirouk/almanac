@@ -872,12 +872,19 @@ def _generated_vault_profile_path_error(profile: dict[str, Any]) -> str:
     return ""
 
 
+def _generated_profile_root(cfg: Any) -> Path:
+    override = str(os.environ.get("ARCLINK_ORG_PROFILE_GENERATED_ROOT") or "").strip()
+    if override:
+        return Path(override)
+    return Path(cfg.vault_dir)
+
+
 def _generated_vault_abs_path(cfg: Any, profile: dict[str, Any]) -> Path:
     path_error = _generated_vault_profile_path_error(profile)
     if path_error:
         raise ValueError(path_error)
     relative = generated_vault_profile_path(profile)
-    return Path(cfg.vault_dir) / Path(relative)
+    return _generated_profile_root(cfg) / Path(relative)
 
 
 def _display_source_path(source_path: Path) -> str:
@@ -907,7 +914,11 @@ def _display_reference_path(raw_path: str, cfg: Any | None = None) -> str:
             return "[path withheld]"
         return raw_path
     candidate = _resolve_profile_path(raw_path, cfg)
-    for label, root in (("<vault>", Path(cfg.vault_dir)), ("<repo>", REPO_ROOT)):
+    display_roots: list[tuple[str, Path]] = [("<vault>", Path(cfg.vault_dir)), ("<repo>", REPO_ROOT)]
+    generated_root = _generated_profile_root(cfg)
+    if str(generated_root) != str(Path(cfg.vault_dir)):
+        display_roots.insert(1, ("<fleet>", generated_root))
+    for label, root in display_roots:
         try:
             relative = candidate.resolve().relative_to(root.resolve())
         except (OSError, ValueError):

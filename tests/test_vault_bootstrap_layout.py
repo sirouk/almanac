@@ -72,6 +72,7 @@ def test_reconcile_vault_layout_creates_realistic_org_structure_and_prunes_legac
         root = Path(tmp)
         vault_dir = root / "vault"
         vault_dir.mkdir(parents=True, exist_ok=True)
+        fleet_dir = root / "fleet-shared"
 
         for dirname, files in LEGACY_VAULT_FILES.items():
             target_dir = vault_dir / dirname
@@ -89,13 +90,6 @@ def test_reconcile_vault_layout_creates_realistic_org_structure_and_prunes_legac
             "# Google Workspace\n",
             encoding="utf-8",
         )
-        legacy_flat_skill_note = vault_dir / "Skills" / "arclink-qmd-mcp.md"
-        legacy_flat_skill_note.parent.mkdir(parents=True, exist_ok=True)
-        legacy_flat_skill_note.write_text(
-            "<!-- managed: arclink-generated-vault-note -->\n# Legacy flat skill note\n",
-            encoding="utf-8",
-        )
-
         result = subprocess.run(
             [
                 "python3",
@@ -104,6 +98,8 @@ def test_reconcile_vault_layout_creates_realistic_org_structure_and_prunes_legac
                 str(REPO),
                 "--vault-dir",
                 str(vault_dir),
+                "--fleet-shared-dir",
+                str(fleet_dir),
                 "--repo-url",
                 "https://github.com/example/arclink",
                 "--hermes-skills-dir",
@@ -116,13 +112,19 @@ def test_reconcile_vault_layout_creates_realistic_org_structure_and_prunes_legac
         )
         expect(result.returncode == 0, f"expected reconcile-vault-layout to succeed, got rc={result.returncode} stderr={result.stderr!r}")
 
-        for dirname in ("Research", "Agents_KB", "Agents_Skills", "Projects", "Repos", "Agents_Plugins"):
+        # The per-agent Workspace vault holds only the workspace surfaces; the
+        # Agents_* library notes (KB/Skills/Plugins) now live under the shared
+        # Fleet root so the Drive UI stops showing them under both roots.
+        for dirname in ("Research", "Projects", "Repos"):
             target_dir = vault_dir / dirname
             expect(target_dir.is_dir(), f"expected {dirname} directory to exist")
             expect((target_dir / ".vault").is_file(), f"expected {dirname}/.vault metadata file")
             metadata = (target_dir / ".vault").read_text(encoding="utf-8")
             expect("default_subscribed:" in metadata, f"expected subscription flag in {dirname}/.vault: {metadata!r}")
             expect("brief_template:" in metadata, f"expected brief template in {dirname}/.vault: {metadata!r}")
+
+        for agents_dir in ("Agents_KB", "Agents_Skills", "Agents_Plugins"):
+            expect(not (vault_dir / agents_dir).exists(), f"expected {agents_dir} not to be created under the vault")
 
         for legacy in ("Inbox", "People", "Teams"):
             expect(not (vault_dir / legacy).exists(), f"expected untouched legacy default {legacy} to be pruned")
@@ -138,7 +140,7 @@ def test_reconcile_vault_layout_creates_realistic_org_structure_and_prunes_legac
         project_note = (vault_dir / "Projects" / "arclink.md").read_text(encoding="utf-8")
         expect("ArcLink" in project_note, project_note)
 
-        arclink_skill_notes = sorted(path.name for path in (vault_dir / "Agents_Skills" / "ArcLink").glob("*.md") if path.name != "README.md")
+        arclink_skill_notes = sorted(path.name for path in (fleet_dir / "Agents_Skills" / "ArcLink").glob("*.md") if path.name != "README.md")
         expected_skill_notes = {
             "arclink-first-contact.md",
             "arclink-notion-knowledge.md",
@@ -152,15 +154,14 @@ def test_reconcile_vault_layout_creates_realistic_org_structure_and_prunes_legac
             "arclink-vault-reconciler.md",
             "arclink-vaults.md",
         }
-        expect(expected_skill_notes.issubset(set(arclink_skill_notes)), f"missing seeded ArcLink skill notes: expected {expected_skill_notes}, got {arclink_skill_notes}")
-        expect(not legacy_flat_skill_note.exists(), f"expected generated flat skill note to be removed: {legacy_flat_skill_note}")
-        hermes_skill_note = vault_dir / "Agents_Skills" / "Hermes" / "productivity" / "google-workspace.md"
-        expect(hermes_skill_note.is_file(), f"missing Hermes bundled skill note: {hermes_skill_note}")
+        expect(expected_skill_notes.issubset(set(arclink_skill_notes)), f"missing seeded ArcLink skill notes under fleet: expected {expected_skill_notes}, got {arclink_skill_notes}")
+        hermes_skill_note = fleet_dir / "Agents_Skills" / "Hermes" / "productivity" / "google-workspace.md"
+        expect(hermes_skill_note.is_file(), f"missing Hermes bundled skill note under fleet: {hermes_skill_note}")
         expect("Gmail" in hermes_skill_note.read_text(encoding="utf-8"), hermes_skill_note.read_text(encoding="utf-8"))
 
-        plugin_notes = sorted(path.name for path in (vault_dir / "Agents_Plugins").glob("*.md") if path.name != "README.md")
+        plugin_notes = sorted(path.name for path in (fleet_dir / "Agents_Plugins").glob("*.md") if path.name != "README.md")
         expected_plugin_notes = {"arclink-managed-context.md"}
-        expect(expected_plugin_notes.issubset(set(plugin_notes)), f"missing seeded plugin notes: expected {expected_plugin_notes}, got {plugin_notes}")
+        expect(expected_plugin_notes.issubset(set(plugin_notes)), f"missing seeded plugin notes under fleet: expected {expected_plugin_notes}, got {plugin_notes}")
         print("PASS test_reconcile_vault_layout_creates_realistic_org_structure_and_prunes_legacy_defaults")
 
 
@@ -225,10 +226,12 @@ def test_reconcile_vault_layout_preserves_custom_legacy_agent_dirs_while_migrati
         expect(not (legacy_skills_dir / "ArcLink" / "arclink-ssot.md").exists(), "expected managed legacy skill note to move away")
         expect(not (legacy_plugins_dir / "arclink-managed-context.md").exists(), "expected managed legacy plugin note to move away")
 
+        # The Agents_* scaffold templates were removed from the vault layout, so the
+        # only metadata under Agents_Skills/Agents_Plugins here is the managed .vault
+        # migrated forward from the legacy Skills/Plugins dirs (content is carried
+        # verbatim from the source).
         skills_metadata = (vault_dir / "Agents_Skills" / ".vault").read_text(encoding="utf-8")
-        plugins_metadata = (vault_dir / "Agents_Plugins" / ".vault").read_text(encoding="utf-8")
-        expect("name: Agents_Skills" in skills_metadata, skills_metadata)
-        expect("name: Agents_Plugins" in plugins_metadata, plugins_metadata)
+        expect("managed: arclink-default-vault" in skills_metadata, skills_metadata)
         expect((vault_dir / "Agents_Skills" / "ArcLink" / "arclink-ssot.md").is_file(), "expected migrated/generated ArcLink skill note")
         expect((vault_dir / "Agents_Plugins" / "arclink-managed-context.md").is_file(), "expected migrated/generated plugin note")
         print("PASS test_reconcile_vault_layout_preserves_custom_legacy_agent_dirs_while_migrating_managed_files")

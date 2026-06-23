@@ -81,6 +81,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vault-dir", required=True, help="Path to the shared vault root")
     parser.add_argument("--repo-url", default="", help="Optional GitHub repo URL override")
     parser.add_argument("--hermes-skills-dir", default="", help="Optional Hermes bundled skills directory")
+    parser.add_argument("--fleet-shared-dir", default="", help="Optional Fleet shared root for Agents_* library notes")
     return parser.parse_args()
 
 
@@ -502,10 +503,20 @@ def reconcile_static_vault_templates(repo_dir: Path, vault_dir: Path) -> dict[st
     return counts
 
 
-def reconcile_dynamic_notes(repo_dir: Path, vault_dir: Path, repo_url: str, hermes_skills_dir: Path | None) -> dict[str, int]:
+def reconcile_dynamic_notes(
+    repo_dir: Path,
+    vault_dir: Path,
+    repo_url: str,
+    hermes_skills_dir: Path | None,
+    library_dir: Path | None = None,
+) -> dict[str, int]:
+    # Agents_* library notes (skills/plugins) land under library_dir, which is the
+    # shared Fleet root when provided so the Drive UI stops showing them under both
+    # Workspace and Fleet. Repos/Projects notes stay rooted at vault_dir.
+    library_dir = library_dir if library_dir is not None else vault_dir
     counts = {"created": 0, "updated": 0, "preserved": 0}
-    skills_dir = vault_dir / AGENT_SKILLS_DIRNAME
-    legacy_skills_dir = vault_dir / LEGACY_AGENT_SKILLS_DIRNAME
+    skills_dir = library_dir / AGENT_SKILLS_DIRNAME
+    legacy_skills_dir = library_dir / LEGACY_AGENT_SKILLS_DIRNAME
     arclink_skills_dir = skills_dir / "ArcLink"
     hermes_notes_dir = skills_dir / "Hermes"
     for note_path, title, body in (
@@ -555,8 +566,8 @@ def reconcile_dynamic_notes(repo_dir: Path, vault_dir: Path, repo_url: str, herm
                 counts[result] += 1
 
     plugins_root = repo_dir / "plugins" / "hermes-agent"
-    plugins_dir = vault_dir / AGENT_PLUGINS_DIRNAME
-    legacy_plugins_dir = vault_dir / LEGACY_AGENT_PLUGINS_DIRNAME
+    plugins_dir = library_dir / AGENT_PLUGINS_DIRNAME
+    legacy_plugins_dir = library_dir / LEGACY_AGENT_PLUGINS_DIRNAME
     if plugins_root.is_dir():
         for plugin_dir in sorted(path for path in plugins_root.iterdir() if path.is_dir() and (path / "plugin.yaml").is_file()):
             name, description = load_plugin_metadata(plugin_dir)
@@ -592,13 +603,22 @@ def main() -> int:
         or discover_repo_url(repo_dir)
     )
     hermes_skills_dir = discover_hermes_skills_dir(repo_dir, args.hermes_skills_dir)
+    fleet_dir = Path(args.fleet_shared_dir).resolve() if args.fleet_shared_dir else None
 
     vault_dir.mkdir(parents=True, exist_ok=True)
+    if fleet_dir is not None:
+        fleet_dir.mkdir(parents=True, exist_ok=True)
 
     pruned = [name for name in ("Inbox", "People", "Teams") if prune_legacy_dir(vault_dir, name)]
     migrated_agent_layout = migrate_agent_vault_layout(vault_dir)
     static_counts = reconcile_static_vault_templates(repo_dir, vault_dir)
-    dynamic_counts = reconcile_dynamic_notes(repo_dir, vault_dir, repo_url, hermes_skills_dir)
+    dynamic_counts = reconcile_dynamic_notes(
+        repo_dir,
+        vault_dir,
+        repo_url,
+        hermes_skills_dir,
+        library_dir=(fleet_dir or vault_dir),
+    )
 
     print(f"vault_dir={vault_dir}")
     if repo_url:

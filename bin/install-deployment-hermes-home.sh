@@ -31,6 +31,7 @@ if [[ -n "${VAULT_DIR:-}" ]]; then
   "$PYTHON_BIN" "$REPO_DIR/bin/reconcile-vault-layout.py" \
     --repo-dir "$REPO_DIR" \
     --vault-dir "$VAULT_DIR" \
+    --fleet-shared-dir "${ARCLINK_FLEET_SHARED_ROOT:-}" \
     "${hermes_skills_args[@]}"
   if [[ "${ARCLINK_HERMES_DOCS_SYNC_ENABLED:-1}" == "1" ]]; then
     docs_state_dir="${ARCLINK_HERMES_DOCS_STATE_DIR:-/tmp/arclink-hermes-docs-src}"

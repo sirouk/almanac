@@ -179,6 +179,14 @@ with connect_db(cfg) as conn:
                 print(f"OK {name}: {status} ({age_h:.1f}h ago)")
         elif status in ("warn", "warning", "disabled"):
             print(f"WARN {name}: last_status={status}")
+        elif on_demand:
+            # A PAST failure of an on-demand operator action (e.g. operator-upgrade) is
+            # INFORMATIONAL -- the operator already sees it via the action result + Raven.
+            # It must NOT hard-fail the SYSTEM health check, because that check gates
+            # deploy.sh's own exit code: a failed operator-upgrade would otherwise
+            # recursively fail the post-run health check of EVERY subsequent upgrade, so
+            # an upgrade could never report success again even when its work succeeded.
+            print(f"WARN {name}: last_status={status} (on-demand action; informational, not a system-health failure)")
         else:
             print(f"FAIL {name}: last_status={status}")
             failures += 1

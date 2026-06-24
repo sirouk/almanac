@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
 import hashlib
+import json
 import os
 import re
 import secrets
@@ -5667,12 +5668,20 @@ def _persist_academy_deployment_status(
     if not deployment_id:
         return dict(deployment)
     metadata = _metadata(deployment)
-    metadata["academy_training"] = dict(academy_status)
+    # Screen the new Academy payload itself, but do not re-screen unrelated
+    # deployment metadata. Existing deployments may already carry non-plaintext
+    # secret-adjacent fields such as token hashes/refs; rewriting Academy status
+    # should not fail because an unrelated preserved metadata branch matches the
+    # generic secret detector.
+    screened_status = json.loads(
+        json_dumps_safe(dict(academy_status), label="ArcLink Academy deployment status", error_cls=ArcLinkPublicBotError)
+    )
+    metadata["academy_training"] = screened_status if isinstance(screened_status, Mapping) else dict(academy_status)
     now = utc_now_iso()
     conn.execute(
         "UPDATE arclink_deployments SET metadata_json = ?, updated_at = ? WHERE deployment_id = ?",
         (
-            json_dumps_safe(metadata, label="ArcLink Academy deployment metadata", error_cls=ArcLinkPublicBotError),
+            json.dumps(metadata, sort_keys=True, separators=(",", ":")),
             now,
             deployment_id,
         ),

@@ -27,6 +27,23 @@ UPSTREAM_SOUL_FALLBACK = (
 )
 
 
+def _carry_forward_academy_overlay(existing_soul: str, rendered_soul: str) -> str:
+    """Preserve the PG-HERMES Academy overlay across identity refreshes."""
+    try:
+        from arclink_org_profile import BEGIN_ACADEMY_MARKER, END_ACADEMY_MARKER, merge_academy_overlay
+    except Exception:
+        return rendered_soul
+    start = existing_soul.find(BEGIN_ACADEMY_MARKER)
+    end = existing_soul.find(END_ACADEMY_MARKER)
+    if start < 0 or end < start:
+        return rendered_soul
+    end += len(END_ACADEMY_MARKER)
+    academy_overlay = existing_soul[start:end].strip()
+    if not academy_overlay:
+        return rendered_soul
+    return merge_academy_overlay(rendered_soul, academy_overlay)
+
+
 def _config_yaml_lock_path(hermes_home: Path | None = None) -> Path:
     home = Path(hermes_home or os.environ.get("HERMES_HOME") or Path.home() / ".hermes").expanduser()
     return home / ".arclink-config.yaml.lock"
@@ -503,7 +520,12 @@ def _seed_arclink_identity(bot_name: str, unix_user: str, user_name: str = "", a
     org_profile_soul, org_profile_context = _org_profile_soul_and_context(label, unix_user, user_name)
     # Hermes reads HERMES_HOME/SOUL.md directly at runtime as the durable identity prompt.
     clean_agent_title = str(agent_title or "").strip()
-    _atomic_write_text(soul_path, org_profile_soul or _render_soul(label, unix_user, user_name, clean_agent_title))
+    rendered_soul = org_profile_soul or _render_soul(label, unix_user, user_name, clean_agent_title)
+    try:
+        existing_soul = soul_path.read_text(encoding="utf-8")
+    except OSError:
+        existing_soul = ""
+    _atomic_write_text(soul_path, _carry_forward_academy_overlay(existing_soul, rendered_soul))
     identity_payload: dict[str, Any] = {
         "agent_label": label,
         "agent_title": clean_agent_title,

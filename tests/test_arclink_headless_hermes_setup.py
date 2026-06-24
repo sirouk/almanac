@@ -166,6 +166,18 @@ def test_identity_only_writes_soul_and_dual_surface_prefill_config() -> None:
             encoding="utf-8",
         )
         write_arclink_config(arclink_config)
+        academy_overlay = (
+            "<!-- BEGIN ARCLINK ACADEMY SPECIALIST -->\n"
+            "ArcLink Academy specialist (replaceable; refreshed by continuing education):\n"
+            "- Role: Domain Tutor\n\n"
+            "Teach fitness and nutrition with evidence-based scope boundaries.\n"
+            "<!-- END ARCLINK ACADEMY SPECIALIST -->"
+        )
+        hermes_home.mkdir(parents=True, exist_ok=True)
+        (hermes_home / "SOUL.md").write_text(
+            "# Previous identity\n\nHuman-authored base.\n\n" + academy_overlay + "\n",
+            encoding="utf-8",
+        )
 
         result = subprocess.run(
             [
@@ -243,6 +255,10 @@ def test_identity_only_writes_soul_and_dual_surface_prefill_config() -> None:
         expect("Learn missing preferences over time" in soul_text, soul_text)
         expect("If `Kora Reed` is already a usable human name" in soul_text, soul_text)
         expect("do not ask what to call them in the first greeting" in soul_text, soul_text)
+        expect(soul_text.count("<!-- BEGIN ARCLINK ACADEMY SPECIALIST -->") == 1, soul_text)
+        expect(soul_text.count("<!-- END ARCLINK ACADEMY SPECIALIST -->") == 1, soul_text)
+        expect("Teach fitness and nutrition with evidence-based scope boundaries." in soul_text, soul_text)
+        expect("Human-authored base." not in soul_text, soul_text)
         expect("$" not in soul_text, soul_text)
 
         identity_state = json.loads(identity_state_path.read_text(encoding="utf-8"))

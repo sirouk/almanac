@@ -3106,6 +3106,11 @@ class RouterAcademyTrainerClient:
         except urllib.error.HTTPError as exc:
             body = exc.read(4096).decode("utf-8", errors="replace") if hasattr(exc, "read") else ""
             raise RuntimeError(f"llm-router trainer request failed status={exc.code}: {body[:240]}") from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            # Transport failure (connection refused, DNS, timeout): raise the same explicit
+            # RuntimeError the HTTPError path does, so the fail-closed contract is visible HERE,
+            # not only via the caller's outer `except Exception` deterministic fallback.
+            raise RuntimeError(f"llm-router trainer request failed transport: {str(getattr(exc, 'reason', exc))[:240]}") from exc
         parsed = _loads(response_body, default={})
         choices = parsed.get("choices") if isinstance(parsed, Mapping) else None
         content = ""
@@ -3192,6 +3197,11 @@ class RouterAcademyTrainerClient:
         except urllib.error.HTTPError as exc:
             body = exc.read(4096).decode("utf-8", errors="replace") if hasattr(exc, "read") else ""
             raise RuntimeError(f"llm-router trainer synthesize failed status={exc.code}: {body[:240]}") from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            # Transport failure (connection refused, DNS, timeout): raise the same explicit
+            # RuntimeError the HTTPError path does, so the fail-closed contract is visible HERE,
+            # not only via the caller's outer `except Exception` deterministic fallback.
+            raise RuntimeError(f"llm-router trainer synthesize failed transport: {str(getattr(exc, 'reason', exc))[:240]}") from exc
         parsed = _loads(response_body, default={})
         content = ""
         choices = parsed.get("choices") if isinstance(parsed, Mapping) else None

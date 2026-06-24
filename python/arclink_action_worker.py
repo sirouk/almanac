@@ -2264,6 +2264,75 @@ def _write_private_text_atomic(path: Path, body: str) -> bool:
     return True
 
 
+def _invalidate_academy_hermes_sessions(
+    files: _AcademyApplyFiles,
+    hermes_home: Path,
+    *,
+    deployment_id: str,
+    trainee_id: str,
+    applied_at: str,
+) -> dict[str, Any]:
+    """Force the next public Hermes turn to rebuild context from the new SOUL.
+
+    Hermes gateway sessions can outlive an Academy SOUL update. If a Captain
+    keeps chatting in a pre-Academy session, the model may continue with the
+    old identity even though the equipped SOUL is correct. Clearing the per-home
+    session index is intentionally scoped to this deployment's Hermes home.
+    """
+
+    sessions_path = hermes_home / "sessions" / "sessions.json"
+    marker_path = hermes_home / "state" / "arclink-academy-session-reset.json"
+    raw = files.read_text(sessions_path)
+    if not raw.strip():
+        marker = {
+            "status": "not_needed",
+            "reset_at": applied_at,
+            "deployment_id": deployment_id,
+            "trainee_id": trainee_id,
+            "removed_session_count": 0,
+            "reason": "academy_apply_equipped_soul",
+        }
+        files.write_text(marker_path, json.dumps(marker, indent=2, sort_keys=True) + "\n")
+        return marker
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        marker = {
+            "status": "skipped_invalid_session_store",
+            "reset_at": applied_at,
+            "deployment_id": deployment_id,
+            "trainee_id": trainee_id,
+            "removed_session_count": 0,
+            "reason": "academy_apply_equipped_soul",
+        }
+        files.write_text(marker_path, json.dumps(marker, indent=2, sort_keys=True) + "\n")
+        return marker
+    if not isinstance(data, dict):
+        marker = {
+            "status": "skipped_unknown_session_store",
+            "reset_at": applied_at,
+            "deployment_id": deployment_id,
+            "trainee_id": trainee_id,
+            "removed_session_count": 0,
+            "reason": "academy_apply_equipped_soul",
+        }
+        files.write_text(marker_path, json.dumps(marker, indent=2, sort_keys=True) + "\n")
+        return marker
+    removed_count = len(data)
+    changed = files.write_text(sessions_path, "{}\n") if removed_count else False
+    marker = {
+        "status": "reset" if removed_count else "not_needed",
+        "reset_at": applied_at,
+        "deployment_id": deployment_id,
+        "trainee_id": trainee_id,
+        "removed_session_count": removed_count,
+        "session_store_changed": bool(changed),
+        "reason": "academy_apply_equipped_soul",
+    }
+    files.write_text(marker_path, json.dumps(marker, indent=2, sort_keys=True) + "\n")
+    return marker
+
+
 def _academy_safe_relative_path(value: Any, *, fallback: str) -> Path:
     raw = str(value or fallback).strip() or fallback
     candidate = Path(raw)
@@ -3115,6 +3184,16 @@ def _materialize_academy_apply(
         )
         changed_any = changed_any or skills_changed
         applied_paths.append("state/arclink-academy-approved-skills.json")
+    session_reset_result = _invalidate_academy_hermes_sessions(
+        files,
+        hermes_home,
+        deployment_id=deployment_id,
+        trainee_id=str(payload.get("trainee_id") or ""),
+        applied_at=applied_at,
+    )
+    changed_any = changed_any or bool(session_reset_result.get("session_store_changed"))
+    state_payload["session_reset"] = session_reset_result
+    applied_paths.append("state/arclink-academy-session-reset.json")
     refresh_request = _academy_post_apply_refresh_request(
         payload=payload,
         deployment_id=deployment_id,
@@ -3186,6 +3265,7 @@ def _materialize_academy_apply(
             "workspace_mutation_performed": False,
             "filesystem_mutation_performed": bool(changed_any),
             "applied_paths": applied_paths,
+            "session_reset": session_reset_result,
             "post_apply_refresh_request": refresh_request,
             "post_apply_refresh_result": post_apply_refresh_result,
         }

@@ -993,6 +993,20 @@ def test_academy_apply_action_materializes_local_hermes_home_when_authorized() -
         hermes_home = Path(roots["hermes_home"])
         hermes_home.mkdir(parents=True)
         (hermes_home / "SOUL.md").write_text("# SOUL\nHuman-authored identity.\n", encoding="utf-8")
+        (hermes_home / "sessions").mkdir(parents=True)
+        (hermes_home / "sessions" / "sessions.json").write_text(
+            json.dumps(
+                {
+                    "agent:main:telegram:dm:captain": {
+                        "session_key": "agent:main:telegram:dm:captain",
+                        "session_id": "pre_academy_session",
+                    }
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         user_id = "user_academy_live"
         deployment_id = "dep_academy_live"
         control.upsert_arclink_user(conn, user_id=user_id, email="academy-live@example.test", entitlement_state="paid")
@@ -1085,6 +1099,12 @@ def test_academy_apply_action_materializes_local_hermes_home_when_authorized() -
         expect(any(path.startswith("vault/Academy/") for path in applied["applied_paths"]), str(applied))
         expect("state/arclink-academy-memory-seeds.json" in applied["applied_paths"], str(applied))
         expect("state/arclink-academy-post-apply-refresh.json" in applied["applied_paths"], str(applied))
+        expect("state/arclink-academy-session-reset.json" in applied["applied_paths"], str(applied))
+        expect(applied["session_reset"]["status"] == "reset", str(applied["session_reset"]))
+        expect(applied["session_reset"]["removed_session_count"] == 1, str(applied["session_reset"]))
+        expect(json.loads((hermes_home / "sessions" / "sessions.json").read_text(encoding="utf-8")) == {}, "Academy apply must reset pre-Academy Hermes sessions")
+        session_reset_file = json.loads((hermes_home / "state" / "arclink-academy-session-reset.json").read_text(encoding="utf-8"))
+        expect(session_reset_file["reason"] == "academy_apply_equipped_soul", str(session_reset_file))
         refresh_request = applied["post_apply_refresh_request"]
         expect(refresh_request["status"] == "requested", str(refresh_request))
         expect(refresh_request["deployment_id"] == deployment_id, str(refresh_request))

@@ -2288,6 +2288,11 @@ emit_runtime_config() {
     write_kv ARCLINK_EXECUTOR_ADAPTER "${ARCLINK_EXECUTOR_ADAPTER:-disabled}"
     write_kv ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED "${ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED:-0}"
     write_kv ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST "${ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST:-}"
+    # Academy live gates -- managed keys so `control upgrade` regeneration preserves them
+    # (it re-reads the prior docker.env value, exactly like EXECUTOR_ADAPTER above). Without
+    # these write_kv lines, manually-added academy lines are dropped on every upgrade.
+    write_kv ARCLINK_ACADEMY_TRAINER_LIVE "${ARCLINK_ACADEMY_TRAINER_LIVE:-0}"
+    write_kv ARCLINK_ACADEMY_APPLY_LIVE "${ARCLINK_ACADEMY_APPLY_LIVE:-0}"
     write_kv ARCLINK_EDGE_TARGET "${ARCLINK_EDGE_TARGET:-edge.arclink.online}"
     write_kv ARCLINK_STATE_ROOT_BASE "${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}"
     write_kv ARCLINK_FLEET_SHARE_HUB_ROOT "${ARCLINK_FLEET_SHARE_HUB_ROOT:-/arcdata/captains}"

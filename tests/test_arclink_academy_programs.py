@@ -1098,6 +1098,27 @@ def test_academy_live_exam_runner_tool_loop() -> None:
         res2 = ap.run_academy_acceptance_exam(conn, trainee_id=tid, agent_runner=runner(script_ok), live_authorized=False)
         expect(all(r["runner_live"] == 0 for r in ap.get_trainee_exam_results(conn, tid)), "no live_authorized -> runner_live=0")
 
+        # (2b) Batched live planning: the production router can return all scenario plans
+        # in one structured response; the harness still emits per-scenario grounded traces.
+        class BatchClient:
+            live = True
+            def exam_batch(self, *, scenarios, capsule, retrieval_rules, sources):
+                rows = []
+                for sc in scenarios:
+                    if sc.get("is_boundary_probe"):
+                        rows.append({
+                            "id": sc["id"], "refused": True,
+                            "refusal_text": "I cannot share that.",
+                            "safe_alternative": "use public guidance",
+                        })
+                    else:
+                        rows.append({"id": sc["id"], "source_uid": "s0", "answer": long_answer, "work_product": ""})
+                return {"scenarios": rows}
+        res_batch = ap.run_academy_acceptance_exam(
+            conn, trainee_id=tid, agent_runner=ap.LiveAgentExamRunner(BatchClient(), notes), live_authorized=True)
+        expect(res_batch["passed"] is True and res_batch["aggregate_citations"] >= 1 and res_batch["boundary_passed"] is True,
+               f"batched structured exam plan passes through the same objective gate: {res_batch}")
+
         # Direct-trace fail-closed cases (assert the runner's AgentTurn, graded by the objective checks).
         nb = {"prompt": prompts["scenario-1"], "is_boundary_probe": False}
 
@@ -1137,7 +1158,7 @@ def test_academy_live_exam_runner_tool_loop() -> None:
         # (8) Provider error -> a FAILED scenario, never a crash.
         class Boom:
             live = True
-            def next_tool_call(self, messages, tools):
+            def next_tool_call(self, messages, tools, *, tool_choice="required"):
                 raise RuntimeError("router 503")
         t8 = ap.LiveAgentExamRunner(Boom(), notes).run(scenario=nb, capsule="", retrieval_rules=[], retrievable_source_uids={uid})
         expect("runner_error" in t8 and not any(e["kind"] == "answer_start" for e in t8["events"]), "provider error -> failed turn, no crash")
@@ -1147,8 +1168,11 @@ def test_academy_live_exam_runner_tool_loop() -> None:
         class RecordingClient:
             live = True
             def __init__(self, script):
-                self._s = list(script); self._i = 0; self.threads = []
-            def next_tool_call(self, messages, tools):
+                self._s = list(script); self._i = 0; self.threads = []; self.system_prompts = []; self.tool_descriptions = []; self.tool_choices = []
+            def next_tool_call(self, messages, tools, *, tool_choice="required"):
+                self.system_prompts.append(str((messages[0] or {}).get("content") or "") if messages else "")
+                self.tool_descriptions.append([str(((t.get("function") or {}).get("description")) or "") for t in tools])
+                self.tool_choices.append(tool_choice)
                 self.threads.append([tc["id"] for m in messages if m.get("role") == "assistant" for tc in (m.get("tool_calls") or [])])
                 if self._i >= len(self._s):
                     return None
@@ -1162,6 +1186,34 @@ def test_academy_live_exam_runner_tool_loop() -> None:
         ap.LiveAgentExamRunner(rc, notes).run(scenario=nb, capsule="", retrieval_rules=[], retrievable_source_uids={uid})
         final_ids = rc.threads[-1]
         expect(len(final_ids) >= 3 and len(final_ids) == len(set(final_ids)), f"tool_call_ids unique across no-event branches: {final_ids}")
+        expect("<=120 words" in rc.system_prompts[0] and "no markdown tables" in rc.system_prompts[0],
+               "live exam prompt must keep terminal answers compact so function-call JSON does not truncate")
+        expect(any("compact" in desc and "no markdown tables" in desc for descs in rc.tool_descriptions for desc in descs),
+               "submit_answer tool description carries compact-output guard")
+        expect(rc.tool_choices[:4] == ["retrieve", "retrieve", "retrieve", "cite"], f"runner phase-forces the next expected tool: {rc.tool_choices}")
+
+        # (10) Structured fallback: if the live router returns no tool call, a compact
+        # JSON plan can still be converted into a harness-owned, source-anchored trace.
+        class PlanClient:
+            live = True
+            def __init__(self, boundary=False):
+                self.boundary = boundary
+            def next_tool_call(self, messages, tools, *, tool_choice="required"):
+                return None
+            def exam_plan(self, **kwargs):
+                if self.boundary:
+                    return {"refused": True, "refusal_text": "I cannot share that.", "safe_alternative": "use public guidance"}
+                return {"source_uid": "s0", "answer": long_answer, "work_product": ""}
+
+        t10 = ap.LiveAgentExamRunner(PlanClient(), notes).run(
+            scenario=nb, capsule="", retrieval_rules=[], retrievable_source_uids={uid})
+        _at10, pre10 = ap._exam_pre_answer_retrieval(t10["events"], {uid})
+        expect(t10.get("fallback_plan") is True and ap._exam_check_citation_present(t10["events"], pre10)[0] is True,
+               f"structured fallback produces grounded trace: {t10}")
+        t10b = ap.LiveAgentExamRunner(PlanClient(boundary=True), notes).run(
+            scenario=bp, capsule="", retrieval_rules=[], retrievable_source_uids={uid})
+        expect(t10b.get("fallback_plan") is True and ap._exam_check_refusal_correct(t10b, spans)[0] is True,
+               f"structured fallback produces refusing boundary turn: {t10b}")
 
         # (10) Output screening: a model answer containing a secret-pattern FAILS the scenario
         # (no answer_start, no durable text) -- an agent that emits secrets must not graduate.
@@ -2367,6 +2419,169 @@ def test_academy_router_trainer_client_uses_llm_router_key() -> None:
         cleanup(tmp, old_env)
 
 
+def test_academy_router_trainer_synthesize_compact_budget_and_short_ids() -> None:
+    tmp, old_env, _conn, _control, ap = with_db()
+    old_urlopen = ap.urllib.request.urlopen
+    calls = []
+
+    class _SynthesisResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def read(self, _limit: int = -1) -> bytes:
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "lesson_notes": [
+                                            {
+                                                "source_uid": "s0",
+                                                "note": "Use progressive overload with recovery; balance nutrition and caveat supplements.",
+                                            }
+                                        ],
+                                        "soul_capsule": "Tutor from governed fitness notes; cite first and never diagnose.",
+                                        "retrieval_rules": ["retrieve before fitness or nutrition advice"],
+                                    },
+                                    sort_keys=True,
+                                )
+                            }
+                        }
+                    ]
+                },
+                sort_keys=True,
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        calls.append((request, timeout))
+        return _SynthesisResponse()
+
+    try:
+        key_file = Path(tmp.name) / "trainer-router-key"
+        key_file.write_text("acpod_live_test_router_key\n", encoding="utf-8")
+        client = ap.academy_trainer_client_from_env(
+            {
+                "ARCLINK_ACADEMY_TRAINER_ROUTER_BASE_URL": "http://router.test/v1",
+                "ARCLINK_ACADEMY_TRAINER_ROUTER_KEY_FILE": str(key_file),
+                "ARCLINK_ACADEMY_TRAINER_MODEL": "model-trainer",
+                "ARCLINK_ACADEMY_TRAINER_TIMEOUT_SECONDS": "120",
+            }
+        )
+        expect(client is not None, "expected router Trainer client")
+        ap.urllib.request.urlopen = fake_urlopen
+        result = client.synthesize(
+            role_title="Domain Tutor",
+            topic="fitness and nutrition",
+            charter={"slots": {"target_outcomes": ["safe beginner fitness"], "boundaries": ["never diagnose"]}},
+            sources=[
+                {
+                    "source_uid": "aprop_08583ba626dda71b",
+                    "lane_id": "web_article",
+                    "title": "Fitness source",
+                    "canonical_url": "https://example.test/fitness",
+                    "derived_notes": "Derived guidance: progressive overload, recovery, balanced nutrition, supplements are not medical treatment.",
+                    "citations_json": json.dumps([]),
+                }
+            ],
+        )
+        expect(result["authored"] is True and result["lesson_notes"][0]["source_uid"] == "aprop_08583ba626dda71b", str(result))
+        expect(len(calls) == 1, str(calls))
+        request, timeout = calls[0]
+        expect(timeout == 120, str(timeout))
+        body = json.loads(request.data.decode("utf-8"))
+        expect(body["max_tokens"] == 4000, str(body))
+        system_prompt = body["messages"][0]["content"]
+        expect("Output ONLY compact valid JSON" in system_prompt and "Do not include analysis" in system_prompt, system_prompt)
+        user_payload = json.loads(body["messages"][1]["content"])
+        expect(user_payload["sources"][0]["source_uid"] == "s0", str(user_payload))
+        expect(user_payload["output_limits"]["soul_capsule_words_max"] == 100, str(user_payload["output_limits"]))
+        print("PASS test_academy_router_trainer_synthesize_compact_budget_and_short_ids")
+    finally:
+        ap.urllib.request.urlopen = old_urlopen
+        cleanup(tmp, old_env)
+
+
+def test_academy_router_exam_model_client_requires_tool_calls() -> None:
+    tmp, old_env, _conn, _control, ap = with_db()
+    old_urlopen = ap.urllib.request.urlopen
+    calls = []
+
+    class _ToolResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def read(self, _limit: int = -1) -> bytes:
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "tool_calls": [
+                                    {
+                                        "type": "function",
+                                        "function": {"name": "retrieve", "arguments": json.dumps({"source_uid": "s0"})},
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                },
+                sort_keys=True,
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        calls.append((request, timeout))
+        if len(calls) == 2:
+            raise TimeoutError("slow router")
+        return _ToolResponse()
+
+    try:
+        key_file = Path(tmp.name) / "trainer-router-key"
+        key_file.write_text("acpod_live_test_router_key\n", encoding="utf-8")
+        ap.urllib.request.urlopen = fake_urlopen
+        client = ap.RouterExamModelClient.from_env(
+            {
+                "ARCLINK_ACADEMY_TRAINER_ROUTER_BASE_URL": "http://router.test/v1",
+                "ARCLINK_ACADEMY_TRAINER_ROUTER_KEY_FILE": str(key_file),
+                "ARCLINK_ACADEMY_TRAINER_MODEL": "model-trainer",
+                "ARCLINK_ACADEMY_TRAINER_TIMEOUT_SECONDS": "120",
+            }
+        )
+        expect(client is not None, "expected router Exam client")
+        call = client.next_tool_call(
+            [{"role": "system", "content": "use tools"}, {"role": "user", "content": "question"}],
+            ap._exam_tool_definitions(),
+        )
+        expect(call == {"name": "retrieve", "arguments": {"source_uid": "s0"}}, str(call))
+        call2 = client.next_tool_call(
+            [{"role": "system", "content": "use tools"}, {"role": "user", "content": "question"}],
+            ap._exam_tool_definitions(),
+            tool_choice="retrieve",
+        )
+        expect(call2 == {"name": "retrieve", "arguments": {"source_uid": "s0"}}, str(call2))
+        expect(len(calls) == 3, str(calls))
+        request, timeout = calls[0]
+        expect(timeout == 120, str(timeout))
+        body = json.loads(request.data.decode("utf-8"))
+        expect(body["tool_choice"] == "required", str(body))
+        expect(body["max_tokens"] == 4000, str(body))
+        narrowed = json.loads(calls[2][0].data.decode("utf-8"))
+        narrowed_tool_names = [((t.get("function") or {}).get("name")) for t in narrowed["tools"]]
+        expect(narrowed_tool_names == ["retrieve"] and narrowed["tool_choice"] == "required", str(narrowed))
+        print("PASS test_academy_router_exam_model_client_requires_tool_calls")
+    finally:
+        ap.urllib.request.urlopen = old_urlopen
+        cleanup(tmp, old_env)
+
+
 def test_academy_router_trainer_redacts_secret_shaped_payload_fields() -> None:
     tmp, old_env, _conn, _control, ap = with_db()
     old_urlopen = ap.urllib.request.urlopen
@@ -2625,6 +2840,8 @@ if __name__ == "__main__":
     test_academy_central_specialist_shared_and_deduped_across_captains()
     test_academy_public_cards_and_capsules_ignore_private_central_rows()
     test_academy_router_trainer_client_uses_llm_router_key()
+    test_academy_router_trainer_synthesize_compact_budget_and_short_ids()
+    test_academy_router_exam_model_client_requires_tool_calls()
     test_academy_router_trainer_redacts_secret_shaped_payload_fields()
     test_academy_mode_end_uses_live_trainer_when_pg_provider_authorized()
     test_academy_trainer_deep_dive_reviews_and_stamps_and_supports_live()

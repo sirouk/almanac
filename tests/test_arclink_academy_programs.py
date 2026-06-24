@@ -654,6 +654,23 @@ def test_academy_materialize_operator_sources_classifies_screens_and_graduatable
         cleanup(tmp, old_env)
 
 
+def test_academy_extract_model_json_fence_tolerant() -> None:
+    """Live-path fix (E2E-found): chat models (Kimi/GLM) wrap JSON in a ```json fence even when
+    asked for strict JSON. _extract_model_json must recover it (raw, fenced, prose-wrapped),
+    else live synthesis silently authors nothing."""
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        expect(ap._extract_model_json('{"a": 1}') == {"a": 1}, "raw JSON")
+        expect(ap._extract_model_json(' ```json\n{"a": 1}\n``` ') == {"a": 1}, "```json fenced")
+        expect(ap._extract_model_json('```\n{"a": 1}\n```') == {"a": 1}, "bare ``` fenced")
+        expect(ap._extract_model_json('Here you go: {"a": 1} -- done.') == {"a": 1}, "prose-wrapped span")
+        expect(ap._extract_model_json("not json at all") == {}, "junk -> {}")
+        expect(ap._extract_model_json("") == {} and ap._extract_model_json(None) == {}, "empty/None -> {}")
+        print("PASS test_academy_extract_model_json_fence_tolerant")
+    finally:
+        cleanup(tmp, old_env)
+
+
 def test_academy_synthesis_engine_two_pass_fail_closed() -> None:
     """inc3: run_academy_trainer_synthesize authors lesson_notes + a SOUL capsule;
     deterministic = honest non-authored draft; the public pass excludes the private
@@ -1022,6 +1039,18 @@ def test_academy_graduation_state_and_endmode_hook() -> None:
         expect(ended2["graduation_proof"]["status"] == "exam_pending", "default graduation is exam-pending")
         gs2 = ap.academy_trainee_graduation_state(conn, t2["trainee_id"])
         expect(gs2["badge"] == "staged" and gs2["exam_passed"] is False, f"legacy/pre-exam graduated row reads as STAGED, not green: {gs2}")
+
+        # Self-gate: PG-PROVIDER authorized (live_trainer) but NO router creds in env (so the
+        # exam runner can't auto-construct) -> honest needs_live_exam_runner, never green/spoof.
+        t3 = ap.enroll_academy_trainee(conn, program_id="research_analyst", user_id="u", deployment_id="dep-c3",
+                                       captain_steer={"charter_json": charter, "share": "redacted_public"})
+        s3 = ap.open_academy_mode(conn, trainee_id=t3["trainee_id"], opened_by="u")
+        ap.record_academy_resource_proposal(conn, deployment_id="dep-c3", trainee_id=t3["trainee_id"], origin_url="https://example.org/i",
+                                            lane_id="web_article", summary="Derived notes.", title="H3", proposed_by="u")
+        ended3 = ap.end_academy_mode(conn, session_id=s3["session"]["session_id"], actor="u", graduate=True, live_trainer_authorized=True)
+        expect(ended3["graduation_proof"]["status"] in ("needs_live_exam_runner", "needs_acceptance_exam", "needs_better_synthesis"),
+               f"PG-PROVIDER without router creds self-gates to a pending state, not green: {ended3['graduation_proof']}")
+        expect(ap.academy_trainee_graduation_state(conn, t3["trainee_id"])["badge"] != "graduated", "self-gated trainee is not green")
         print("PASS test_academy_graduation_state_and_endmode_hook")
     finally:
         cleanup(tmp, old_env)
@@ -2620,6 +2649,7 @@ if __name__ == "__main__":
     test_academy_charter_builds_with_failsafe_defaults_and_status()
     test_academy_charter_roundtrips_over_2000_chars_through_edit_path()
     test_academy_materialize_operator_sources_classifies_screens_and_graduatable()
+    test_academy_extract_model_json_fence_tolerant()
     test_academy_synthesis_engine_two_pass_fail_closed()
     test_academy_synthesis_screens_all_fields_and_blocks_downgrade()
     test_academy_acceptance_exam_objective_checks_and_gate()

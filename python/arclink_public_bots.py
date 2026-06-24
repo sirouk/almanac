@@ -1769,6 +1769,11 @@ def arclink_public_bot_turn_discord_components(turn: ArcLinkPublicBotTurn) -> li
     buttons = tuple(turn.buttons or ())
     if not buttons:
         return []
+    # Parity with the Telegram markup (arclink_public_bot_turn_telegram_reply_markup): on an
+    # ACTIVE deployment, control buttons must route through the `/raven` namespace so the live
+    # Hermes Agent's command router does not swallow them. Without this, a Discord `/academy`
+    # tap on a live deployment can be forwarded to the Agent instead of opening the interview.
+    active = turn.status in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES
     rows: list[dict[str, Any]] = []
     current: list[dict[str, Any]] = []
     for button in buttons:
@@ -1782,7 +1787,10 @@ def arclink_public_bot_turn_discord_components(turn: ArcLinkPublicBotTurn) -> li
         if button.url:
             payload["url"] = button.url
         else:
-            payload["custom_id"] = f"arclink:{button.command or button.label}"[:100]
+            command = button.command or button.label
+            if active:
+                command = _active_raven_callback_command(command)
+            payload["custom_id"] = f"arclink:{command}"[:100]
         current.append(payload)
         if len(current) == 5:
             rows.append({"type": 1, "components": current})
@@ -5818,9 +5826,11 @@ def _academy_agent_select_reply(
         channel_identity=channel_identity,
         action="academy_training_select_agent",
         reply=(
-            f"{prefix}Academy Training is ready for {count_label}.\n\n"
-            "Pick one Agent at a time. Raven will bootstrap the Academy turn by turn, then open that Agent's sticky Academy Mode. "
-            "You can send `cancel` or `exit` at any time."
+            f"{prefix}I'm the Academy Trainer — and this is a real interview, not a preset.\n\n"
+            f"Pick one Agent and I'll walk you through it: we define what it should master, how you'll test it "
+            "(your own acceptance scenarios), and which sources it learns from. Then I synthesize a curriculum and "
+            "run an acceptance exam — the Agent only graduates if it passes.\n\n"
+            f"You have {count_label} ready. Choose one to begin (or send `cancel` / `exit` anytime):"
         ),
         session=updated,
         deployment=deployment,
@@ -5893,9 +5903,10 @@ def _academy_major_prompt(
         channel_identity=channel_identity,
         action="academy_training_choose_major",
         reply=(
-            f"Good. We will train {label} one Agent at a time.\n\n"
+            f"Great — I'll train {label} as a specialist.\n\n"
             f"{reuse_text}\n\n"
-            "Choose the Academy Major to start from:\n"
+            f"First question: which field should {label} master? Pick the closest Major to anchor our interview — "
+            "we'll sharpen the exact focus, your acceptance tests, and the sources together in the next few questions:\n"
             + "\n".join(major_lines)
         ),
         session=updated,

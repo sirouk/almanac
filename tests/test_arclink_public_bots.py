@@ -2324,6 +2324,76 @@ def test_public_bot_train_crew_flow_and_whats_changed() -> None:
     print("PASS test_public_bot_train_crew_flow_and_whats_changed")
 
 
+def test_public_bot_academy_entry_announces_interview_and_button_parity() -> None:
+    """Parity proof (federation-converged 2026-06-24): the 'Academy' / 'Train My Crew' buttons on a
+    LIVE deployment must reach the real interview / crew curation, not a preset-looking stub. Asserts
+    the entry reframe, the Telegram /raven round-trip, the Discord rewrite harmonization, and that the
+    crew button reaches the crew flow. This is the cross-surface test whose ABSENCE let the 'looks
+    preset / neither starts the robust process' report ship: the engine was live, but no test drove a
+    button tap all the way to an interview question across the surfaces a captain actually taps."""
+    control = load_module("arclink_control.py", "arclink_control_public_bot_parity_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_parity_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(
+        control, conn, channel="telegram", channel_identity="tg:parity", prefix="arc-parity",
+    )
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="arcdep_parity_scout",
+        user_id=seeded["user_id"],
+        prefix="arc-parity-scout",
+        base_domain="control.example.ts.net",
+        agent_name="Scout",
+        agent_title="Research Specialist",
+        status="active",
+        metadata={"selected_plan_id": "sovereign"},
+    )
+    conn.commit()
+
+    # 1) Entry reframe: tapping Academy announces a REAL interview from screen one (not a preset menu).
+    entry = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:parity", text="/academy")
+    expect(entry.action == "academy_training_select_agent", str(entry))
+    expect("real interview" in entry.reply and "acceptance exam" in entry.reply, entry.reply)
+    # The real (not synthetic) reply carries a READY status, so its rendered buttons rewrite to /raven.
+    expect(entry.status in bots.ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES, entry.status)
+
+    # 2) Cross-surface markup parity: Telegram and Discord render the SAME /raven rewrite for an active
+    #    turn carrying the control buttons (Discord previously emitted raw arclink:/academy).
+    academy_turn = bots.ArcLinkPublicBotTurn(
+        channel="telegram", channel_identity="tg:parity", session_id="s", status="active",
+        current_step="ready", action="agents", reply="roster",
+        buttons=(
+            bots._button("Train My Crew", command="/train-crew", style="secondary"),
+            bots._button("Academy", command="/academy", style="secondary"),
+        ),
+    )
+    tg_cbs = [b.get("callback_data") for row in bots.arclink_public_bot_turn_telegram_reply_markup(academy_turn)["inline_keyboard"] for b in row]
+    dc_ids = [b.get("custom_id") for row in bots.arclink_public_bot_turn_discord_components(academy_turn) for b in row["components"]]
+    expect("arclink:/raven academy" in tg_cbs, str(tg_cbs))
+    expect("arclink:/raven academy" in dc_ids, str(dc_ids))  # harmonization: Discord was raw arclink:/academy
+    expect("arclink:/raven train_crew" in tg_cbs and "arclink:/raven train_crew" in dc_ids, f"{tg_cbs} {dc_ids}")
+
+    # 3) On a LIVE deployment the button command is rewritten to /raven academy; it MUST round-trip all
+    #    the way to an actual interview QUESTION (not just the menu), across the select->major->focus link.
+    expect(bots._active_raven_callback_command("/academy") == "/raven academy", "academy active rewrite")
+    expect(bots._active_raven_callback_command("/train-crew") == "/raven train_crew", "crew active rewrite")
+    routed = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:parity", text="/raven academy")
+    expect(routed.action == "academy_training_select_agent", str(routed))
+    expect("real interview" in routed.reply, routed.reply)
+    major = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:parity", text="Scout")
+    expect(major.action == "academy_training_choose_major", str(major))
+    expect("anchor our interview" in major.reply, major.reply)
+    focus = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:parity", text="research_analyst")
+    expect(focus.action == "academy_training_focus", str(focus))
+    expect("Academy Trainer" in focus.reply and "become able to" in focus.reply, focus.reply)  # the actual first question
+
+    # 4) 'Train My Crew' on a live deployment reaches the crew-curation flow, not a Raven status stub
+    #    (the /raven control rewrite bypasses the in-progress academy workflow).
+    crew = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:parity", text="/raven train_crew")
+    expect(crew.action.startswith("crew_training"), str(crew))
+    print("PASS test_public_bot_academy_entry_announces_interview_and_button_parity")
+
+
 def test_public_bot_academy_training_walks_crew_with_skip() -> None:
     control = load_module("arclink_control.py", "arclink_control_public_bot_academy_test")
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_academy_test")
@@ -2351,16 +2421,16 @@ def test_public_bot_academy_training_walks_crew_with_skip() -> None:
 
     start = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="/academy")
     expect(start.action == "academy_training_select_agent", str(start))
-    expect("one Agent at a time" in start.reply, start.reply)
+    expect("real interview" in start.reply, start.reply)
     quick = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="/quick-training")
     expect(quick.action == "academy_training_select_agent", str(quick))
     all_reply = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="/academy all")
     expect(all_reply.action == "academy_training_select_agent", str(all_reply))
-    expect("one Agent at a time" in all_reply.reply, all_reply.reply)
+    expect("real interview" in all_reply.reply, all_reply.reply)
 
     major = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="Beacon")
     expect(major.action == "academy_training_choose_major", str(major))
-    expect("Choose the Academy Major" in major.reply, major.reply)
+    expect("anchor our interview" in major.reply, major.reply)
     expect("Existing Academy search" in major.reply, major.reply)
     # The Professor interview: anchor1 (do/outcomes) -> anchor2 (exam) -> anchor3
     # (sources) -> anchor4 (boundaries) -> charter preview -> open.
@@ -3105,6 +3175,7 @@ def main() -> int:
     test_public_bot_can_update_wrapped_frequency()
     test_public_bot_greets_by_captured_display_name_and_offers_checkout_buttons()
     test_public_bot_train_crew_flow_and_whats_changed()
+    test_public_bot_academy_entry_announces_interview_and_button_parity()
     test_public_bot_academy_training_walks_crew_with_skip()
     test_public_bot_academy_interview_materializes_sources_and_runs_reuse()
     test_public_bot_new_onboarding_workflow_wins_over_retired_history()

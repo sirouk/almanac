@@ -1006,8 +1006,19 @@ def test_academy_apply_action_materializes_local_hermes_home_when_authorized() -
             metadata={"state_roots": roots},
         )
         programs.seed_default_academy_programs(conn)
+        charter = programs.build_charter(
+            {
+                "subject_scope": "Systems practice engineering for fleet operations",
+                "acceptance_scenarios": [
+                    {"prompt": "Diagnose a failing deploy from the logs and cite the governed runbook.", "pass_criteria": ["cite a governed source"]}
+                ],
+                "boundaries": ["never reveal the captain's private infrastructure secrets"],
+            },
+            program=programs.get_academy_program(conn, "systems_practice_engineer"),
+        )
         trainee = programs.enroll_academy_trainee(
-            conn, program_id="systems_practice_engineer", user_id=user_id, deployment_id=deployment_id, name="Apply Live"
+            conn, program_id="systems_practice_engineer", user_id=user_id, deployment_id=deployment_id,
+            name="Apply Live", captain_steer={"charter_json": charter},
         )
         session = programs.open_academy_mode(conn, trainee_id=trainee["trainee_id"], opened_by=user_id)
         programs.record_academy_resource_proposal(
@@ -1021,26 +1032,33 @@ def test_academy_apply_action_materializes_local_hermes_home_when_authorized() -
         )
         programs.end_academy_mode(conn, session_id=session["session"]["session_id"], actor=user_id, graduate=True)
 
-        # Fail-closed Trainer gate (arclink_academy_programs.py:2941-3029): a live
-        # apply only materializes a capsule whose specialist has a completed
-        # PG-PROVIDER live review (live_enrichment_status == "live_reviewed").
-        # Establish that review here so "authorized" means fully authorized.
-        class _ApplyLiveTrainer:
+        # M2 fail-closed gate (arclink_academy_programs.py): a live apply no longer rides
+        # the central capsule -- it requires the trainee's OWN fresh live-authored PRIVATE
+        # synthesis PLUS a PASSED acceptance exam bound to that synthesis. Establish both
+        # here so "authorized" means fully authorized under the M2 writes_enabled gate.
+        class _ApplyLivePrivate:
             live = True
 
-            def review(self, *, role_title, topic, sources):
+            def synthesize(self, *, role_title, topic, charter, sources):
                 return {
-                    "engine": "apply-live-router",
-                    "live": True,
-                    "summary": f"Provider reviewed {role_title}",
-                    "verdicts": [{"source_uid": s["source_uid"], "verdict": "keep"} for s in sources],
+                    "engine": "live-router",
+                    "authored": True,
+                    "lesson_notes": [
+                        {"source_uid": s["source_uid"], "note": f"Authored specialist note for {role_title}."}
+                        for s in sources
+                    ],
+                    "soul_capsule": "You are a Systems Practice Engineer specialist. Cite a governed source before any operational claim.",
+                    "retrieval_rules": ["cite a governed source before answering"],
+                    "quality_metrics": {},
                 }
 
-        spec_uid, _ = programs.specialist_uid_for_program(
-            programs.get_academy_program(conn, "systems_practice_engineer")
+        programs.run_academy_trainer_synthesize(
+            conn, trainee_id=trainee["trainee_id"], scope="private",
+            client=_ApplyLivePrivate(), live_authorized=True,
         )
-        programs.run_academy_trainer_review(
-            conn, specialist_uid=spec_uid, client=_ApplyLiveTrainer(), live_authorized=True
+        programs.run_academy_acceptance_exam(
+            conn, trainee_id=trainee["trainee_id"],
+            agent_runner=programs.FakeAgentRunner(live=True), live_authorized=True,
         )
         action = _queue_action(
             dashboard,
@@ -1081,7 +1099,7 @@ def test_academy_apply_action_materializes_local_hermes_home_when_authorized() -
         expect(refresh_kinds["skill_activation"]["skill_count"] == len(applied["approved_skill_intents"]), str(refresh_kinds))
         soul = (hermes_home / "SOUL.md").read_text(encoding="utf-8")
         expect("Human-authored identity." in soul, soul)
-        expect(org_profile.BEGIN_ACADEMY_MARKER in soul and "Live apply source" in soul, soul)
+        expect(org_profile.BEGIN_ACADEMY_MARKER in soul and "Systems Practice Engineer specialist" in soul, soul)
         state = json.loads((hermes_home / "state" / "arclink-academy-apply.json").read_text(encoding="utf-8"))
         expect(state["trainee_id"] == trainee["trainee_id"], str(state))
         expect(state["qmd_memory_seed_intents"], str(state))

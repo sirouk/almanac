@@ -459,8 +459,9 @@ def test_telegram_active_chat_scope_adds_agent_commands() -> None:
     expect(calls[0]["scope"] == {"type": "chat", "chat_id": 42}, str(calls[0]))
     names = {item["command"] for item in calls[0]["commands"]}
     expect("raven" in names, str(names))
+    expect("agents" in names, str(names))
     expect(not any(name.startswith("raven_") for name in names), str(names))
-    expect("agents" not in names and "status" not in names and "help" not in names, str(names))
+    expect("status" not in names and "help" not in names, str(names))
     expect("model" in names, str(names))
     expect("provider" in names, str(names))
     expect("reload_mcp" in names, str(names))

@@ -92,6 +92,7 @@ ARCLINK_TELEGRAM_AGENT_ALIAS_COMMANDS: tuple[tuple[str, str], ...] = (
 ARCLINK_TELEGRAM_RAVEN_CONTROL_CANDIDATES = ("raven", "arclink", "arclink_control")
 ARCLINK_TELEGRAM_RAVEN_ACTIVE_DESCRIPTION = "Raven: ArcLink controls, roster, status, and setup"
 ARCLINK_TELEGRAM_POLICY_SUPPRESSED_AGENT_COMMANDS = frozenset({"update"})
+ARCLINK_TELEGRAM_ACTIVE_VISIBLE_CAPTAIN_COMMAND_NAMES = frozenset({"agents"})
 ARCLINK_TELEGRAM_LEGACY_RAVEN_COMMAND_NAMES = frozenset(
     _telegram_name
     for _telegram_name in (
@@ -765,14 +766,30 @@ def arclink_public_bot_telegram_active_command_plan(
         {"command": raven_command, "description": ARCLINK_TELEGRAM_RAVEN_ACTIVE_DESCRIPTION[:256]}
     ]
     used = {raven_command}
-    # In an active Agent chat the Agent owns the bare slash namespace, so the picker
-    # intentionally exposes ONE /raven control gateway plus the Agent's own commands
-    # rather than ~30 raven_* entries. Every Captain raven_* sub-command stays reachable
-    # by typing /raven <x> (rewritten by _raven_prefixed_command_rewrite) and is shown in
-    # full in non-active chats; this keeps the menu clean without losing capability.
-    del captain_commands
+    # In an active Agent chat the Agent owns most of the bare slash namespace, so the
+    # picker exposes ONE /raven control gateway plus the Agent's own commands rather
+    # than ~30 raven_* entries. A tiny allowlist remains visible when the public bot
+    # itself owns the bare command behavior. /agents is one of those: Captain chats
+    # route it to the ArcLink Crew manifest even when Hermes also advertises an
+    # internal helper-agent command with the same name.
+    raw_captain = list(captain_commands) if captain_commands is not None else arclink_public_bot_captain_telegram_commands()
+    if not any(_telegram_command_name(str(item.get("command") or "")) == "agents" for item in raw_captain):
+        raw_captain.append({"command": "agents", "description": "Open your ArcLink Crew manifest"})
     hidden_captain_command_names: list[str] = []
     captain_conflicts: list[str] = []
+    for item in raw_captain:
+        name = _telegram_command_name(str(item.get("command") or ""))
+        description = str(item.get("description") or "").strip()
+        if name not in ARCLINK_TELEGRAM_ACTIVE_VISIBLE_CAPTAIN_COMMAND_NAMES or not description:
+            continue
+        if name in used:
+            captain_conflicts.append(name)
+            continue
+        commands.append({"command": name, "description": description[:256]})
+        used.add(name)
+        hidden_captain_command_names.append(name)
+        if len(commands) >= ARCLINK_TELEGRAM_COMMAND_LIMIT:
+            break
     agent_added_count = 0
     for item in normalized_agent:
         if item["command"] in used:
@@ -783,7 +800,10 @@ def arclink_public_bot_telegram_active_command_plan(
         if len(commands) >= ARCLINK_TELEGRAM_COMMAND_LIMIT:
             break
 
-    legacy_conflicts = sorted(raw_agent_names & ARCLINK_TELEGRAM_LEGACY_RAVEN_COMMAND_NAMES)
+    legacy_conflicts = sorted(
+        (raw_agent_names & ARCLINK_TELEGRAM_LEGACY_RAVEN_COMMAND_NAMES)
+        - ARCLINK_TELEGRAM_ACTIVE_VISIBLE_CAPTAIN_COMMAND_NAMES
+    )
     hard_conflicts = sorted(raw_agent_names & set(ARCLINK_TELEGRAM_RAVEN_CONTROL_CANDIDATES))
     hidden_count = max(0, len(normalized_agent) - agent_added_count)
     return {

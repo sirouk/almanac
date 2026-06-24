@@ -1049,9 +1049,11 @@ services:
       ARCLINK_GATEWAY_EXEC_BROKER_TOKEN: ${ARCLINK_GATEWAY_EXEC_BROKER_TOKEN:?run ./deploy.sh control bootstrap first}
       ARCLINK_GATEWAY_EXEC_BROKER_HOST: 0.0.0.0
       ARCLINK_GATEWAY_EXEC_BROKER_PORT: 8911
-      # GAP-019 pass-2: additive HMAC request signing. DEFAULT OFF (accept-both).
-      # With it on, the body-hash HMAC also pins the bridge bot_token field (H4).
-      ARCLINK_BROKER_REQUIRE_SIGNED: ${ARCLINK_BROKER_REQUIRE_SIGNED:-0}
+      # This Docker-exec broker is signed-only by default: the body-hash HMAC
+      # pins the bridge bot_token payload and replay nonce. Set this broker-local
+      # override to 0 only for an emergency lock-step repair.
+      ARCLINK_GATEWAY_EXEC_BROKER_REQUIRE_SIGNED: ${ARCLINK_GATEWAY_EXEC_BROKER_REQUIRE_SIGNED:-1}
+      ARCLINK_GATEWAY_EXEC_BROKER_MAX_CONCURRENT_EXECS: ${ARCLINK_GATEWAY_EXEC_BROKER_MAX_CONCURRENT_EXECS:-8}
       # The broker reconstructs the public-agent bridge command via the gated builder,
       # so it must see the L2 flag too — otherwise L2 is silently disabled on the main
       # broker path. Default 0; the builder's preflight still requires the wrapper to be

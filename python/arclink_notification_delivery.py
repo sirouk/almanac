@@ -893,7 +893,10 @@ def _gateway_exec_broker_request(
     # the isolated broker untouched.
     remote = _deployment_remote_bridge_target(request["deployment_id"], request["prefix"])
     if remote:
-        request["_remote_bridge"] = remote
+        if remote.get("error"):
+            request["_remote_bridge_error"] = str(remote.get("error") or "").strip()
+        else:
+            request["_remote_bridge"] = remote
     return request
 
 
@@ -950,6 +953,10 @@ def _deployment_remote_bridge_target(deployment_id: str, prefix: str) -> dict[st
     elif not key_path or not Path(key_path).is_file():
         unreachable = "fleet SSH key unavailable"
     if unreachable:
+        error = (
+            "Hermes public gateway bridge (worker) is required for this worker-placed pod "
+            f"but cannot be targeted: {unreachable}"
+        )
         _append_public_agent_bridge_log(
             json.dumps(
                 {
@@ -957,11 +964,12 @@ def _deployment_remote_bridge_target(deployment_id: str, prefix: str) -> dict[st
                     "deployment_id": deployment_id,
                     "host_id": str(host.get("host_id") or ""),
                     "reason": unreachable,
+                    "error": error,
                 },
                 sort_keys=True,
             )
         )
-        return None
+        return {"error": error}
     state_base = (config_env_value("ARCLINK_STATE_ROOT_BASE", "/arcdata/deployments") or "/arcdata/deployments").rstrip("/")
     root = f"{state_base}/{deployment_id}-{prefix}" if prefix else f"{state_base}/{deployment_id}"
     return {
@@ -1159,6 +1167,9 @@ def _run_gateway_exec_broker_request(request_body: dict[str, Any]) -> tuple[bool
     # a resolved SSH target -- run the bridge there directly instead of POSTing to the
     # control-node-only broker. Both the synchronous and detached worker paths route
     # through here, so this covers both.
+    remote_error = str(request_body.get("_remote_bridge_error") or "").strip()
+    if remote_error:
+        return False, remote_error[:500]
     if request_body.get("_remote_bridge"):
         return _run_remote_bridge_over_ssh(request_body)
     broker_url = _gateway_exec_broker_url()

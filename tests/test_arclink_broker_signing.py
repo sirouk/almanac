@@ -256,13 +256,65 @@ def test_gateway_exec_broker_signing() -> None:
     # gateway broker token reads through delivery.config_env_value; set both.
     old = os.environ.copy()
     try:
-        _exercise_broker_is_authorized(
-            module,
-            token_env="ARCLINK_GATEWAY_EXEC_BROKER_TOKEN",
-            token_value="gateway-token",
-            bearer_header=module.delivery.GATEWAY_EXEC_BROKER_TOKEN_HEADER,
-            label="gateway_exec_broker",
-        )
+        body = b'{"operation":"noop"}'
+
+        # Emergency opt-out keeps bare-token admission available for lock-step
+        # repair, but only when the gateway-local override is explicitly off.
+        os.environ["ARCLINK_GATEWAY_EXEC_BROKER_REQUIRE_SIGNED"] = "0"
+        os.environ["ARCLINK_GATEWAY_EXEC_BROKER_TOKEN"] = "gateway-token"
+        optout = FreshStore()
+        module._NONCE_STORE = optout.store
+        try:
+            bare = {module.delivery.GATEWAY_EXEC_BROKER_TOKEN_HEADER: "gateway-token"}
+            expect(module._is_authorized(bare, body) is True, "gateway_exec_broker: explicit opt-out bare token must admit")
+            signed_off = _bearer_and_signed_headers("gateway-token", body, module.delivery.GATEWAY_EXEC_BROKER_TOKEN_HEADER)
+            expect(module._is_authorized(signed_off, body) is True, "gateway_exec_broker: explicit opt-out signed request must admit")
+            wrong = {module.delivery.GATEWAY_EXEC_BROKER_TOKEN_HEADER: "nope"}
+            expect(module._is_authorized(wrong, body) is False, "gateway_exec_broker: wrong bearer must reject")
+        finally:
+            optout.cleanup()
+
+        # Production/default path is signed-only even when the shared rollout flag
+        # is unset, because this broker owns Docker exec authority.
+        fresh = FreshStore()
+        os.environ.clear()
+        os.environ.update(old)
+        os.environ["ARCLINK_GATEWAY_EXEC_BROKER_TOKEN"] = "gateway-token"
+        os.environ.pop("ARCLINK_GATEWAY_EXEC_BROKER_REQUIRE_SIGNED", None)
+        os.environ.pop("ARCLINK_BROKER_REQUIRE_SIGNED", None)
+        module._NONCE_STORE = fresh.store
+        original_nonce_path = module._nonce_store_path
+        module._nonce_store_path = lambda: fresh.path
+        try:
+            bare = {module.delivery.GATEWAY_EXEC_BROKER_TOKEN_HEADER: "gateway-token"}
+            expect(module._is_authorized(bare, body) is False, "gateway_exec_broker: default bare token must reject")
+            signed = _bearer_and_signed_headers("gateway-token", body, module.delivery.GATEWAY_EXEC_BROKER_TOKEN_HEADER)
+            expect(module._is_authorized(signed, body) is True, "gateway_exec_broker: default signed request must accept")
+            expect(module._is_authorized(signed, body) is False, "gateway_exec_broker: default replay must reject")
+            tampered = _bearer_and_signed_headers("gateway-token", body, module.delivery.GATEWAY_EXEC_BROKER_TOKEN_HEADER)
+            expect(module._is_authorized(tampered, body + b"!") is False, "gateway_exec_broker: default tampered body must reject")
+        finally:
+            module._nonce_store_path = original_nonce_path
+            fresh.cleanup()
+
+        class MissingNonceStore:
+            def record_if_unseen(self, nonce, now=None):
+                del nonce, now
+                raise AssertionError("missing nonce path must fail before nonce-store mutation")
+
+        os.environ["ARCLINK_GATEWAY_EXEC_BROKER_TOKEN"] = "gateway-token"
+        module._NONCE_STORE = MissingNonceStore()
+        original_nonce_path = module._nonce_store_path
+        module._nonce_store_path = lambda: None
+        try:
+            signed = _bearer_and_signed_headers("gateway-token", body, module.delivery.GATEWAY_EXEC_BROKER_TOKEN_HEADER)
+            expect(
+                module._is_authorized(signed, body) is False,
+                "gateway_exec_broker: strict mode with unavailable nonce path must reject",
+            )
+        finally:
+            module._nonce_store_path = original_nonce_path
+        print("PASS test_gateway_exec_broker_is_authorized_signing")
     finally:
         os.environ.clear()
         os.environ.update(old)

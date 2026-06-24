@@ -2196,6 +2196,12 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     )
     conn.execute(
         """
+        CREATE INDEX IF NOT EXISTS idx_arclink_llm_router_keys_hash
+        ON arclink_llm_router_keys (key_hash)
+        """
+    )
+    conn.execute(
+        """
         CREATE INDEX IF NOT EXISTS idx_arclink_llm_router_keys_deployment_status
         ON arclink_llm_router_keys (deployment_id, status, created_at)
         """
@@ -2216,6 +2222,18 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_arclink_llm_reservations_request_status
         ON arclink_llm_budget_reservations (request_id, status)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_llm_reservations_deployment_status_cents
+        ON arclink_llm_budget_reservations (deployment_id, status, reserved_cents)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_rate_limits_scope_subject_observed
+        ON rate_limits (scope, subject, observed_at)
         """
     )
     conn.execute(
@@ -2379,6 +2397,12 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     # distinct from a clean 'released') so settlement can reconcile a reaped-but-
     # returning request by id. Guarded rebuild -- only runs if the CHECK lacks it.
     _migrate_llm_budget_reservations_add_expired_status(conn)
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_llm_reservations_status_heartbeat
+        ON arclink_llm_budget_reservations (status, COALESCE(NULLIF(heartbeat_at, ''), created_at))
+        """
+    )
     _ensure_column(conn, "arclink_action_intents", "worker_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_action_intents", "claimed_at", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_pod_migrations", "source_placement_id", "TEXT NOT NULL DEFAULT ''")
@@ -3282,13 +3306,25 @@ def _migrate_llm_budget_reservations_add_expired_status(conn: sqlite3.Connection
         conn.execute(
             "ALTER TABLE arclink_llm_budget_reservations__new RENAME TO arclink_llm_budget_reservations"
         )
-        # The DROP above also dropped this index (created earlier in the
-        # ensure_schema index block). Recreate it inside the SAME transaction so a
-        # single ensure_schema pass yields the rebuilt table WITH its index.
+        # The DROP above also dropped reservation indexes (created earlier in the
+        # ensure_schema index block). Recreate them inside the SAME transaction so
+        # a single ensure_schema pass yields the rebuilt table WITH its indexes.
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_arclink_llm_reservations_request_status
             ON arclink_llm_budget_reservations (request_id, status)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_arclink_llm_reservations_deployment_status_cents
+            ON arclink_llm_budget_reservations (deployment_id, status, reserved_cents)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_arclink_llm_reservations_status_heartbeat
+            ON arclink_llm_budget_reservations (status, COALESCE(NULLIF(heartbeat_at, ''), created_at))
             """
         )
     except BaseException:
@@ -10963,7 +10999,8 @@ def fetch_undelivered_notifications(
           CASE target_kind
             WHEN 'operator' THEN 0
             WHEN 'curator' THEN 1
-            ELSE 2
+            WHEN 'public-agent-turn' THEN 2
+            ELSE 3
           END,
           id ASC
         LIMIT ?

@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,7 @@ import arclink_notification_delivery as delivery
 MAX_REQUEST_BYTES = 65536
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8911
+DEFAULT_MAX_CONCURRENT_EXECS = 8
 DEPLOYMENT_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$")
 SERVICE_NAME = "gateway-exec-broker"
 
@@ -59,19 +61,53 @@ def _nonce_store_path() -> Path | None:
 _NONCE_STORE = NonceStore(_nonce_store_path)
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    raw = delivery.config_env_value(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on", "enabled"}
+
+
+def _int_env(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    raw = delivery.config_env_value(name, str(default)).strip()
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _gateway_requires_signed() -> bool:
+    # This broker owns Docker exec authority. Default signed-only here while
+    # leaving the shared ARCLINK_BROKER_REQUIRE_SIGNED rollout flag untouched for
+    # the older helper/broker lanes that may still need accept-both skew safety.
+    return _bool_env("ARCLINK_GATEWAY_EXEC_BROKER_REQUIRE_SIGNED", True)
+
+
 def _is_authorized(headers: Any, raw_body: bytes) -> bool:
-    # Lock-step-safe accept-both: bare token admits while
-    # ARCLINK_BROKER_REQUIRE_SIGNED is off. With the flag on, the body-hash HMAC
-    # additionally covers the payload (incl. the gateway bot_token field, H4) so
-    # an on-net party cannot substitute a different token in transit.
+    # Signed-only by default for this Docker-exec broker: the body-hash HMAC
+    # covers the payload (incl. the gateway bot_token field), so an on-net party
+    # cannot substitute a different token in transit. An explicit broker-local
+    # opt-out remains for emergency lock-step repair.
+    require_signed = _gateway_requires_signed()
+    if require_signed and _nonce_store_path() is None:
+        return False
     ok, _reason = verify_broker_request(
         _broker_token(),
         headers,
         raw_body,
         _NONCE_STORE,
         bearer_header=delivery.GATEWAY_EXEC_BROKER_TOKEN_HEADER,
+        require_signed=require_signed,
     )
     return ok
+
+
+def _max_concurrent_execs() -> int:
+    return _int_env("ARCLINK_GATEWAY_EXEC_BROKER_MAX_CONCURRENT_EXECS", DEFAULT_MAX_CONCURRENT_EXECS, minimum=1, maximum=64)
+
+
+_EXEC_SEMAPHORE = threading.BoundedSemaphore(_max_concurrent_execs())
 
 
 _TIMEOUT_FLOOR_SECONDS = 30
@@ -339,19 +375,28 @@ def run_gateway_exec_request_payload(request_body: dict[str, Any]) -> dict[str, 
     except ValueError as exc:
         _record_rejection_incident(request_body, exc)
         return {"ok": False, "error": str(exc)}
+    if not _EXEC_SEMAPHORE.acquire(blocking=False):
+        return {
+            "ok": False,
+            "http_status": 503,
+            "error": "Hermes public gateway bridge capacity is saturated; retry shortly",
+        }
     try:
-        proc = subprocess.run(
-            cmd,
-            input=json.dumps(payload, sort_keys=True),
-            check=False,
-            text=True,
-            capture_output=True,
-            timeout=timeout_seconds,
-        )
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "Hermes public gateway bridge timed out"}
-    except OSError as exc:
-        return {"ok": False, "error": f"could not start Hermes public gateway bridge: {str(exc)[:180]}"}
+        try:
+            proc = subprocess.run(
+                cmd,
+                input=json.dumps(payload, sort_keys=True),
+                check=False,
+                text=True,
+                capture_output=True,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "Hermes public gateway bridge timed out"}
+        except OSError as exc:
+            return {"ok": False, "error": f"could not start Hermes public gateway bridge: {str(exc)[:180]}"}
+    finally:
+        _EXEC_SEMAPHORE.release()
     if proc.returncode != 0:
         return {"ok": False, "error": _bridge_failure_error(proc, bot_token=str(payload.get("bot_token") or ""))}
     try:
@@ -418,7 +463,10 @@ class GatewayExecBrokerHandler(BaseHTTPRequestHandler):
         if result.get("ok") is True:
             _json_response(self, 200, result)
         else:
-            _json_response(self, 400, {"ok": False, "error": str(result.get("error") or "")})
+            status = int(result.get("http_status") or 400)
+            if status < 400 or status > 599:
+                status = 400
+            _json_response(self, status, {"ok": False, "error": str(result.get("error") or "")})
 
 
 def serve(*, host: str, port: int) -> None:

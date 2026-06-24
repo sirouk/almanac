@@ -483,6 +483,43 @@ def test_notification_errors_backoff_and_due_fetch_skips_future_rows() -> None:
     print("PASS test_notification_errors_backoff_and_due_fetch_skips_future_rows")
 
 
+def test_public_agent_turn_notifications_prioritize_live_chat_after_operator_and_curator() -> None:
+    mod = load_module(CONTROL_PY, "arclink_control_db_public_agent_priority_test")
+    conn = memory_db(mod)
+    generic = mod.queue_notification(
+        conn,
+        target_kind="user-agent",
+        target_id="user-agent:slow",
+        channel_kind="telegram",
+        message="older generic notification",
+    )
+    public_turn = mod.queue_notification(
+        conn,
+        target_kind="public-agent-turn",
+        target_id="tg:chat",
+        channel_kind="telegram",
+        message="newer live chat turn",
+    )
+    operator = mod.queue_notification(
+        conn,
+        target_kind="operator",
+        target_id="operator",
+        channel_kind="tui-only",
+        message="operator first",
+    )
+    curator = mod.queue_notification(
+        conn,
+        target_kind="curator",
+        target_id="curator",
+        channel_kind="tui-only",
+        message="curator second",
+    )
+    rows = mod.fetch_undelivered_notifications(conn, limit=4)
+    order = [row["id"] for row in rows]
+    expect(order == [operator, curator, public_turn, generic], str(order))
+    print("PASS test_public_agent_turn_notifications_prioritize_live_chat_after_operator_and_curator")
+
+
 def test_notification_retry_backoff_jitters_by_notification_id() -> None:
     mod = load_module(CONTROL_PY, "arclink_control_db_notification_retry_jitter_test")
     base = mod.notification_error_retry_delay_seconds(3)
@@ -635,6 +672,26 @@ def test_wave4_schema_indexes_exist_and_totp_active_factor_is_unique() -> None:
         for row in conn.execute("PRAGMA index_list(arclink_users)").fetchall()
     }
     expect("idx_arclink_users_stripe_customer" in user_indexes, str(user_indexes))
+    router_key_indexes = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA index_list(arclink_llm_router_keys)").fetchall()
+    }
+    expect("idx_arclink_llm_router_keys_hash" in router_key_indexes, str(router_key_indexes))
+    rate_limit_indexes = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA index_list(rate_limits)").fetchall()
+    }
+    expect("idx_rate_limits_scope_subject_observed" in rate_limit_indexes, str(rate_limit_indexes))
+    reservation_indexes = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA index_list(arclink_llm_budget_reservations)").fetchall()
+    }
+    for index_name in (
+        "idx_arclink_llm_reservations_request_status",
+        "idx_arclink_llm_reservations_deployment_status_cents",
+        "idx_arclink_llm_reservations_status_heartbeat",
+    ):
+        expect(index_name in reservation_indexes, f"{index_name} missing: {reservation_indexes}")
     conn.execute(
         """
         INSERT INTO arclink_admins (admin_id, email, role, status, created_at, updated_at)
@@ -1100,11 +1157,24 @@ def test_llm_budget_reservations_rebuild_is_atomic_and_keeps_index_on_first_pass
         )
         conn.commit()
 
-        def _index_present(c: sqlite3.Connection) -> bool:
-            row = c.execute(
-                "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_arclink_llm_reservations_request_status'"
-            ).fetchone()
-            return row is not None
+        def _reservation_indexes(c: sqlite3.Connection) -> set[str]:
+            return {
+                str(row["name"])
+                for row in c.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='arclink_llm_budget_reservations'"
+                ).fetchall()
+            }
+
+        def _indexes_present(c: sqlite3.Connection) -> bool:
+            indexes = _reservation_indexes(c)
+            return all(
+                name in indexes
+                for name in (
+                    "idx_arclink_llm_reservations_request_status",
+                    "idx_arclink_llm_reservations_deployment_status_cents",
+                    "idx_arclink_llm_reservations_status_heartbeat",
+                )
+            )
 
         def _expired_in_check(c: sqlite3.Connection) -> bool:
             ddl = str(
@@ -1118,7 +1188,7 @@ def test_llm_budget_reservations_rebuild_is_atomic_and_keeps_index_on_first_pass
         mod.ensure_schema(conn)
 
         # Index present after the FIRST pass (the core regression) -- not deferred.
-        expect(_index_present(conn), "index must exist after a single ensure_schema pass")
+        expect(_indexes_present(conn), f"reservation indexes must exist after one pass: {_reservation_indexes(conn)}")
         # 'expired' CHECK present.
         expect(_expired_in_check(conn), "rebuilt CHECK must admit 'expired' after one pass")
         # All rows preserved through the copy/swap.
@@ -1136,7 +1206,7 @@ def test_llm_budget_reservations_rebuild_is_atomic_and_keeps_index_on_first_pass
         # swap landed), index and CHECK persist, rows intact.
         conn2 = sqlite3.connect(db_path)
         conn2.row_factory = sqlite3.Row
-        expect(_index_present(conn2), "index must persist after reopen (committed)")
+        expect(_indexes_present(conn2), f"reservation indexes must persist after reopen: {_reservation_indexes(conn2)}")
         expect(_expired_in_check(conn2), "'expired' CHECK must persist after reopen (committed)")
         durable = conn2.execute("SELECT COUNT(*) AS c FROM arclink_llm_budget_reservations").fetchone()["c"]
         expect(int(durable) == 2, f"rows must be durable after commit, got {durable}")
@@ -1151,7 +1221,7 @@ def test_llm_budget_reservations_rebuild_is_atomic_and_keeps_index_on_first_pass
         # Second pass is a clean no-op: index/CHECK unchanged, no extra/duplicate
         # rebuild, rows preserved.
         mod.ensure_schema(conn2)
-        expect(_index_present(conn2), "index still present after 2nd pass")
+        expect(_indexes_present(conn2), f"reservation indexes still present after 2nd pass: {_reservation_indexes(conn2)}")
         expect(_expired_in_check(conn2), "'expired' CHECK still present after 2nd pass")
         # No leftover __new scratch table from a stranded/partial rebuild.
         leftover = conn2.execute(
@@ -1641,6 +1711,7 @@ if __name__ == "__main__":
     test_operation_idempotency_rejects_same_key_different_intent()
     test_operation_idempotency_failed_attempt_replays_without_completion()
     test_notification_errors_backoff_and_due_fetch_skips_future_rows()
+    test_public_agent_turn_notifications_prioritize_live_chat_after_operator_and_curator()
     test_notification_retry_backoff_jitters_by_notification_id()
     test_operation_idempotency_persists_across_restart()
     test_upsert_user_preserves_protected_status_without_privileged_transition()

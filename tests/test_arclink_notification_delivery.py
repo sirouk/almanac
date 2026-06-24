@@ -11,6 +11,7 @@ import os
 import stat
 import sys
 import tempfile
+import threading
 import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -2948,6 +2949,64 @@ def test_gateway_exec_broker_sanitizes_subprocess_failure_tail() -> None:
     print("PASS test_gateway_exec_broker_sanitizes_subprocess_failure_tail")
 
 
+def test_gateway_exec_broker_bounds_concurrent_execs() -> None:
+    old_env = os.environ.copy()
+    try:
+        os.environ["ARCLINK_GATEWAY_EXEC_BROKER_MAX_CONCURRENT_EXECS"] = "1"
+        broker = load_module(PYTHON_DIR / "arclink_gateway_exec_broker.py", "arclink_gateway_exec_broker_concurrency_test")
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+
+    class Proc:
+        returncode = 0
+        stdout = '{"delivered": true, "delivery_status": "confirmed", "message_ids": ["tg-msg-1"], "ok": true}\n'
+        stderr = ""
+
+    entered = threading.Event()
+    release = threading.Event()
+    subprocess_calls: list[str] = []
+
+    def fake_build(request_body):
+        del request_body
+        return ["fake-docker", "exec"], {"platform": "telegram", "bot_token": "token", "chat_id": "1", "user_id": "2", "text": "hi"}, 60, "project"
+
+    def blocking_run(*args, **kwargs):
+        del args, kwargs
+        subprocess_calls.append("run")
+        entered.set()
+        release.wait(timeout=10)
+        return Proc()
+
+    original_build = broker._build_gateway_exec_command
+    original_run = broker.subprocess.run
+    try:
+        broker._build_gateway_exec_command = fake_build
+        broker.subprocess.run = blocking_run
+        first_result: dict[str, object] = {}
+
+        def run_first() -> None:
+            first_result.update(broker.run_gateway_exec_request_payload({"deployment_id": "arcdep_test"}))
+
+        thread = threading.Thread(target=run_first)
+        thread.start()
+        expect(entered.wait(timeout=5), "first broker request did not enter subprocess")
+        saturated = broker.run_gateway_exec_request_payload({"deployment_id": "arcdep_test"})
+        expect(saturated.get("ok") is False, str(saturated))
+        expect(saturated.get("http_status") == 503, str(saturated))
+        expect("capacity is saturated" in str(saturated.get("error") or ""), str(saturated))
+        expect(subprocess_calls == ["run"], str(subprocess_calls))
+        release.set()
+        thread.join(timeout=5)
+        expect(not thread.is_alive(), "first broker request did not finish")
+        expect(first_result.get("ok") is True, str(first_result))
+    finally:
+        release.set()
+        broker._build_gateway_exec_command = original_build
+        broker.subprocess.run = original_run
+    print("PASS test_gateway_exec_broker_bounds_concurrent_execs")
+
+
 def test_upgrade_notification_delivery_defers_during_deploy_operation() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -5064,6 +5123,41 @@ def test_worker_placed_pod_bridges_over_ssh_with_token_on_stdin() -> None:
         delivery.subprocess.run = lambda cmd, **kwargs: _Ssh255()
         ok4, error4 = delivery._run_gateway_exec_broker_request(request)
         expect(ok4 is False and "SSH transport" in error4, f"ssh 255 should be classified: {(ok4, error4)}")
+
+        original_urlopen = delivery.urllib.request.urlopen
+        delivery.urllib.request.urlopen = lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("worker routing errors must not fall back to the local gateway broker")
+        )
+        try:
+            ok5, error5 = delivery._run_gateway_exec_broker_request(
+                {
+                    "deployment_id": "arcdep_x",
+                    "prefix": "p",
+                    "project_name": "arclink-arcdep_x",
+                    "payload": {"bot_token": "SECRET-TOKEN", "text": "hi", "platform": "telegram"},
+                    "_remote_bridge_error": "Hermes public gateway bridge (worker) is required for this worker-placed pod but cannot be targeted: fleet SSH key unavailable",
+                }
+            )
+        finally:
+            delivery.urllib.request.urlopen = original_urlopen
+        expect(ok5 is False and "worker-placed pod" in error5 and "fleet SSH key unavailable" in error5, (ok5, error5))
+
+        original_target = delivery._deployment_remote_bridge_target
+        try:
+            delivery._deployment_remote_bridge_target = lambda deployment_id, prefix: {
+                "error": "Hermes public gateway bridge (worker) is required for this worker-placed pod but cannot be targeted: invalid SSH endpoint"
+            }
+            built = delivery._gateway_exec_broker_request(
+                deployment_id="arcdep_x",
+                prefix="p",
+                project_name="arclink-arcdep_x",
+                payload={"bot_token": "SECRET-TOKEN", "text": "hi", "platform": "telegram"},
+                timeout_seconds=240,
+            )
+        finally:
+            delivery._deployment_remote_bridge_target = original_target
+        expect("_remote_bridge" not in built, str(built))
+        expect("invalid SSH endpoint" in str(built.get("_remote_bridge_error") or ""), str(built))
     finally:
         delivery.subprocess.run = original_run
     print("PASS test_worker_placed_pod_bridges_over_ssh_with_token_on_stdin")
@@ -5105,6 +5199,7 @@ def main() -> int:
     test_gateway_exec_broker_rejects_raw_commands_and_builds_vetted_exec()
     test_gateway_exec_broker_rejects_symlinked_compose_fallback_config_before_docker()
     test_gateway_exec_broker_sanitizes_subprocess_failure_tail()
+    test_gateway_exec_broker_bounds_concurrent_execs()
     test_upgrade_notification_delivery_defers_during_deploy_operation()
     test_public_agent_bridge_defaults_to_streaming_progress_without_reasoning()
     test_public_agent_bridge_l1_l2_flags_off_preserve_config_and_getme()

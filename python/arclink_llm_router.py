@@ -2606,6 +2606,10 @@ async def _stream_upstream_response(
                     }
                 )
                 return
+    except (asyncio.CancelledError, GeneratorExit):
+        status = "cancelled"
+        error_summary = "client disconnected before the streaming response completed"
+        raise
     finally:
         settle_partial_output_tokens = 0
         if source_kind == "fallback_estimate" and status == "succeeded":
@@ -2639,7 +2643,7 @@ async def _stream_upstream_response(
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
-                source_kind=source_kind if status == "succeeded" else "upstream_error",
+                source_kind=source_kind if status == "succeeded" else ("client_cancelled" if status == "cancelled" else "upstream_error"),
                 error_summary=error_summary,
                 fallback_attempts=fallback_attempts,
                 streaming_fallback=streaming_fallback,

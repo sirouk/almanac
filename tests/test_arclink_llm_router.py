@@ -709,6 +709,74 @@ def test_router_usage_settlement_error_releases_reserved_row() -> None:
     print("PASS test_router_usage_settlement_error_releases_reserved_row")
 
 
+def test_router_cancelled_stream_releases_without_full_estimate_charge() -> None:
+    router = load_module("arclink_llm_router.py", "arclink_llm_router_cancelled_stream_test")
+    control = load_module("arclink_control.py", "arclink_control_llm_router_cancelled_stream_test")
+    tmp, db_path = temp_router_db()
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            control.ensure_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO arclink_llm_budget_reservations (
+                  reservation_id, request_id, deployment_id, user_id, reserved_cents,
+                  status, metadata_json, created_at, heartbeat_at
+                ) VALUES (
+                  'llmres_cancel', 'llmreq_cancel', 'dep_cancel', 'user_cancel', 99,
+                  'reserved', '{}', '2026-05-16T00:00:00+00:00', '2026-05-16T00:00:00+00:00'
+                )
+                """
+            )
+            conn.commit()
+            config = router.load_router_config(
+                {
+                    "ARCLINK_DB_PATH": db_path,
+                    "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                    "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                    "ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS": "1000",
+                }
+            )
+            charged = router._record_router_usage(
+                conn,
+                config,
+                reservation={
+                    "reservation_id": "llmres_cancel",
+                    "request_id": "llmreq_cancel",
+                    "deployment_id": "dep_cancel",
+                    "user_id": "user_cancel",
+                    "reserved_cents": 99,
+                    "requested_model": "model-a",
+                    "upstream_model": "model-a",
+                },
+                auth_record={"deployment_id": "dep_cancel", "user_id": "user_cancel", "key_id": "llmk_cancel"},
+                model="model-a",
+                stream=True,
+                status="cancelled",
+                input_tokens=10,
+                output_tokens=1000,
+                total_tokens=1010,
+                source_kind="client_cancelled",
+                error_summary="client disconnected",
+            )
+            reservation = conn.execute(
+                "SELECT status, settled_cents FROM arclink_llm_budget_reservations WHERE reservation_id = 'llmres_cancel'"
+            ).fetchone()
+            usage = conn.execute(
+                "SELECT status, actual_cents, source_kind FROM arclink_llm_usage_events WHERE request_id = 'llmreq_cancel'"
+            ).fetchone()
+        finally:
+            conn.close()
+        expect(charged == 0, str(charged))
+        expect(reservation["status"] == "failed" and int(reservation["settled_cents"]) == 0, dict(reservation))
+        expect(usage["status"] == "cancelled" and int(usage["actual_cents"]) == 0, dict(usage))
+        expect(usage["source_kind"] == "client_cancelled", dict(usage))
+    finally:
+        tmp.cleanup()
+    print("PASS test_router_cancelled_stream_releases_without_full_estimate_charge")
+
+
 def test_chat_usage_queues_raven_low_fuel_notice_once() -> None:
     tmp, db_path = temp_router_db()
     try:
@@ -3620,6 +3688,7 @@ def main() -> int:
     test_chat_reuses_upstream_client_pool_within_event_loop()
     test_chat_non_streaming_forwards_to_fake_upstream_and_records_usage()
     test_router_usage_settlement_error_releases_reserved_row()
+    test_router_cancelled_stream_releases_without_full_estimate_charge()
     test_chat_usage_queues_raven_low_fuel_notice_once()
     test_low_fuel_notice_without_channel_does_not_poison_dedupe()
     test_chat_uses_catalog_pricing_and_promotes_deprecated_models()

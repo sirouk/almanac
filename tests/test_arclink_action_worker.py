@@ -1181,6 +1181,109 @@ def test_academy_apply_action_materializes_local_hermes_home_when_authorized() -
         print("PASS test_academy_apply_action_materializes_local_hermes_home_when_authorized")
 
 
+def test_academy_apply_ssh_materialization_uses_remote_files_not_control_mirror() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_academy_apply_remote_files")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_academy_apply_remote_files")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_academy_apply_remote_files")
+    org_profile = load_module("arclink_org_profile.py", "arclink_org_profile_aw_academy_apply_remote_files")
+    conn = memory_db(control)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir) / "dep-academy-remote"
+        roots = {
+            "root": str(root),
+            "config": str(root / "config"),
+            "state": str(root / "state"),
+            "vault": str(root / "vault"),
+            "hermes_home": str(root / "state" / "hermes-home"),
+        }
+        user_id = "user_academy_remote_files"
+        deployment_id = "dep_academy_remote_files"
+        control.upsert_arclink_user(conn, user_id=user_id, email="academy-remote@example.test", entitlement_state="paid")
+        control.reserve_arclink_deployment_prefix(
+            conn,
+            deployment_id=deployment_id,
+            user_id=user_id,
+            prefix="academy-remote",
+            base_domain="example.test",
+            status="active",
+            metadata={"state_roots": roots},
+        )
+        remote_writes: dict[str, str] = {}
+
+        class _FakeAcademyFiles:
+            remote = True
+
+            def __init__(self, *, roots, deployment_id, executor):
+                self.roots = roots
+                self.deployment_id = deployment_id
+                self.executor = executor
+
+            def read_text(self, path):
+                if str(path).endswith("SOUL.md"):
+                    return "# SOUL\nHuman-authored identity.\n"
+                return remote_writes.get(str(path), "")
+
+            def write_text(self, path, body):
+                remote_writes[str(path)] = str(body)
+                return True
+
+            def is_file(self, path):
+                return str(path) in remote_writes or str(path).endswith("SOUL.md")
+
+        original_files = worker._AcademyApplyFiles
+        worker._AcademyApplyFiles = _FakeAcademyFiles
+        try:
+            executor = executor_mod.ArcLinkExecutor(
+                config=executor_mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="ssh"),
+                docker_runner=object(),
+            )
+            result = worker._materialize_academy_apply(
+                conn,
+                executor=executor,
+                result={
+                    "writes_enabled": True,
+                    "deployment_id": deployment_id,
+                    "user_id": user_id,
+                    "trainee_id": "atrn_remote_files",
+                    "program_id": "domain_tutor",
+                    "manifest_id": "academy-manifest-remote",
+                    "plan_id": "academy-plan-remote",
+                    "academy_specialist_uid": "private:atrn_remote_files",
+                    "academy_capsule_version": 0,
+                    "academy_trainer_review_ready": True,
+                    "academy_trainer_reviewed_at": "2026-06-24T00:00:00+00:00",
+                    "academy_trainer_live_status": "live_authored",
+                    "academy_soul_section": org_profile.render_academy_overlay(
+                        role_title="Domain Tutor",
+                        topic="fitness and nutrition",
+                        capsule_body="Coach from the governed Academy notes before answering.",
+                    ),
+                    "intent_counts": {"vault_file_intents": 1, "qmd_memory_seed_intents": 0, "approved_skill_intents": 0},
+                    "vault_file_intents": [{"path": "Academy/domain_tutor/Canon.md", "title": "Canon"}],
+                    "qmd_memory_seed_intents": [],
+                    "approved_skill_intents": [],
+                    "first_week_practice_tasks": [],
+                    "evaluation_tasks": [],
+                    "proof_gates": ["PG-PROVIDER", "PG-HERMES"],
+                    "operation_kind": "academy_agent_apply",
+                },
+                target_kind="deployment",
+                target_id=deployment_id,
+                applied_at="2026-06-24T00:00:00+00:00",
+            )
+        finally:
+            worker._AcademyApplyFiles = original_files
+        expect(result["status"] == "applied_hermes_home", str(result))
+        soul_path = str(Path(roots["hermes_home"]) / "SOUL.md")
+        expect(soul_path in remote_writes, str(remote_writes.keys()))
+        expect("Human-authored identity." in remote_writes[soul_path], remote_writes[soul_path])
+        expect(org_profile.BEGIN_ACADEMY_MARKER in remote_writes[soul_path], remote_writes[soul_path])
+        expect(str(Path(roots["vault"]) / "Academy/domain_tutor/Canon.md") in remote_writes, str(remote_writes.keys()))
+        expect(str(Path(roots["hermes_home"]) / "state/arclink-academy-apply.json") in remote_writes, str(remote_writes.keys()))
+        expect(not (Path(roots["hermes_home"]) / "SOUL.md").exists(), "SSH apply must not write the control mirror path")
+        print("PASS test_academy_apply_ssh_materialization_uses_remote_files_not_control_mirror")
+
+
 def test_reprovision_dispatches_pod_migration() -> None:
     control = load_module("arclink_control.py", "arclink_control_aw_reprovision")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_reprovision")
@@ -3131,6 +3234,7 @@ if __name__ == "__main__":
     test_academy_apply_preview_action_fails_closed_on_workspace_write_request()
     test_academy_apply_action_stages_fail_closed_without_authorization()
     test_academy_apply_action_materializes_local_hermes_home_when_authorized()
+    test_academy_apply_ssh_materialization_uses_remote_files_not_control_mirror()
     test_agent_skill_enablement_registry_records_and_transitions()
     test_academy_skill_enablement_runner_records_verified_and_missing()
     test_consume_academy_refresh_queue_markers_transitions_on_lane_evidence()

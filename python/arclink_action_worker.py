@@ -8,8 +8,10 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shlex
 import secrets
 import sqlite3
+import subprocess
 import tempfile
 import time
 from typing import Any, Callable, Mapping
@@ -1836,6 +1838,7 @@ def _dispatch_action(
         )
         result = _materialize_academy_apply(
             conn,
+            executor=executor,
             result=staged_result,
             target_kind=target_kind,
             target_id=target_id,
@@ -2122,6 +2125,115 @@ def _deployment_academy_roots(conn: sqlite3.Connection, *, deployment_id: str) -
     }
 
 
+class _AcademyApplyFiles:
+    """Read/write Academy apply files on the deployment that actually runs Hermes."""
+
+    def __init__(
+        self,
+        *,
+        roots: Mapping[str, Path],
+        deployment_id: str,
+        executor: ArcLinkExecutor | None,
+    ) -> None:
+        self.roots = {str(key): Path(value) for key, value in roots.items()}
+        self.deployment_id = str(deployment_id or "").strip()
+        self.executor = executor
+        self.runner = getattr(executor, "docker_runner", None) if executor is not None else None
+        self.remote = (
+            str(getattr(getattr(executor, "config", None), "adapter_name", "") or "").strip().lower() == "ssh"
+            and self.runner is not None
+            and hasattr(self.runner, "_target")
+        )
+        self.container_name = f"arclink-{self.deployment_id}-hermes-gateway-1"
+
+    def _container_path(self, path: Path) -> str:
+        clean = Path(path).resolve(strict=False)
+        candidates = (
+            (Path(self.roots["hermes_home"]).resolve(strict=False), Path("/home/arclink/.hermes")),
+            (Path(self.roots["vault"]).resolve(strict=False), Path("/srv/vault")),
+        )
+        for host_root, container_root in candidates:
+            try:
+                rel = clean.relative_to(host_root)
+            except ValueError:
+                continue
+            if any(part in {"", ".", ".."} for part in rel.parts):
+                raise ArcLinkActionWorkerError("Academy apply path escapes the deployment root")
+            return str(container_root / rel)
+        raise ArcLinkActionWorkerError("Academy apply path is outside supported Hermes/vault roots")
+
+    def _remote_python(self, script: str, *args: str, input_text: str = "") -> str:
+        if self.runner is None or not hasattr(self.runner, "_target"):
+            raise ArcLinkActionWorkerError("Academy remote materialization requires an SSH Docker runner")
+        target = self.runner._target()  # type: ignore[attr-defined]
+        docker_binary = str(getattr(self.runner, "docker_binary", "docker") or "docker")
+        ssh_binary = str(getattr(self.runner, "ssh_binary", "ssh") or "ssh")
+        ssh_options = tuple(str(item) for item in getattr(self.runner, "ssh_options", ()) or ())
+        remote_cmd = " ".join(
+            shlex.quote(part)
+            for part in (
+                docker_binary,
+                "exec",
+                "-i",
+                self.container_name,
+                "python3",
+                "-c",
+                script,
+                *args,
+            )
+        )
+        try:
+            proc = subprocess.run(
+                (ssh_binary, *ssh_options, target, remote_cmd),
+                input=input_text,
+                text=True,
+                capture_output=True,
+                timeout=60,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ArcLinkActionWorkerError("Academy remote file operation timed out") from exc
+        if proc.returncode != 0:
+            detail = redact_then_truncate(proc.stderr or proc.stdout or "unknown remote file error", limit=300)
+            raise ArcLinkActionWorkerError(f"Academy remote file operation failed: {detail}")
+        return proc.stdout
+
+    def read_text(self, path: Path) -> str:
+        if not self.remote:
+            try:
+                return Path(path).read_text(encoding="utf-8")
+            except FileNotFoundError:
+                return ""
+        script = (
+            "from pathlib import Path;import sys;"
+            "p=Path(sys.argv[1]);"
+            "sys.stdout.write(p.read_text(encoding='utf-8') if p.exists() else '')"
+        )
+        return self._remote_python(script, self._container_path(path))
+
+    def write_text(self, path: Path, body: str) -> bool:
+        if not self.remote:
+            return _write_private_text_atomic(Path(path), body)
+        script = (
+            "from pathlib import Path;import os,sys,tempfile;"
+            "p=Path(sys.argv[1]);mode=int(sys.argv[2],8);data=sys.stdin.read();"
+            "p.parent.mkdir(parents=True,exist_ok=True);"
+            "old=p.read_text(encoding='utf-8') if p.exists() else '';"
+            "\nif old == data:\n print('unchanged')\n sys.exit(0)\n"
+            "fd,tmp=tempfile.mkstemp(dir=str(p.parent),prefix='.arclink-',suffix='.tmp');"
+            "f=os.fdopen(fd,'w',encoding='utf-8');f.write(data);f.flush();os.fsync(f.fileno());f.close();"
+            "os.chmod(tmp,mode);os.replace(tmp,p);os.chmod(p,mode);print('changed')"
+        )
+        out = self._remote_python(script, self._container_path(path), "0600", input_text=str(body or ""))
+        return "changed" in out
+
+    def is_file(self, path: Path) -> bool:
+        if not self.remote:
+            return Path(path).is_file()
+        script = "from pathlib import Path;import sys;print('1' if Path(sys.argv[1]).is_file() else '0')"
+        return self._remote_python(script, self._container_path(path)).strip() == "1"
+
+
 def _write_private_text_atomic(path: Path, body: str) -> bool:
     path.parent.mkdir(parents=True, exist_ok=True)
     existing = ""
@@ -2336,6 +2448,23 @@ def _academy_run_refresh_kind(
     payload: Mapping[str, Any],
     blocked: bool,
 ) -> dict[str, Any]:
+    return _academy_run_refresh_kind_for_files(
+        refresh=refresh,
+        runner=runner,
+        payload=payload,
+        blocked=blocked,
+        files=None,
+    )
+
+
+def _academy_run_refresh_kind_for_files(
+    *,
+    refresh: Mapping[str, Any],
+    runner: AcademyPostApplyRunner | None,
+    payload: Mapping[str, Any],
+    blocked: bool,
+    files: _AcademyApplyFiles | None,
+) -> dict[str, Any]:
     item = dict(refresh)
     kind = str(item.get("kind") or "unknown")
     current_status = str(item.get("status") or "requested")
@@ -2350,7 +2479,8 @@ def _academy_run_refresh_kind(
         return item
     if kind == "skill_activation" and int(item.get("skill_count") or 0) > 0:
         state_path = Path(str(payload.get("state") or "")) / "arclink-academy-approved-skills.json"
-        if not state_path.is_file():
+        state_exists = files.is_file(state_path) if files is not None else state_path.is_file()
+        if not state_exists:
             item["status"] = "blocked"
             item["last_error"] = "Approved skill state file is missing; activation runner was not invoked."
             return item
@@ -2421,6 +2551,32 @@ def run_academy_post_apply_refresh(
         raise ArcLinkActionWorkerError("Academy post-apply refresh handoff is invalid JSON") from exc
     if not isinstance(request, dict):
         raise ArcLinkActionWorkerError("Academy post-apply refresh handoff must be a JSON object")
+    return _run_academy_post_apply_refresh_from_request(
+        conn,
+        deployment_id=clean_deployment,
+        roots=roots,
+        request=request,
+        files=_AcademyApplyFiles(roots=roots, deployment_id=clean_deployment, executor=None),
+        qmd_runner=qmd_runner,
+        memory_runner=memory_runner,
+        skill_runner=skill_runner,
+        requested_by=requested_by,
+    )
+
+
+def _run_academy_post_apply_refresh_from_request(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    roots: Mapping[str, Path],
+    request: Mapping[str, Any],
+    files: _AcademyApplyFiles,
+    qmd_runner: AcademyPostApplyRunner | None = None,
+    memory_runner: AcademyPostApplyRunner | None = None,
+    skill_runner: AcademyPostApplyRunner | None = None,
+    requested_by: str = "system:academy_post_apply_refresh",
+) -> dict[str, Any]:
+    clean_deployment = str(deployment_id or "").strip()
     if str(request.get("deployment_id") or "").strip() != clean_deployment:
         raise ArcLinkActionWorkerError("Academy post-apply refresh handoff deployment mismatch")
 
@@ -2429,7 +2585,7 @@ def run_academy_post_apply_refresh(
     missing_paths: list[str] = []
     for raw_path in applied_paths:
         resolved = _academy_resolve_refresh_applied_path(roots, raw_path)
-        if resolved.is_file():
+        if files.is_file(resolved):
             verified_paths.append(raw_path)
         else:
             missing_paths.append(raw_path)
@@ -2451,11 +2607,12 @@ def run_academy_post_apply_refresh(
         kind = str(refresh.get("kind") or "unknown")
         payload = {**runner_payload, "kind": kind}
         refreshes.append(
-            _academy_run_refresh_kind(
+            _academy_run_refresh_kind_for_files(
                 refresh=refresh,
                 runner=runner_by_kind.get(kind),
                 payload=payload,
                 blocked=blocked,
+                files=files,
             )
         )
     statuses = {str(item.get("status") or "") for item in refreshes}
@@ -2477,7 +2634,8 @@ def run_academy_post_apply_refresh(
         "missing_paths": missing_paths,
         "refreshes": refreshes,
     }
-    _write_private_text_atomic(refresh_path, json.dumps(updated_request, indent=2, sort_keys=True) + "\n")
+    refresh_path = _academy_refresh_handoff_path(roots)
+    files.write_text(refresh_path, json.dumps(updated_request, indent=2, sort_keys=True) + "\n")
     note_refresh_job(
         conn,
         job_name=f"academy-post-apply-refresh:{clean_deployment}",
@@ -2580,6 +2738,53 @@ def _academy_durable_refresh_queue_runner(payload: Mapping[str, Any]) -> dict[st
         "changed": changed,
         "proof": marker.name,
     }
+
+
+def _academy_durable_refresh_queue_runner_for_files(files: _AcademyApplyFiles) -> AcademyPostApplyRunner:
+    def _runner(payload: Mapping[str, Any]) -> dict[str, Any]:
+        kind = str(payload.get("kind") or "").strip()
+        marker_by_kind = {
+            "qmd_index": "arclink-academy-qmd-refresh-request.json",
+            "memory_synthesis": "arclink-academy-memory-synthesis-request.json",
+        }
+        marker_name = marker_by_kind.get(kind)
+        if not marker_name:
+            raise ArcLinkActionWorkerError(f"Academy post-apply queue marker does not support refresh kind: {kind or 'unknown'}")
+        state_dir = Path(str(payload.get("state") or ""))
+        if not str(state_dir).strip():
+            raise ArcLinkActionWorkerError("Academy post-apply queue marker requires a state directory")
+        marker = state_dir / marker_name
+        queued_at = utc_now_iso()
+        consumer_by_kind = {
+            "memory_synthesis": "memory-synth run completion (consume_academy_refresh_queue_markers)",
+            "qmd_index": "runner-gated: consume_academy_refresh_queue_markers with explicit lane evidence",
+        }
+        marker_payload = {
+            "status": "queued",
+            "queued_at": queued_at,
+            "request_id": str(payload.get("request_id") or ""),
+            "deployment_id": str(payload.get("deployment_id") or ""),
+            "kind": kind,
+            "trainee_id": str(payload.get("trainee_id") or ""),
+            "program_id": str(payload.get("program_id") or ""),
+            "manifest_id": str(payload.get("manifest_id") or ""),
+            "academy_specialist_uid": str(payload.get("academy_specialist_uid") or ""),
+            "applied_paths": list(payload.get("applied_paths") or []),
+            "consumer": consumer_by_kind.get(kind, ""),
+            "runner_gated": kind == "qmd_index",
+        }
+        changed = files.write_text(marker, json.dumps(marker_payload, indent=2, sort_keys=True) + "\n")
+        return {
+            "status": "queued",
+            "summary": (
+                f"Academy {kind} refresh marker queued for the deployment refresh/timer lane; "
+                f"consumer: {consumer_by_kind.get(kind, 'unspecified')}."
+            ),
+            "changed": changed,
+            "proof": marker.name,
+        }
+
+    return _runner
 
 
 _ACADEMY_REFRESH_MARKER_BY_KIND = {
@@ -2809,6 +3014,7 @@ def _academy_skill_enablement_runner(
 def _materialize_academy_apply(
     conn: sqlite3.Connection,
     *,
+    executor: ArcLinkExecutor | None = None,
     result: Mapping[str, Any],
     target_kind: str,
     target_id: str,
@@ -2825,14 +3031,12 @@ def _materialize_academy_apply(
         raise ArcLinkActionWorkerError("academy_apply has no Trainer-reviewed Academy SOUL section to materialize")
     roots = _deployment_academy_roots(conn, deployment_id=deployment_id)
     hermes_home = roots["hermes_home"]
+    files = _AcademyApplyFiles(roots=roots, deployment_id=deployment_id, executor=executor)
     from arclink_org_profile import merge_academy_overlay
 
     soul_path = hermes_home / "SOUL.md"
-    try:
-        existing_soul = soul_path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        existing_soul = ""
-    soul_changed = _write_private_text_atomic(soul_path, merge_academy_overlay(existing_soul, section))
+    existing_soul = files.read_text(soul_path)
+    soul_changed = files.write_text(soul_path, merge_academy_overlay(existing_soul, section))
     applied_paths = ["SOUL.md"]
     changed_any = bool(soul_changed)
     vault_file_intents = [dict(item) for item in (payload.get("vault_file_intents") or []) if isinstance(item, Mapping)]
@@ -2843,7 +3047,7 @@ def _materialize_academy_apply(
     for index, intent in enumerate(vault_file_intents, start=1):
         relative = _academy_safe_relative_path(intent.get("path"), fallback=f"Academy/{academy_base}/Intent_{index}.md")
         path = vault / relative
-        changed = _write_private_text_atomic(path, _academy_vault_body(intent, payload=payload, applied_at=applied_at))
+        changed = files.write_text(path, _academy_vault_body(intent, payload=payload, applied_at=applied_at))
         changed_any = changed_any or changed
         applied_paths.append(str(Path("vault") / relative))
     if qmd_memory_seed_intents:
@@ -2858,7 +3062,7 @@ def _materialize_academy_apply(
             )
             + "\n"
         )
-        changed = _write_private_text_atomic(vault / memory_relative, memory_body)
+        changed = files.write_text(vault / memory_relative, memory_body)
         changed_any = changed_any or changed
         applied_paths.append(str(Path("vault") / memory_relative))
     if approved_skill_intents:
@@ -2873,7 +3077,7 @@ def _materialize_academy_apply(
             )
             + "\n"
         )
-        changed = _write_private_text_atomic(vault / skills_relative, skills_body)
+        changed = files.write_text(vault / skills_relative, skills_body)
         changed_any = changed_any or changed
         applied_paths.append(str(Path("vault") / skills_relative))
     state_payload = {
@@ -2898,14 +3102,14 @@ def _materialize_academy_apply(
     }
     applied_paths.append("state/arclink-academy-apply.json")
     if qmd_memory_seed_intents:
-        seeds_changed = _write_private_text_atomic(
+        seeds_changed = files.write_text(
             hermes_home / "state" / "arclink-academy-memory-seeds.json",
             json.dumps(qmd_memory_seed_intents, indent=2, sort_keys=True) + "\n",
         )
         changed_any = changed_any or seeds_changed
         applied_paths.append("state/arclink-academy-memory-seeds.json")
     if approved_skill_intents:
-        skills_changed = _write_private_text_atomic(
+        skills_changed = files.write_text(
             hermes_home / "state" / "arclink-academy-approved-skills.json",
             json.dumps(approved_skill_intents, indent=2, sort_keys=True) + "\n",
         )
@@ -2919,7 +3123,7 @@ def _materialize_academy_apply(
         qmd_memory_seed_intents=qmd_memory_seed_intents,
         approved_skill_intents=approved_skill_intents,
     )
-    refresh_changed = _write_private_text_atomic(
+    refresh_changed = files.write_text(
         hermes_home / "state" / "arclink-academy-post-apply-refresh.json",
         json.dumps(refresh_request, indent=2, sort_keys=True) + "\n",
     )
@@ -2943,16 +3147,29 @@ def _materialize_academy_apply(
         indent=2,
         sort_keys=True,
     ) + "\n"
-    state_changed = _write_private_text_atomic(hermes_home / "state" / "arclink-academy-apply.json", state_body)
+    state_changed = files.write_text(hermes_home / "state" / "arclink-academy-apply.json", state_body)
     changed_any = changed_any or state_changed
-    post_apply_refresh_result = run_academy_post_apply_refresh(
-        conn,
-        deployment_id=deployment_id,
-        qmd_runner=_academy_durable_refresh_queue_runner,
-        memory_runner=_academy_durable_refresh_queue_runner,
-        skill_runner=_academy_skill_enablement_runner(conn, approved_skill_intents=approved_skill_intents),
-        requested_by="system:academy_apply",
-    )
+    if files.remote:
+        post_apply_refresh_result = _run_academy_post_apply_refresh_from_request(
+            conn,
+            deployment_id=deployment_id,
+            roots=roots,
+            request=refresh_request,
+            files=files,
+            qmd_runner=_academy_durable_refresh_queue_runner_for_files(files),
+            memory_runner=_academy_durable_refresh_queue_runner_for_files(files),
+            skill_runner=_academy_skill_enablement_runner(conn, approved_skill_intents=approved_skill_intents),
+            requested_by="system:academy_apply",
+        )
+    else:
+        post_apply_refresh_result = run_academy_post_apply_refresh(
+            conn,
+            deployment_id=deployment_id,
+            qmd_runner=_academy_durable_refresh_queue_runner,
+            memory_runner=_academy_durable_refresh_queue_runner,
+            skill_runner=_academy_skill_enablement_runner(conn, approved_skill_intents=approved_skill_intents),
+            requested_by="system:academy_apply",
+        )
     conn.execute(
         """
         UPDATE academy_specialist_subscriptions

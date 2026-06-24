@@ -1,0 +1,16 @@
+[
+  {
+    "title": "Primary literature vs. secondary surveys",
+    "origin_url": "https://en.wikipedia.org/wiki/Systematic_review",
+    "lane_id": "wikimedia",
+    "summary": "Derived guidance: distinguish primary research (original methods and results) from secondary surveys and systematic reviews. Weight claims by study design, sample size, replication, and whether a finding is durable doctrine or a provisional result. Always separate what is established from what is still contested.",
+    "citations": ["https://en.wikipedia.org/wiki/Systematic_review"]
+  },
+  {
+    "title": "Grounding claims in standards and official guidance",
+    "origin_url": "https://www.rfc-editor.org/standards",
+    "lane_id": "scholarly_standard",
+    "summary": "Derived guidance: ground technical and compliance claims in the controlling standard or official document; cite the exact section; flag where guidance is ambiguous or has been superseded; prefer the authoritative source over secondary commentary.",
+    "citations": ["https://www.rfc-editor.org/standards"]
+  }
+]

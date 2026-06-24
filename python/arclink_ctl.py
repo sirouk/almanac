@@ -179,6 +179,20 @@ def parse_args() -> argparse.Namespace:
     deenroll.add_argument("--actor", default=os.environ.get("USER", "operator"))
     deenroll.add_argument("--yes", default="", help="Typed confirmation; must equal the target agent id or username.")
 
+    academy = subparsers.add_parser("academy")
+    academy_sub = academy.add_subparsers(dest="action", required=True)
+    academy_seed = academy_sub.add_parser(
+        "seed-foundation",
+        help="Seed a redacted_public foundation_draft specialist for a Major from an admin-vetted manifest (no egress).",
+    )
+    academy_seed.add_argument("--program-id", required=True, help="Major program_id, e.g. research_analyst")
+    academy_seed.add_argument("--admin-id", required=True, help="Named reviewer recorded in provenance sign-off")
+    academy_seed.add_argument(
+        "--manifest",
+        required=True,
+        help="Path to a JSON list of {title, origin_url?, lane_id?, summary (derived notes), citations?}",
+    )
+
     vault = subparsers.add_parser("vault")
     vault_sub = vault.add_subparsers(dest="action", required=True)
     vault_sub.add_parser("list")
@@ -2073,6 +2087,32 @@ def main() -> None:
         dump_output(args, org_profile_preview(cfg, args.file, as_json=bool(args.json)))
         return
     with connect_db(cfg) as conn:
+        if args.domain == "academy" and args.action == "seed-foundation":
+            import json as _json
+            from arclink_academy_programs import (
+                seed_default_academy_programs,
+                seed_foundation_academy_specialist,
+            )
+
+            with open(args.manifest, encoding="utf-8") as manifest_file:
+                manifest_sources = _json.load(manifest_file)
+            if not isinstance(manifest_sources, list):
+                raise SystemExit("academy seed manifest must be a JSON list of source objects")
+            seed_default_academy_programs(conn)
+            seed_result = seed_foundation_academy_specialist(
+                conn,
+                program_id=str(args.program_id),
+                sources=manifest_sources,
+                admin_id=str(args.admin_id),
+            )
+            summary = {key: value for key, value in seed_result.items() if key != "seeded_source_uids"}
+            dump_output(args, summary)
+            print(
+                f"seeded {seed_result['seeded_count']} source(s) into foundation specialist "
+                f"{seed_result['specialist_uid']} (trust={seed_result['trust']}, family={seed_result['skill_family']}); "
+                f"skipped {len(seed_result['skipped'])}",
+            )
+            return
         if args.domain == "admin" and args.action == "set-password":
             from arclink_api_auth import set_arclink_admin_password
 

@@ -1822,6 +1822,61 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         CREATE INDEX IF NOT EXISTS idx_academy_source_crawl_observations_specialist
         ON academy_source_crawl_observations (specialist_uid, observed_at);
 
+        -- M2 inc3: persisted synthesis artifacts. The live Trainer AUTHORS (vs the
+        -- review() triage) lesson notes + a SOUL capsule + retrieval rules from
+        -- governed derived notes; the deterministic fallback assembles an HONEST draft
+        -- (authored=0, never graduates). scope 'public' = the promotable capsule;
+        -- 'private' = the tenant agent layer (never promoted). Bound to
+        -- authored_for_manifest_id + content_hash so apply CONSUMES this synthesis
+        -- (never re-synthesizes) and fail-closes when a source change makes it stale.
+        CREATE TABLE IF NOT EXISTS academy_synthesis_artifacts (
+          artifact_id TEXT PRIMARY KEY,
+          trainee_id TEXT NOT NULL DEFAULT '',
+          scope TEXT NOT NULL DEFAULT 'private' CHECK (scope IN ('public', 'private')),
+          authored_for_manifest_id TEXT NOT NULL DEFAULT '',
+          content_hash TEXT NOT NULL DEFAULT '',
+          engine TEXT NOT NULL DEFAULT 'deterministic' CHECK (engine IN ('deterministic', 'live-router')),
+          authored INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'needs_live_synthesis',
+          lesson_notes_json TEXT NOT NULL DEFAULT '[]',
+          soul_capsule TEXT NOT NULL DEFAULT '',
+          retrieval_rules_json TEXT NOT NULL DEFAULT '[]',
+          scope_manifest_json TEXT NOT NULL DEFAULT '{}',
+          quality_metrics_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL DEFAULT '',
+          updated_at TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_academy_synthesis_artifacts_trainee_scope
+        ON academy_synthesis_artifacts (trainee_id, scope);
+
+        -- M2 inc4: acceptance-exam results. The orchestrator drives the synthesized
+        -- agent over the operator's charter acceptance_scenarios (+ an injected
+        -- boundary probe) and computes OBJECTIVE, judge-independent checks
+        -- (retrieve-before-answer, citation-present[cited in retrieved], refusal-correct,
+        -- work-product-present). Bound to synthesis_hash + manifest_id so a pass grades
+        -- THIS synthesis. Subjective quality is advisory only; deterministic never passes to graduated.
+        CREATE TABLE IF NOT EXISTS academy_exam_results (
+          result_id TEXT PRIMARY KEY,
+          trainee_id TEXT NOT NULL DEFAULT '',
+          scenario_id TEXT NOT NULL DEFAULT '',
+          manifest_id TEXT NOT NULL DEFAULT '',
+          synthesis_hash TEXT NOT NULL DEFAULT '',
+          engine TEXT NOT NULL DEFAULT 'deterministic',
+          passed INTEGER NOT NULL DEFAULT 0,
+          is_boundary_probe INTEGER NOT NULL DEFAULT 0,
+          objective_json TEXT NOT NULL DEFAULT '{}',
+          advisory_json TEXT NOT NULL DEFAULT '{}',
+          evidence_json TEXT NOT NULL DEFAULT '{}',
+          graded_at TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_academy_exam_results_trainee_scenario
+        ON academy_exam_results (trainee_id, scenario_id, manifest_id);
+
+        CREATE INDEX IF NOT EXISTS idx_academy_exam_results_trainee
+        ON academy_exam_results (trainee_id, graded_at);
+
         -- Central per-agent skill enablement registry. The passive shared skill
         -- STORE (repo skills, Fleet/Vault Agents_Skills libraries, Hermes
         -- bundled skills) stays as-is; this table records which skills are
@@ -1875,6 +1930,38 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         ON academy_resource_proposals (trainee_id, proposal_kind, origin_url)
         WHERE origin_url != ''
         """
+    )
+    # Inc2 body-of-knowledge: a minimal skill taxonomy (skill_family + controlled
+    # skill_tags) on programs/specialists/proposals so commonplace knowledge dedups
+    # across Majors; per-source intake metadata; a coarse reuse gap-map snapshot on
+    # trainees (inc3 re-resolves it, not an authoritative cache); and a provenance
+    # review/sign-off field for admin foundation seeds. Additive + idempotent; NO
+    # tag junction table (controlled JSON tags are enough at this scale).
+    _ensure_column(conn, "academy_programs", "skill_family", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "academy_programs", "skill_tags_json", "TEXT NOT NULL DEFAULT '[]'")
+    _ensure_column(conn, "academy_corpus_specialists", "skill_family", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "academy_corpus_specialists", "skill_tags_json", "TEXT NOT NULL DEFAULT '[]'")
+    _ensure_column(conn, "academy_resource_proposals", "skill_family", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "academy_resource_proposals", "skill_tags_json", "TEXT NOT NULL DEFAULT '[]'")
+    _ensure_column(conn, "academy_resource_proposals", "source_metadata_json", "TEXT NOT NULL DEFAULT '{}'")
+    _ensure_column(conn, "academy_trainees", "gap_map_json", "TEXT NOT NULL DEFAULT '{}'")
+    _ensure_column(conn, "academy_source_provenance", "review_json", "TEXT NOT NULL DEFAULT '{}'")
+    # M2 step5/6 exam bindings: scenario-content hash (MISS-A -- a charter scenario edit
+    # keeps scenario_id+manifest, so the gate must reject stale rows by scenario_hash) and
+    # runner provenance (MISS-B -- a fake-runner pass must be distinguishable from a live
+    # executor pass; the apply gate requires runner_live=1 + PG-PROVIDER).
+    _ensure_column(conn, "academy_exam_results", "scenario_hash", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "academy_exam_results", "runner_kind", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "academy_exam_results", "runner_live", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "academy_exam_results", "runner_proof_gate", "TEXT NOT NULL DEFAULT ''")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_academy_programs_skill_family ON academy_programs (skill_family, status)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_academy_corpus_specialists_skill_family ON academy_corpus_specialists (skill_family, share_scope, status)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_academy_resource_proposals_skill_family ON academy_resource_proposals (skill_family, status, updated_at)"
     )
     _ensure_column(conn, "agent_identity", "org_profile_person_id", "TEXT NOT NULL DEFAULT ''")
     conn.execute(

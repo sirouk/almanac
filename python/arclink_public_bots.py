@@ -29,9 +29,12 @@ from arclink_adapters import arclink_access_urls
 from arclink_academy_programs import (
     ArcLinkAcademyProgramError,
     academy_mode_status,
+    build_charter,
     end_academy_mode,
     enroll_academy_trainee,
     get_academy_program,
+    materialize_operator_academy_sources,
+    resolve_academy_reuse_plan,
     get_open_academy_mode,
     list_academy_programs,
     open_academy_mode,
@@ -2758,7 +2761,7 @@ def _academy_roster_marker(conn: sqlite3.Connection | None, deployment_id: str) 
     role = str(row["program_label"] or row["name"] or row["program_id"] or "").strip()
     role_suffix = f" - {role}"[:72] if role else ""
     if status == "graduated":
-        return f"Academy graduate{role_suffix}"
+        return f"Academy specialist (staged){role_suffix}"
     if bool(row["mode_open"]) or status == "in_academy":
         return f"In Academy{role_suffix}"
     if status == "enrolled":
@@ -5846,13 +5849,13 @@ def _academy_reuse_brief(
     candidates = [dict(item) for item in (result.get("candidates") or []) if isinstance(item, Mapping)]
     if not candidates:
         return (
-            "Existing Academy search: no reusable graduate or shared specialist matched yet. "
+            "Existing Academy search: no reusable staged specialist or shared specialist matched yet. "
             "This Agent can still pioneer a new specialist and contribute public-lane derived notes after Trainer review.",
             [],
         )
     lines = ["Existing Academy search found reusable starting points:"]
     for item in candidates[:limit]:
-        kind = "shared specialist" if item.get("kind") == "central_specialist" else "your graduate"
+        kind = "shared specialist" if item.get("kind") == "central_specialist" else "your staged specialist"
         label = str(item.get("program_label") or item.get("role_title") or item.get("name") or item.get("program_id") or "Academy specialist")
         source_count = int(item.get("source_count") or 0)
         version = item.get("capsule_version")
@@ -5931,9 +5934,9 @@ def _academy_focus_prompt(
         channel_identity=channel_identity,
         action="academy_training_focus",
         reply=(
-            f"Major selected: {data.get('program_label')}.\n\n"
+            f"Major selected: {data.get('program_label')}. I'm the Academy Trainer — a few focused questions, then I'll show you the training charter to confirm.\n\n"
             f"{reuse_text}\n\n"
-            "What should this Agent become able to do for you? Send the research focus, outcomes, boundaries, and level of depth in one message."
+            f"① What should {data.get('agent_label') or 'this Agent'} become able to *do* — and what does ‘done’ look like? Describe the subject, the outcomes you want, and the work it should produce. (One message; say `skip` to take my defaults.)"
         ),
         session=updated,
         deployment=deployment,
@@ -5972,12 +5975,187 @@ def _academy_sources_prompt(
         reply=(
             f"{reuse_text}\n\n"
             "Now send outside source lanes or specific materials this Agent should revisit weekly: URLs, repos, docs, channels, journals, standards, or `none`.\n\n"
-            "Do not paste tokens, private credentials, paid material, or anything the Agent is not allowed to retain. Add `private` if public-lane derived notes should not be promoted to the shared Academy."
+            "Do not paste tokens, private credentials, paid material, or anything the Agent is not allowed to retain. Everything stays private to your Crew for now — you'll get an explicit opt-in to contribute public-safe notes after the Trainer drafts the curriculum."
         ),
         session=updated,
         deployment=deployment,
         buttons=(_button("No Outside Sources", command="none", style="secondary"), _button("Exit", command="/cancel", style="secondary")),
     )
+
+
+def _academy_parse_lines(text: str, *, limit: int = 8) -> list[str]:
+    """Split a free-text answer into discrete items (newlines / ; / numbered)."""
+    raw = str(text or "").strip()
+    if not raw or raw.casefold() in {"skip", "none", "no", "n/a"}:
+        return []
+    import re as _re
+
+    parts = _re.split(r"(?:\r?\n)+|;|(?:^|\s)\d+[.)]\s*|\s-\s", raw)
+    items = [p.strip(" -•\t") for p in parts if p and p.strip(" -•\t")]
+    return items[:limit] if items else [raw][:limit]
+
+
+def _academy_charter_exam_prompt(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any],
+    deployment: Mapping[str, Any] | None,
+    data: Mapping[str, Any],
+) -> ArcLinkPublicBotTurn:
+    updated = _academy_training_update(conn, session, workflow="academy_training_charter_exam", data=dict(data))
+    label = str(data.get("agent_label") or "this Agent")
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="academy_training_charter_exam",
+        reply=(
+            f"② Name 2-3 things a real expert in this MUST get right — {label} will be TESTED on these to graduate. "
+            "One per line (e.g. 'Summarize a new standard revision with citations'). Say `skip` to set the exam later."
+        ),
+        session=updated,
+        deployment=deployment,
+        buttons=(_button("Skip", command="skip", style="secondary"), _button("Exit", command="/cancel", style="secondary")),
+    )
+
+
+def _academy_charter_boundaries_prompt(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any],
+    deployment: Mapping[str, Any] | None,
+    data: Mapping[str, Any],
+) -> ArcLinkPublicBotTurn:
+    updated = _academy_training_update(conn, session, workflow="academy_training_charter_boundaries", data=dict(data))
+    label = str(data.get("agent_label") or "this Agent")
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="academy_training_charter_boundaries",
+        reply=(
+            f"④ What must {label} always do, or never do, in this domain? Note any topics or sources to exclude. "
+            "One per line, or `skip` for the standard safety boundaries."
+        ),
+        session=updated,
+        deployment=deployment,
+        buttons=(_button("Skip", command="skip", style="secondary"), _button("Exit", command="/cancel", style="secondary")),
+    )
+
+
+def _academy_charter_from_data(conn: sqlite3.Connection, data: Mapping[str, Any]) -> dict[str, Any]:
+    """Assemble the decoded Training Charter from the accumulated interview answers.
+
+    v1 is deterministic: the anchor-1 answer seeds subject + a single combined
+    outcome; the live Professor (later milestone) decomposes it. Share policy is
+    NOT inferred here -- it defaults to private (D-E), and the explicit public
+    opt-in happens after the synthesis preview, per the locked plan.
+    """
+    program = get_academy_program(conn, str(data.get("program_id") or "")) or {}
+    do_answer = str(data.get("focus") or "").strip()
+    skipped = do_answer.casefold() in {"skip", "none", ""}
+    slots = {
+        "subject_scope": "" if skipped else do_answer,
+        # No client-side echo: build_charter derives target_outcomes from
+        # subject_scope (federation N1), so it is the single parity authority.
+        "target_outcomes": [],
+        "expected_work_products": [],
+        "acceptance_scenarios": _academy_parse_lines(str(data.get("charter_scenarios") or ""), limit=3),
+        "boundaries": _academy_parse_lines(str(data.get("charter_boundaries") or "")),
+        "exclusions": [],
+        # share_policy defaults to private unless a preview correction set it.
+        "depth_tier": str(data.get("charter_depth") or ""),
+        "audience": str(data.get("charter_audience") or ""),
+        # No share at intake -> build_charter defaults share_policy to private (D-E).
+    }
+    return build_charter(slots, program=program)
+
+
+def _academy_charter_preview_text(label: str, charter: Mapping[str, Any], sources_text: str) -> str:
+    slots = charter.get("slots") if isinstance(charter.get("slots"), Mapping) else {}
+    outcomes = slots.get("target_outcomes") or []
+    scenarios = [str(s.get("prompt") or "") for s in (slots.get("acceptance_scenarios") or []) if isinstance(s, Mapping)]
+    boundaries = slots.get("boundaries") or []
+    exam_block = "\n".join(f"   • {s}" for s in scenarios) if scenarios else "   • (none yet — graduation exam not set)"
+    missing = charter.get("missing_slots") or []
+    lines = [
+        f"Here is {label}'s training charter — confirm to begin, or tell me what to change.",
+        "",
+        f"Subject: {slots.get('subject_scope') or '(not set)'}",
+        f"Outcomes: {'; '.join(outcomes) if outcomes else '(not set)'}",
+        "Graduation exam (it must pass these to graduate):",
+        exam_block,
+        f"Sources to learn from: {sources_text or 'none captured yet'}",
+        f"Boundaries: {'; '.join(boundaries) if boundaries else 'standard safety boundaries'}",
+        "",
+        f"I assumed: depth={slots.get('depth_tier')}, audience={slots.get('audience')}, "
+        f"refresh={(slots.get('freshness') or {}).get('cadence')}, sharing=private "
+        "(you'll get an explicit opt-in to share public-safe notes after the Trainer drafts the curriculum).",
+    ]
+    if missing:
+        lines += ["", f"Still open (you can add now or later): {', '.join(missing)}."]
+    lines += [
+        "",
+        "Send `open` to begin Academy Mode, `restart` to redo the interview, or a correction like `depth: expert`.",
+    ]
+    return "\n".join(lines)
+
+
+def _academy_charter_preview(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any],
+    deployment: Mapping[str, Any] | None,
+    data: Mapping[str, Any],
+    notice: str = "",
+) -> ArcLinkPublicBotTurn:
+    label = str(data.get("agent_label") or "this Agent")
+    charter = _academy_charter_from_data(conn, data)
+    stored = {**dict(data), "charter": charter}
+    updated = _academy_training_update(conn, session, workflow="academy_training_charter_preview", data=stored)
+    prefix = f"{notice}\n\n" if notice else ""
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="academy_training_charter_preview",
+        reply=prefix + _academy_charter_preview_text(label, charter, str(data.get("outside_sources") or "").strip()),
+        session=updated,
+        deployment=deployment,
+        buttons=(
+            _button("Open Academy", command="open"),
+            _button("Restart Interview", command="/restart-charter", style="secondary"),
+            _button("Exit", command="/cancel", style="secondary"),
+        ),
+    )
+
+
+def _academy_apply_charter_correction(data: dict[str, Any], message: str) -> bool:
+    """Apply a simple `field: value` preview correction. Returns True if applied."""
+    text = str(message or "").strip()
+    if ":" not in text:
+        return False
+    field, _, value = text.partition(":")
+    field = field.strip().casefold()
+    value = value.strip()
+    if not value:
+        return False
+    if field in {"depth", "depth_tier"}:
+        data["charter_depth"] = value[:64]
+        return True
+    # No share/visibility control at intake: sharing is private by omission; the
+    # explicit public opt-in happens later at the synthesis preview (locked design).
+    if field in {"audience"}:
+        data["charter_audience"] = value[:200]
+        return True
+    if field in {"scenario", "exam", "add scenario"}:
+        existing = str(data.get("charter_scenarios") or "").strip()
+        data["charter_scenarios"] = (existing + "\n" + value) if existing else value
+        return True
+    return False
 
 
 def _academy_open_mode_reply(
@@ -6014,22 +6192,28 @@ def _academy_open_mode_reply(
             deployment=deployment,
             data={**dict(data), "agent_label": label},
         )
+    import json as _json
+
     source_brief = "" if str(data.get("outside_sources") or "").strip().casefold() in {"none", "no", "n/a"} else str(data.get("outside_sources") or "").strip()
-    share_text = " ".join([str(data.get("focus") or ""), source_brief]).casefold()
-    private_markers = ("private", "do not share", "don't share", "no share", "opt out", "opt-out")
-    share_policy = "private" if any(phrase in share_text for phrase in private_markers) else "redacted_public"
+    # Build (or reuse the previewed) Training Charter and persist it WHOLE as
+    # charter_json. D-E: share defaults to private; the explicit public opt-in
+    # happens later at the synthesis preview, not by keyword-sniffing here.
+    charter = dict(data["charter"]) if isinstance(data.get("charter"), Mapping) else _academy_charter_from_data(conn, data)
+    charter_slots = charter.get("slots") if isinstance(charter.get("slots"), Mapping) else {}
+    share_policy = "redacted_public" if str(charter_slots.get("share_policy") or "") == "redacted_public" else "private"
     steer = {
         "focus": str(data.get("focus") or "").strip(),
         "outside_sources": source_brief,
-        "allowed_source_lanes": list(program.get("source_lanes") or []),
+        "allowed_source_lanes": list(charter_slots.get("authorized_source_lanes") or program.get("source_lanes") or []),
         "reuse_candidates": list(data.get("reuse_candidates") or [])[:5]
         if isinstance(data.get("reuse_candidates"), list)
         else [],
         "share": share_policy,
         "weekly_review": True,
-        "weekly_review_cadence": "weekly",
+        "weekly_review_cadence": str((charter_slots.get("freshness") or {}).get("cadence") or "weekly"),
         "captain_bootstrap_channel": channel,
         "agent_label": label,
+        "charter_json": _json.dumps(charter),
     }
     try:
         trainee = enroll_academy_trainee(
@@ -6059,6 +6243,34 @@ def _academy_open_mode_reply(
             buttons=_academy_training_buttons(deployments),
         )
     trainee = opened.get("trainee") if isinstance(opened.get("trainee"), Mapping) else trainee
+    # Inc2: materialize explicit URLs/repos from the operator's "sources" answer into
+    # governed proposals (no egress; honest where-to-look pointers), then run the
+    # reuse-first resolver (inherit the shared body + persist the gap-map snapshot).
+    # Both are non-fatal so source intake never blocks opening the mode.
+    import re as _re_src
+
+    sources_answer = str(data.get("outside_sources") or "").strip()
+    source_tokens = (
+        _re_src.findall(r"(?:https?://|repo:)\S+", sources_answer)
+        if sources_answer and sources_answer.casefold() not in {"none", "no", "n/a"}
+        else []
+    )
+    if source_tokens:
+        try:
+            materialize_operator_academy_sources(
+                conn,
+                deployment_id=str(target.get("deployment_id") or ""),
+                trainee_id=str(trainee.get("trainee_id") or ""),  # the just-opened trainee, not deployment+newest
+                entries=[{"url": token.strip("\"'<>[]().,;")} for token in source_tokens[:20]],
+                proposed_by="captain-intake",
+                commit=True,
+            )
+        except Exception:  # noqa: BLE001 - source intake must not break opening the mode
+            pass
+    try:
+        resolve_academy_reuse_plan(conn, trainee_id=str(trainee.get("trainee_id") or ""), commit=True)
+    except Exception:  # noqa: BLE001 - reuse resolution must not break opening the mode
+        pass
     status = _academy_status_for_mode(
         deployment=target,
         program=program,
@@ -6103,16 +6315,17 @@ def _academy_open_mode_reply(
         reply=(
             f"Academy Mode is open for {label}.\n\n"
             f"Major: {program.get('label')}\n"
-            f"Focus: {steer['focus']}\n"
-            f"Weekly sources: {source_brief or 'Captain did not provide outside sources yet'}\n\n"
-            f"Shared Academy contribution: {'off for this trainee' if share_policy == 'private' else 'public-lane derived notes only, after Trainer redaction and review'}.\n\n"
-            "The Hermes Agent now has the Academy context in managed state and should use the `arclink-academy` skill to run governed search, retrieval, lesson-card drafting, and evaluation.\n\n"
+            f"Focus: {steer['focus'] or '(to be refined)'}\n"
+            f"Graduation exam: {len(charter_slots.get('acceptance_scenarios') or [])} scenario(s) — {label} must pass these to graduate.\n"
+            f"Weekly sources: {source_brief or 'none captured yet'}\n\n"
+            "Shared Academy contribution: private for now — you'll get an explicit opt-in to share public-safe notes after the Trainer drafts the curriculum.\n\n"
+            "This is the intake stage: the Agent has the training charter in managed state and uses the `arclink-academy` skill for governed search, retrieval, and lesson drafting. The authored curriculum and the graded exam come in a later step — nothing is called \"graduated\" until the Agent passes your scenarios.\n\n"
             "Send more steering notes any time. Send `graduate` to close and stage the specialist corpus, or `cancel` / `exit` to leave Academy Training without graduating."
         ),
         session=updated,
         deployment=refreshed_deployment,
         buttons=(
-            _button("Graduate", command="graduate"),
+            _button("Close & stage for review", command="graduate"),
             _button("Exit", command="/cancel", style="secondary"),
             _button("Show My Crew", command="/agents", style="secondary"),
         ),
@@ -6419,6 +6632,18 @@ def _handle_academy_training_workflow(
                 data=data,
             )
         next_data = {**dict(data), "focus": focus}
+        return _academy_charter_exam_prompt(
+            conn,
+            channel=channel,
+            channel_identity=channel_identity,
+            session=session,
+            deployment=deployment,
+            data=next_data,
+        )
+    if workflow == "academy_training_charter_exam":
+        if command.startswith("/") and _academy_command_value(message, command) is None:
+            return None
+        next_data = {**dict(data), "charter_scenarios": message.strip()}
         return _academy_sources_prompt(
             conn,
             channel=channel,
@@ -6431,13 +6656,68 @@ def _handle_academy_training_workflow(
         if command.startswith("/") and _academy_command_value(message, command) is None:
             return None
         next_data = {**dict(data), "outside_sources": message.strip()}
-        return _academy_open_mode_reply(
+        return _academy_charter_boundaries_prompt(
             conn,
             channel=channel,
             channel_identity=channel_identity,
             session=session,
             deployment=deployment,
             data=next_data,
+        )
+    if workflow == "academy_training_charter_boundaries":
+        if command.startswith("/") and _academy_command_value(message, command) is None:
+            return None
+        next_data = {**dict(data), "charter_boundaries": message.strip()}
+        return _academy_charter_preview(
+            conn,
+            channel=channel,
+            channel_identity=channel_identity,
+            session=session,
+            deployment=deployment,
+            data=next_data,
+        )
+    if workflow == "academy_training_charter_preview":
+        if command.startswith("/") and command != "/restart-charter" and _academy_command_value(message, command) is None:
+            return None
+        text = message.strip()
+        low = text.casefold()
+        if command == "/restart-charter" or low in {"restart", "redo"}:
+            return _academy_focus_prompt(
+                conn,
+                channel=channel,
+                channel_identity=channel_identity,
+                session=session,
+                deployment=deployment,
+                data=data,
+            )
+        if command == "open" or low in {"open", "confirm", "begin", "start", "go", "open academy"}:
+            return _academy_open_mode_reply(
+                conn,
+                channel=channel,
+                channel_identity=channel_identity,
+                session=session,
+                deployment=deployment,
+                data=data,
+            )
+        corrected = dict(data)
+        if text and _academy_apply_charter_correction(corrected, text):
+            return _academy_charter_preview(
+                conn,
+                channel=channel,
+                channel_identity=channel_identity,
+                session=session,
+                deployment=deployment,
+                data=corrected,
+                notice="Updated.",
+            )
+        return _academy_charter_preview(
+            conn,
+            channel=channel,
+            channel_identity=channel_identity,
+            session=session,
+            deployment=deployment,
+            data=data,
+            notice="Send `open` to begin, `restart` to redo, or a correction like `depth: expert`.",
         )
     if workflow == "academy_training_mode_open":
         trainee_id = str(data.get("trainee_id") or "").strip()
@@ -6546,7 +6826,7 @@ def _handle_academy_training_workflow(
                 ),
                 session=session,
                 deployment=deployment,
-                buttons=(_button("Graduate", command="graduate"), _button("Exit", command="/cancel", style="secondary")),
+                buttons=(_button("Close & stage for review", command="graduate"), _button("Exit", command="/cancel", style="secondary")),
             )
         note = message.strip()
         if note:
@@ -6605,7 +6885,7 @@ def _handle_academy_training_workflow(
             ),
             session=session,
             deployment=refreshed if note else deployment,
-            buttons=(_button("Graduate", command="graduate"), _button("Exit", command="/cancel", style="secondary")),
+            buttons=(_button("Close & stage for review", command="graduate"), _button("Exit", command="/cancel", style="secondary")),
         )
     if workflow == "academy_training_select":
         value = _academy_command_value(message, command)

@@ -1132,7 +1132,7 @@ def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> No
         channel_identity="tg:42",
         text="/agents",
     )
-    expect("Academy: Academy graduate - Research Analyst" in roster_with_academy.reply, roster_with_academy.reply)
+    expect("Academy: Academy specialist (staged) - Research Analyst" in roster_with_academy.reply, roster_with_academy.reply)
     soft_switched = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
@@ -2362,24 +2362,47 @@ def test_public_bot_academy_training_walks_crew_with_skip() -> None:
     expect(major.action == "academy_training_choose_major", str(major))
     expect("Choose the Academy Major" in major.reply, major.reply)
     expect("Existing Academy search" in major.reply, major.reply)
+    # The Professor interview: anchor1 (do/outcomes) -> anchor2 (exam) -> anchor3
+    # (sources) -> anchor4 (boundaries) -> charter preview -> open.
     focus_prompt = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="research_analyst")
     expect(focus_prompt.action == "academy_training_focus", str(focus_prompt))
-    sources_prompt = bots.handle_arclink_public_bot_turn(
+    expect("Academy Trainer" in focus_prompt.reply, focus_prompt.reply)
+    exam_prompt = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
         channel_identity="tg:academy",
         text="Become an inference-routing research analyst for weekly Chutes and Hermes architecture review.",
     )
-    expect(sources_prompt.action == "academy_training_sources", str(sources_prompt))
-    opened = bots.handle_arclink_public_bot_turn(
+    expect(exam_prompt.action == "academy_training_charter_exam", str(exam_prompt))
+    expect("TESTED" in exam_prompt.reply, exam_prompt.reply)
+    sources_prompt = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
         channel_identity="tg:academy",
-        text="model provider docs at https://docs.chutes.ai and https://github.com/NousResearch/hermes-agent",
+        text="Summarize a new standard revision with citations\nIdentify the compliance impact of a repo change",
     )
+    expect(sources_prompt.action == "academy_training_sources", str(sources_prompt))
+    boundaries_prompt = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:academy",
+        text="none",
+    )
+    expect(boundaries_prompt.action == "academy_training_charter_boundaries", str(boundaries_prompt))
+    preview = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:academy",
+        text="Always cite governed sources; never reveal private strategy",
+    )
+    expect(preview.action == "academy_training_charter_preview", str(preview))
+    expect("Graduation exam" in preview.reply, preview.reply)
+    expect("sharing=private" in preview.reply, preview.reply)
+    opened = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="open")
     expect(opened.action == "academy_mode_opened", opened.reply)
     expect("Academy Mode is open for Beacon" in opened.reply, opened.reply)
     expect("Shared Academy contribution" in opened.reply, opened.reply)
+    expect("Graduation exam: 2 scenario" in opened.reply, opened.reply)
     opened_turn = conn.execute(
         """
         SELECT target_kind, target_id, channel_kind, message, extra_json
@@ -2400,6 +2423,28 @@ def test_public_bot_academy_training_walks_crew_with_skip() -> None:
     expect(trainee_row is not None and trainee_row["status"] == "in_academy", str(dict(trainee_row or {})))
     open_row = conn.execute("SELECT * FROM academy_mode_sessions WHERE trainee_id = ? AND status = 'open'", (trainee_row["trainee_id"],)).fetchone()
     expect(open_row is not None, "academy mode should stay open")
+    # The interview persisted a real Training Charter (the operator's exam + private default).
+    charter = programs.get_trainee_charter(conn, trainee_row["trainee_id"])
+    expect(len(charter.get("slots", {}).get("acceptance_scenarios") or []) == 2, f"charter persisted the operator's 2 exam scenarios: {charter}")
+    expect(charter.get("slots", {}).get("share_policy") == "private", "charter share defaults to private (D-E)")
+    expect(charter.get("authored") is False and charter.get("engine") == "deterministic", "v1 charter is honest deterministic/unauthored")
+    # D-D CONVERGENCE: the bot-path charter must equal what build_charter() produces
+    # for the EQUIVALENT dashboard submission (same raw slot answers). This is the
+    # single authority guarantee -> bot and dashboard cannot drift.
+    dashboard_charter = programs.build_charter(
+        {
+            "subject_scope": "Become an inference-routing research analyst for weekly Chutes and Hermes architecture review.",
+            "acceptance_scenarios": [
+                {"prompt": "Summarize a new standard revision with citations"},
+                {"prompt": "Identify the compliance impact of a repo change"},
+            ],
+            "boundaries": ["Always cite governed sources", "never reveal private strategy"],
+        },
+        program=programs.get_academy_program(conn, "research_analyst"),
+    )
+    expect(charter == dashboard_charter, f"bot charter must converge with the dashboard build_charter output:\n bot={charter}\n dash={dashboard_charter}")
+    # N1: target_outcomes derived from subject_scope (single authority), not echoed.
+    expect(charter.get("defaults_applied", {}).get("target_outcomes") == "derived_from_subject_scope", str(charter.get("defaults_applied")))
 
     note = bots.handle_arclink_public_bot_turn(
         conn,
@@ -2459,6 +2504,54 @@ def test_public_bot_academy_training_walks_crew_with_skip() -> None:
     prefixed = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="/raven_agents")
     expect(prefixed.action == "show_agents", str(prefixed))
     print("PASS test_public_bot_academy_training_walks_crew_with_skip")
+
+
+def test_public_bot_academy_interview_materializes_sources_and_runs_reuse() -> None:
+    control = load_module("arclink_control.py", "arclink_control_pb_academy_mat")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_pb_academy_mat")
+    programs = load_module("arclink_academy_programs.py", "arclink_academy_programs_pb_academy_mat")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(control, conn, channel="telegram", channel_identity="tg:mat", prefix="arc-mat")
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="arcdep_mat_agent",
+        user_id=seeded["user_id"],
+        prefix="arc-mat-two",
+        base_domain="control.example.ts.net",
+        agent_name="Scout",
+        agent_title="Research Specialist",
+        status="active",
+        metadata={"selected_plan_id": "sovereign"},
+    )
+    conn.commit()
+
+    def turn(text: str):
+        return bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:mat", text=text)
+
+    turn("/academy")
+    turn("Scout")
+    turn("research_analyst")
+    turn("Become a standards analyst that ships weekly gap reports")  # anchor1
+    turn("Summarize a standard revision with citations")  # anchor2 exam
+    turn("https://github.com/acme/specs and repo:github.com/acme/tools")  # anchor3 sources (real URLs)
+    turn("none")  # anchor4 boundaries
+    opened = turn("open")
+    expect(opened.action == "academy_mode_opened", opened.reply)
+
+    trainee_row = conn.execute("SELECT * FROM academy_trainees WHERE deployment_id = ?", ("arcdep_mat_agent",)).fetchone()
+    add_props = [
+        p
+        for p in programs.read_academy_proposals(conn, trainee_id=trainee_row["trainee_id"], statuses=programs.USABLE_PROPOSAL_STATUSES)
+        if p.get("proposal_kind") == "add_resource"
+    ]
+    expect(len(add_props) == 2, f"interview source URLs materialize into governed proposals (no egress): {add_props}")
+    expect(all(p["lane_id"] == "github_repository" for p in add_props), str([(p["lane_id"], p["origin_url"]) for p in add_props]))
+    expect(all(p["source_metadata"].get("intake_kind") == "where_to_look" for p in add_props), "bot quick-list URLs -> honest where-to-look pointers")
+    trainee = programs.get_academy_trainee(conn, trainee_row["trainee_id"])
+    expect(programs._trainee_has_real_training_sources(conn, trainee) is True, "materialized sources make the Agent graduatable")
+    expect(trainee["gap_map"].get("operator_proposal_count") == 2, f"reuse resolver persisted the gap-map snapshot: {trainee.get('gap_map')}")
+    expect(trainee["gap_map"].get("status") in {"needs_synthesis", "inherited"}, str(trainee.get("gap_map")))
+    print("PASS test_public_bot_academy_interview_materializes_sources_and_runs_reuse")
 
 
 def _active_deployment_id_in_store(conn, session_id: str) -> str:
@@ -3013,12 +3106,13 @@ def main() -> int:
     test_public_bot_greets_by_captured_display_name_and_offers_checkout_buttons()
     test_public_bot_train_crew_flow_and_whats_changed()
     test_public_bot_academy_training_walks_crew_with_skip()
+    test_public_bot_academy_interview_materializes_sources_and_runs_reuse()
     test_public_bot_new_onboarding_workflow_wins_over_retired_history()
     test_public_bot_agents_and_agent_helm_switch_are_case_insensitive_and_owner_scoped()
     test_public_bot_duplicate_agent_name_disambiguates_by_unique_selector()
     test_public_bot_unique_prefix_selector_wins_over_label_slug_collision()
     test_public_bot_agent_names_are_markdown_safe_in_replies()
-    print("PASS all 44 ArcLink public bot tests")
+    print("PASS all 45 ArcLink public bot tests")
     return 0
 
 

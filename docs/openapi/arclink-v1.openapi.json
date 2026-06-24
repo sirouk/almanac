@@ -1,35 +1,24 @@
 {
-  "components": {
-    "securitySchemes": {
-      "routerBearerAuth": {
-        "description": "Per-deployment ArcLink LLM router key. Raw keys are materialized only into ArcPods and are never returned by provider-state APIs.",
-        "scheme": "bearer",
-        "type": "http"
-      },
-      "sessionAuth": {
-        "description": "Session-based auth via cookies or headers.",
-        "in": "header",
-        "name": "X-ArcLink-Session-Id",
-        "type": "apiKey"
-      },
-      "shareRequestBrokerAuth": {
-        "description": "Deployment-scoped Drive/Code share-request broker token. Token material is stored only in ArcPod runtime secrets; the hosted API stores and verifies only a hash.",
-        "in": "header",
-        "name": "X-ArcLink-Share-Request-Broker-Token",
-        "type": "apiKey"
-      }
-    }
-  },
-  "info": {
-    "description": "ArcLink self-serve AI deployment platform API.",
-    "title": "ArcLink Hosted API",
-    "version": "1.0.0"
-  },
   "openapi": "3.1.0",
+  "info": {
+    "title": "ArcLink Hosted API",
+    "version": "1.0.0",
+    "description": "ArcLink self-serve AI deployment platform API."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Relative to deployment host"
+    }
+  ],
   "paths": {
     "/api/v1/academy/observatory": {
       "get": {
         "operationId": "public_academy_observatory",
+        "summary": "Read public aggregate Academy training telemetry",
+        "tags": [
+          "academy"
+        ],
         "responses": {
           "200": {
             "description": "Aggregate public Academy Observatory telemetry"
@@ -37,50 +26,27 @@
           "429": {
             "description": "Rate limit exceeded"
           }
-        },
-        "summary": "Read public aggregate Academy training telemetry",
-        "tags": [
-          "academy"
-        ]
+        }
       }
     },
     "/api/v1/adapter-mode": {
       "get": {
         "operationId": "adapter_mode",
+        "summary": "Adapter Mode",
+        "tags": [],
         "responses": {
           "200": {
             "description": "OK"
           }
-        },
-        "summary": "Adapter Mode",
-        "tags": []
+        }
       }
     },
     "/api/v1/admin/actions": {
       "get": {
         "operationId": "admin_queued_actions",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "deployment_id",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "status",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "since",
-            "schema": {
-              "type": "string"
-            }
-          }
+        "summary": "Read queued admin actions",
+        "tags": [
+          "admin"
         ],
         "responses": {
           "200": {
@@ -90,44 +56,76 @@
             "description": "Unauthorized"
           }
         },
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Read queued admin actions",
-        "tags": [
-          "admin"
         ]
       },
       "post": {
         "operationId": "admin_action",
+        "summary": "Queue an admin action (mutation)",
+        "tags": [
+          "admin"
+        ],
+        "responses": {
+          "202": {
+            "description": "Action queued"
+          },
+          "401": {
+            "description": "Unauthorized or missing CSRF"
+          }
+        },
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
+                "type": "object",
                 "properties": {
                   "action_type": {
                     "type": "string"
                   },
-                  "confirm": {
-                    "description": "Must be true after the admin/operator explicitly confirms the modeled action.",
-                    "type": "boolean"
-                  },
-                  "idempotency_key": {
-                    "type": "string"
-                  },
-                  "metadata": {
-                    "type": "object"
-                  },
-                  "reason": {
+                  "target_kind": {
                     "type": "string"
                   },
                   "target_id": {
                     "type": "string"
                   },
-                  "target_kind": {
+                  "reason": {
                     "type": "string"
+                  },
+                  "idempotency_key": {
+                    "type": "string"
+                  },
+                  "confirm": {
+                    "type": "boolean",
+                    "description": "Must be true after the admin/operator explicitly confirms the modeled action."
+                  },
+                  "metadata": {
+                    "type": "object"
                   }
                 },
                 "required": [
@@ -137,49 +135,24 @@
                   "reason",
                   "idempotency_key",
                   "confirm"
-                ],
-                "type": "object"
+                ]
               }
             }
-          }
-        },
-        "responses": {
-          "202": {
-            "description": "Action queued"
-          },
-          "401": {
-            "description": "Unauthorized or missing CSRF"
           }
         },
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Queue an admin action (mutation)",
-        "tags": [
-          "admin"
         ]
       }
     },
     "/api/v1/admin/audit": {
       "get": {
         "operationId": "admin_audit",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "deployment_id",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "since",
-            "schema": {
-              "type": "string"
-            }
-          }
+        "summary": "Read audit trail",
+        "tags": [
+          "admin"
         ],
         "responses": {
           "200": {
@@ -189,28 +162,35 @@
             "description": "Unauthorized"
           }
         },
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Read audit trail",
-        "tags": [
-          "admin"
         ]
       }
     },
     "/api/v1/admin/comms": {
       "get": {
         "operationId": "admin_comms",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "limit",
-            "schema": {
-              "type": "string"
-            }
-          }
+        "summary": "Read Operator Pod Comms aggregate rows without message narratives",
+        "tags": [
+          "admin"
         ],
         "responses": {
           "200": {
@@ -220,55 +200,74 @@
             "description": "Unauthorized"
           }
         },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Read Operator Pod Comms aggregate rows without message narratives",
-        "tags": [
-          "admin"
         ]
       }
     },
     "/api/v1/admin/crew-recipe/apply": {
       "post": {
         "operationId": "admin_crew_recipe_apply",
+        "summary": "Apply Crew Training on a Captain's behalf with admin audit",
+        "tags": [
+          "admin",
+          "crew-training"
+        ],
+        "responses": {
+          "200": {
+            "description": "Crew Recipe applied on behalf"
+          },
+          "401": {
+            "description": "Unauthorized or missing CSRF"
+          }
+        },
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
+                "type": "object",
                 "properties": {
+                  "user_id": {
+                    "type": "string"
+                  },
+                  "role": {
+                    "type": "string"
+                  },
+                  "mission": {
+                    "type": "string"
+                  },
+                  "treatment": {
+                    "type": "string"
+                  },
+                  "preset": {
+                    "type": "string",
+                    "enum": [
+                      "Frontier",
+                      "Concourse",
+                      "Salvage",
+                      "Vanguard"
+                    ]
+                  },
                   "capacity": {
+                    "type": "string",
                     "enum": [
                       "sales",
                       "marketing",
                       "development",
                       "life coaching",
                       "companionship"
-                    ],
-                    "type": "string"
-                  },
-                  "mission": {
-                    "type": "string"
-                  },
-                  "preset": {
-                    "enum": [
-                      "Frontier",
-                      "Concourse",
-                      "Salvage",
-                      "Vanguard"
-                    ],
-                    "type": "string"
-                  },
-                  "role": {
-                    "type": "string"
-                  },
-                  "treatment": {
-                    "type": "string"
-                  },
-                  "user_id": {
-                    "type": "string"
+                    ]
                   }
                 },
                 "required": [
@@ -278,71 +277,24 @@
                   "treatment",
                   "preset",
                   "capacity"
-                ],
-                "type": "object"
+                ]
               }
             }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Crew Recipe applied on behalf"
-          },
-          "401": {
-            "description": "Unauthorized or missing CSRF"
           }
         },
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Apply Crew Training on a Captain's behalf with admin audit",
-        "tags": [
-          "admin",
-          "crew-training"
         ]
       }
     },
     "/api/v1/admin/dashboard": {
       "get": {
         "operationId": "admin_dashboard",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "channel",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "status",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "deployment_id",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "user_id",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "since",
-            "schema": {
-              "type": "string"
-            }
-          }
+        "summary": "Read admin dashboard (all deployments)",
+        "tags": [
+          "admin"
         ],
         "responses": {
           "200": {
@@ -352,35 +304,56 @@
             "description": "Unauthorized"
           }
         },
+        "parameters": [
+          {
+            "name": "channel",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "deployment_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Read admin dashboard (all deployments)",
-        "tags": [
-          "admin"
         ]
       }
     },
     "/api/v1/admin/dns-drift": {
       "get": {
         "operationId": "admin_dns_drift",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "deployment_id",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "since",
-            "schema": {
-              "type": "string"
-            }
-          }
+        "summary": "Read DNS drift reports",
+        "tags": [
+          "admin"
         ],
         "responses": {
           "200": {
@@ -390,35 +363,35 @@
             "description": "Unauthorized"
           }
         },
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Read DNS drift reports",
-        "tags": [
-          "admin"
         ]
       }
     },
     "/api/v1/admin/events": {
       "get": {
         "operationId": "admin_events",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "deployment_id",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "since",
-            "schema": {
-              "type": "string"
-            }
-          }
+        "summary": "Read structured events",
+        "tags": [
+          "admin"
         ],
         "responses": {
           "200": {
@@ -428,20 +401,36 @@
             "description": "Unauthorized"
           }
         },
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Read structured events",
-        "tags": [
-          "admin"
         ]
       }
     },
     "/api/v1/admin/operator-snapshot": {
       "get": {
         "operationId": "admin_operator_snapshot",
+        "summary": "Read operator snapshot (host readiness, diagnostics, journey, evidence)",
+        "tags": [
+          "admin"
+        ],
         "responses": {
           "200": {
             "description": "Operator snapshot"
@@ -454,16 +443,16 @@
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Read operator snapshot (host readiness, diagnostics, journey, evidence)",
-        "tags": [
-          "admin"
         ]
       }
     },
     "/api/v1/admin/provider-state": {
       "get": {
         "operationId": "admin_provider_state",
+        "summary": "Read provider/model state plus sanitized Chutes budget, credential-lifecycle, and threshold policy boundary (admin)",
+        "tags": [
+          "admin"
+        ],
         "responses": {
           "200": {
             "description": "Provider state"
@@ -476,38 +465,15 @@
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Read provider/model state plus sanitized Chutes budget, credential-lifecycle, and threshold policy boundary (admin)",
-        "tags": [
-          "admin"
         ]
       }
     },
     "/api/v1/admin/provisioning-jobs": {
       "get": {
         "operationId": "admin_provisioning_jobs",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "deployment_id",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "status",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "since",
-            "schema": {
-              "type": "string"
-            }
-          }
+        "summary": "Read provisioning job queue",
+        "tags": [
+          "admin"
         ],
         "responses": {
           "200": {
@@ -517,20 +483,43 @@
             "description": "Unauthorized"
           }
         },
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Read provisioning job queue",
-        "tags": [
-          "admin"
         ]
       }
     },
     "/api/v1/admin/reconciliation": {
       "get": {
         "operationId": "admin_reconciliation",
+        "summary": "Read Stripe-vs-local reconciliation report",
+        "tags": [
+          "admin"
+        ],
         "responses": {
           "200": {
             "description": "Reconciliation data"
@@ -543,16 +532,16 @@
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Read Stripe-vs-local reconciliation report",
-        "tags": [
-          "admin"
         ]
       }
     },
     "/api/v1/admin/scale-operations": {
       "get": {
         "operationId": "admin_scale_operations",
+        "summary": "Read scale operations snapshot (fleet, placements, action attempts, rollouts)",
+        "tags": [
+          "admin"
+        ],
         "responses": {
           "200": {
             "description": "Scale operations snapshot"
@@ -565,38 +554,15 @@
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Read scale operations snapshot (fleet, placements, action attempts, rollouts)",
-        "tags": [
-          "admin"
         ]
       }
     },
     "/api/v1/admin/service-health": {
       "get": {
         "operationId": "admin_service_health",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "deployment_id",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "status",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "since",
-            "schema": {
-              "type": "string"
-            }
-          }
+        "summary": "Read service health across deployments",
+        "tags": [
+          "admin"
         ],
         "responses": {
           "200": {
@@ -606,48 +572,43 @@
             "description": "Unauthorized"
           }
         },
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Read service health across deployments",
-        "tags": [
-          "admin"
         ]
       }
     },
     "/api/v1/admin/sessions/revoke": {
       "post": {
         "operationId": "session_revoke",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "reason": {
-                    "type": "string"
-                  },
-                  "session_kind": {
-                    "enum": [
-                      "user",
-                      "admin"
-                    ],
-                    "type": "string"
-                  },
-                  "target_session_id": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "target_session_id",
-                  "session_kind"
-                ],
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Revoke a session (admin action)",
+        "tags": [
+          "admin"
+        ],
         "responses": {
           "200": {
             "description": "Session revoked"
@@ -656,20 +617,49 @@
             "description": "Unauthorized or missing CSRF"
           }
         },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "target_session_id": {
+                    "type": "string"
+                  },
+                  "session_kind": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "admin"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "target_session_id",
+                  "session_kind"
+                ]
+              }
+            }
+          }
+        },
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Revoke a session (admin action)",
-        "tags": [
-          "admin"
         ]
       }
     },
     "/api/v1/admin/wrapped": {
       "get": {
         "operationId": "admin_wrapped",
+        "summary": "Read aggregate ArcLink Wrapped status without Captain narrative",
+        "tags": [
+          "admin",
+          "wrapped"
+        ],
         "responses": {
           "200": {
             "description": "Aggregate Wrapped status"
@@ -682,49 +672,16 @@
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Read aggregate ArcLink Wrapped status without Captain narrative",
-        "tags": [
-          "admin",
-          "wrapped"
         ]
       }
     },
     "/api/v1/auth/admin/login": {
       "post": {
         "operationId": "admin_login",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "email": {
-                    "format": "email",
-                    "type": "string"
-                  },
-                  "login_subject": {
-                    "type": "string"
-                  },
-                  "metadata": {
-                    "type": "object"
-                  },
-                  "mfa_verified": {
-                    "type": "boolean"
-                  },
-                  "password": {
-                    "format": "password",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "email",
-                  "password"
-                ],
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Admin login (creates session)",
+        "tags": [
+          "auth"
+        ],
         "responses": {
           "201": {
             "description": "Session created with Set-Cookie"
@@ -736,15 +693,47 @@
             "description": "Rate limit exceeded"
           }
         },
-        "summary": "Admin login (creates session)",
-        "tags": [
-          "auth"
-        ]
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "password": {
+                    "type": "string",
+                    "format": "password"
+                  },
+                  "login_subject": {
+                    "type": "string"
+                  },
+                  "mfa_verified": {
+                    "type": "boolean"
+                  },
+                  "metadata": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "email",
+                  "password"
+                ]
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/auth/admin/logout": {
       "post": {
         "operationId": "admin_logout",
+        "summary": "Admin logout (revokes session)",
+        "tags": [
+          "auth"
+        ],
         "responses": {
           "200": {
             "description": "Session revoked"
@@ -757,45 +746,16 @@
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Admin logout (revokes session)",
-        "tags": [
-          "auth"
         ]
       }
     },
     "/api/v1/auth/login": {
       "post": {
         "operationId": "login",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "email": {
-                    "format": "email",
-                    "type": "string"
-                  },
-                  "login_subject": {
-                    "type": "string"
-                  },
-                  "metadata": {
-                    "type": "object"
-                  },
-                  "password": {
-                    "format": "password",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "email",
-                  "password"
-                ],
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Login and resolve user or admin role",
+        "tags": [
+          "auth"
+        ],
         "responses": {
           "201": {
             "description": "User or admin session created with Set-Cookie"
@@ -807,44 +767,44 @@
             "description": "Rate limit exceeded"
           }
         },
-        "summary": "Login and resolve user or admin role",
-        "tags": [
-          "auth"
-        ]
-      }
-    },
-    "/api/v1/auth/user/login": {
-      "post": {
-        "operationId": "user_login",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
+                "type": "object",
                 "properties": {
                   "email": {
-                    "format": "email",
-                    "type": "string"
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "password": {
+                    "type": "string",
+                    "format": "password"
                   },
                   "login_subject": {
                     "type": "string"
                   },
                   "metadata": {
                     "type": "object"
-                  },
-                  "password": {
-                    "format": "password",
-                    "type": "string"
                   }
                 },
                 "required": [
                   "email",
                   "password"
-                ],
-                "type": "object"
+                ]
               }
             }
           }
-        },
+        }
+      }
+    },
+    "/api/v1/auth/user/login": {
+      "post": {
+        "operationId": "user_login",
+        "summary": "User login (creates session)",
+        "tags": [
+          "auth"
+        ],
         "responses": {
           "201": {
             "description": "Session created with Set-Cookie"
@@ -856,15 +816,44 @@
             "description": "Rate limit exceeded"
           }
         },
-        "summary": "User login (creates session)",
-        "tags": [
-          "auth"
-        ]
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "password": {
+                    "type": "string",
+                    "format": "password"
+                  },
+                  "login_subject": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "email",
+                  "password"
+                ]
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/auth/user/logout": {
       "post": {
         "operationId": "user_logout",
+        "summary": "User logout (revokes session)",
+        "tags": [
+          "auth"
+        ],
         "responses": {
           "200": {
             "description": "Session revoked"
@@ -877,46 +866,46 @@
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "User logout (revokes session)",
-        "tags": [
-          "auth"
         ]
       }
     },
     "/api/v1/fleet/enrollment/callback": {
       "post": {
         "operationId": "fleet_enrollment_callback",
+        "summary": "Worker fleet enrollment attestation callback",
+        "tags": [
+          "fleet"
+        ],
+        "responses": {
+          "201": {
+            "description": "Worker attested"
+          },
+          "401": {
+            "description": "Invalid or unavailable enrollment token"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          }
+        },
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
+                "type": "object",
                 "properties": {
-                  "capacity_slots": {
-                    "type": "integer"
-                  },
-                  "connectivity_summary": {
-                    "type": "object"
-                  },
-                  "hardware_summary": {
-                    "type": "object"
-                  },
                   "hostname": {
                     "type": "string"
                   },
                   "machine_fingerprint": {
                     "type": "string"
                   },
-                  "prereq_audit": {
-                    "type": "object"
-                  },
-                  "region": {
-                    "type": "string"
-                  },
                   "ssh_host": {
                     "type": "string"
                   },
                   "private_dns_name": {
+                    "type": "string"
+                  },
+                  "tailscale_dns_name": {
                     "type": "string"
                   },
                   "wireguard_interface": {
@@ -943,42 +932,42 @@
                   "ssh_user": {
                     "type": "string"
                   },
-                  "tags": {
+                  "region": {
+                    "type": "string"
+                  },
+                  "capacity_slots": {
+                    "type": "integer"
+                  },
+                  "hardware_summary": {
                     "type": "object"
                   },
-                  "tailscale_dns_name": {
-                    "type": "string"
+                  "connectivity_summary": {
+                    "type": "object"
+                  },
+                  "prereq_audit": {
+                    "type": "object"
+                  },
+                  "tags": {
+                    "type": "object"
                   }
                 },
                 "required": [
                   "hostname",
                   "machine_fingerprint"
-                ],
-                "type": "object"
+                ]
               }
             }
           }
-        },
-        "responses": {
-          "201": {
-            "description": "Worker attested"
-          },
-          "401": {
-            "description": "Invalid or unavailable enrollment token"
-          },
-          "429": {
-            "description": "Rate limit exceeded"
-          }
-        },
-        "summary": "Worker fleet enrollment attestation callback",
-        "tags": [
-          "fleet"
-        ]
+        }
       }
     },
     "/api/v1/health": {
       "get": {
         "operationId": "health",
+        "summary": "Liveness/readiness health check",
+        "tags": [
+          "health"
+        ],
         "responses": {
           "200": {
             "description": "Healthy"
@@ -986,48 +975,16 @@
           "503": {
             "description": "Degraded (DB unreachable)"
           }
-        },
-        "summary": "Liveness/readiness health check",
-        "tags": [
-          "health"
-        ]
+        }
       }
     },
     "/api/v1/onboarding/answer": {
       "post": {
         "operationId": "public_onboarding_answer",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "answer_summary": {
-                    "type": "string"
-                  },
-                  "display_name": {
-                    "type": "string"
-                  },
-                  "email": {
-                    "type": "string"
-                  },
-                  "model_id": {
-                    "type": "string"
-                  },
-                  "plan_id": {
-                    "type": "string"
-                  },
-                  "question_key": {
-                    "type": "string"
-                  },
-                  "session_id": {
-                    "type": "string"
-                  }
-                },
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Answer onboarding question",
+        "tags": [
+          "onboarding"
+        ],
         "responses": {
           "200": {
             "description": "Answer recorded"
@@ -1036,36 +993,47 @@
             "description": "Invalid input"
           }
         },
-        "summary": "Answer onboarding question",
-        "tags": [
-          "onboarding"
-        ]
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "session_id": {
+                    "type": "string"
+                  },
+                  "question_key": {
+                    "type": "string"
+                  },
+                  "answer_summary": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string"
+                  },
+                  "display_name": {
+                    "type": "string"
+                  },
+                  "plan_id": {
+                    "type": "string"
+                  },
+                  "model_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/onboarding/cancel": {
       "post": {
         "operationId": "onboarding_cancel",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "cancel_token": {
-                    "type": "string"
-                  },
-                  "session_id": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "session_id",
-                  "cancel_token"
-                ],
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Cancel an onboarding session",
+        "tags": [
+          "onboarding"
+        ],
         "responses": {
           "200": {
             "description": "Session cancelled or already final"
@@ -1074,40 +1042,36 @@
             "description": "Session not found"
           }
         },
-        "summary": "Cancel an onboarding session",
-        "tags": [
-          "onboarding"
-        ]
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "session_id": {
+                    "type": "string"
+                  },
+                  "cancel_token": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "session_id",
+                  "cancel_token"
+                ]
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/onboarding/checkout": {
       "post": {
         "operationId": "public_onboarding_checkout",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "cancel_url": {
-                    "format": "uri",
-                    "type": "string"
-                  },
-                  "price_id": {
-                    "type": "string"
-                  },
-                  "session_id": {
-                    "type": "string"
-                  },
-                  "success_url": {
-                    "format": "uri",
-                    "type": "string"
-                  }
-                },
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Open Stripe checkout for onboarding session",
+        "tags": [
+          "onboarding"
+        ],
         "responses": {
           "200": {
             "description": "Checkout URL returned"
@@ -1116,36 +1080,40 @@
             "description": "Invalid input"
           }
         },
-        "summary": "Open Stripe checkout for onboarding session",
-        "tags": [
-          "onboarding"
-        ]
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "session_id": {
+                    "type": "string"
+                  },
+                  "price_id": {
+                    "type": "string"
+                  },
+                  "success_url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "cancel_url": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/onboarding/claim-session": {
       "post": {
         "operationId": "onboarding_claim_session",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "claim_token": {
-                    "type": "string"
-                  },
-                  "session_id": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "session_id",
-                  "claim_token"
-                ],
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Claim user session after paid onboarding",
+        "tags": [
+          "onboarding"
+        ],
         "responses": {
           "201": {
             "description": "User session created with Set-Cookie"
@@ -1157,37 +1125,35 @@
             "description": "Onboarding session not found"
           }
         },
-        "summary": "Claim user session after paid onboarding",
-        "tags": [
-          "onboarding"
-        ]
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "session_id": {
+                    "type": "string"
+                  },
+                  "claim_token": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "session_id",
+                  "claim_token"
+                ]
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/onboarding/public-bot-checkout": {
       "get": {
         "operationId": "public_bot_onboarding_checkout",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "session",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "plan",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "token",
-            "schema": {
-              "type": "string"
-            }
-          }
+        "summary": "Redirect a public bot checkout button to Stripe",
+        "tags": [
+          "onboarding"
         ],
         "responses": {
           "303": {
@@ -1206,53 +1172,38 @@
             "description": "Stripe checkout unavailable"
           }
         },
-        "summary": "Redirect a public bot checkout button to Stripe",
-        "tags": [
-          "onboarding"
+        "parameters": [
+          {
+            "name": "session",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "plan",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
         ]
       }
     },
     "/api/v1/onboarding/start": {
       "post": {
         "operationId": "public_onboarding_start",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "channel": {
-                    "enum": [
-                      "web",
-                      "telegram",
-                      "discord"
-                    ],
-                    "type": "string"
-                  },
-                  "channel_identity": {
-                    "type": "string"
-                  },
-                  "display_name": {
-                    "type": "string"
-                  },
-                  "email": {
-                    "format": "email",
-                    "type": "string"
-                  },
-                  "metadata": {
-                    "type": "object"
-                  },
-                  "model_id": {
-                    "type": "string"
-                  },
-                  "plan_id": {
-                    "type": "string"
-                  }
-                },
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Begin onboarding flow",
+        "tags": [
+          "onboarding"
+        ],
         "responses": {
           "201": {
             "description": "Onboarding session created"
@@ -1261,41 +1212,77 @@
             "description": "Invalid input"
           }
         },
-        "summary": "Begin onboarding flow",
-        "tags": [
-          "onboarding"
-        ]
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "channel": {
+                    "type": "string",
+                    "enum": [
+                      "web",
+                      "telegram",
+                      "discord"
+                    ]
+                  },
+                  "channel_identity": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "display_name": {
+                    "type": "string"
+                  },
+                  "plan_id": {
+                    "type": "string"
+                  },
+                  "model_id": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/onboarding/status": {
       "get": {
         "operationId": "onboarding_status",
+        "summary": "Onboarding Status",
+        "tags": [],
         "responses": {
           "200": {
             "description": "OK"
           }
-        },
-        "summary": "Onboarding Status",
-        "tags": []
+        }
       }
     },
     "/api/v1/openapi.json": {
       "get": {
         "operationId": "openapi_spec",
+        "summary": "OpenAPI 3.1 specification",
+        "tags": [
+          "meta"
+        ],
         "responses": {
           "200": {
             "description": "OpenAPI JSON document"
           }
-        },
-        "summary": "OpenAPI 3.1 specification",
-        "tags": [
-          "meta"
-        ]
+        }
       }
     },
     "/api/v1/user/academy": {
       "get": {
         "operationId": "user_academy",
+        "summary": "User Academy",
+        "tags": [],
         "responses": {
           "200": {
             "description": "OK"
@@ -1305,14 +1292,31 @@
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "User Academy",
-        "tags": []
+        ]
+      }
+    },
+    "/api/v1/user/academy/add-sources": {
+      "post": {
+        "operationId": "user_academy_add_sources",
+        "summary": "User Academy Add Sources",
+        "tags": [],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ]
       }
     },
     "/api/v1/user/academy/adopt": {
       "post": {
         "operationId": "user_academy_adopt",
+        "summary": "User Academy Adopt",
+        "tags": [],
         "responses": {
           "200": {
             "description": "OK"
@@ -1322,34 +1326,17 @@
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "User Academy Adopt",
-        "tags": []
+        ]
       }
     },
     "/api/v1/user/academy/adopt-specialist": {
       "post": {
         "operationId": "user_academy_specialist_adopt",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "name": {
-                    "type": "string"
-                  },
-                  "specialist_uid": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "specialist_uid"
-                ],
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Adopt a redacted public Academy specialist into the Captain's Crew",
+        "tags": [
+          "user",
+          "academy"
+        ],
         "responses": {
           "200": {
             "description": "Public specialist adopted as a Captain-owned Trainee"
@@ -1361,21 +1348,38 @@
             "description": "Unauthorized or missing CSRF"
           }
         },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "specialist_uid": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "specialist_uid"
+                ]
+              }
+            }
+          }
+        },
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Adopt a redacted public Academy specialist into the Captain's Crew",
-        "tags": [
-          "user",
-          "academy"
         ]
       }
     },
     "/api/v1/user/academy/enroll": {
       "post": {
         "operationId": "user_academy_enroll",
+        "summary": "User Academy Enroll",
+        "tags": [],
         "responses": {
           "200": {
             "description": "OK"
@@ -1385,14 +1389,14 @@
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "User Academy Enroll",
-        "tags": []
+        ]
       }
     },
     "/api/v1/user/academy/mode-end": {
       "post": {
         "operationId": "user_academy_mode_end",
+        "summary": "User Academy Mode End",
+        "tags": [],
         "responses": {
           "200": {
             "description": "OK"
@@ -1402,14 +1406,14 @@
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "User Academy Mode End",
-        "tags": []
+        ]
       }
     },
     "/api/v1/user/academy/mode-open": {
       "post": {
         "operationId": "user_academy_mode_open",
+        "summary": "User Academy Mode Open",
+        "tags": [],
         "responses": {
           "200": {
             "description": "OK"
@@ -1419,14 +1423,14 @@
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "User Academy Mode Open",
-        "tags": []
+        ]
       }
     },
     "/api/v1/user/academy/mode-status": {
       "get": {
         "operationId": "user_academy_mode_status",
+        "summary": "User Academy Mode Status",
+        "tags": [],
         "responses": {
           "200": {
             "description": "OK"
@@ -1436,37 +1440,16 @@
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "User Academy Mode Status",
-        "tags": []
+        ]
       }
     },
     "/api/v1/user/agent-identity": {
       "post": {
         "operationId": "user_agent_identity",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "agent_name": {
-                    "type": "string"
-                  },
-                  "agent_title": {
-                    "type": "string"
-                  },
-                  "deployment_id": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "deployment_id"
-                ],
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Rename or retitle a user's Agent",
+        "tags": [
+          "user"
+        ],
         "responses": {
           "200": {
             "description": "Agent identity updated"
@@ -1475,37 +1458,44 @@
             "description": "Unauthorized or missing CSRF"
           }
         },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "deployment_id": {
+                    "type": "string"
+                  },
+                  "agent_name": {
+                    "type": "string"
+                  },
+                  "agent_title": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "deployment_id"
+                ]
+              }
+            }
+          }
+        },
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Rename or retitle a user's Agent",
-        "tags": [
-          "user"
         ]
       }
     },
     "/api/v1/user/backup-deploy-key": {
       "post": {
         "operationId": "user_backup_deploy_key",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "deployment_id": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "deployment_id"
-                ],
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Stage a private-backup deploy key for a user's deployment",
+        "tags": [
+          "user",
+          "backup"
+        ],
         "responses": {
           "200": {
             "description": "Backup deploy-key public key and fail-closed verification state returned"
@@ -1517,25 +1507,11 @@
             "description": "Unauthorized or missing CSRF"
           }
         },
-        "security": [
-          {
-            "sessionAuth": []
-          }
-        ],
-        "summary": "Stage a private-backup deploy key for a user's deployment",
-        "tags": [
-          "user",
-          "backup"
-        ]
-      }
-    },
-    "/api/v1/user/backup-write-check": {
-      "post": {
-        "operationId": "user_backup_write_check",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
+                "type": "object",
                 "properties": {
                   "deployment_id": {
                     "type": "string"
@@ -1543,12 +1519,26 @@
                 },
                 "required": [
                   "deployment_id"
-                ],
-                "type": "object"
+                ]
               }
             }
           }
         },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/user/backup-write-check": {
+      "post": {
+        "operationId": "user_backup_write_check",
+        "summary": "Record the private-backup GitHub write-check boundary",
+        "tags": [
+          "user",
+          "backup"
+        ],
         "responses": {
           "200": {
             "description": "Backup verification state returned; unattended local checks fail closed without activation"
@@ -1560,21 +1550,37 @@
             "description": "Unauthorized or missing CSRF"
           }
         },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "deployment_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "deployment_id"
+                ]
+              }
+            }
+          }
+        },
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Record the private-backup GitHub write-check boundary",
-        "tags": [
-          "user",
-          "backup"
         ]
       }
     },
     "/api/v1/user/billing": {
       "get": {
         "operationId": "user_billing",
+        "summary": "Read user billing and entitlement state",
+        "tags": [
+          "user"
+        ],
         "responses": {
           "200": {
             "description": "Billing data"
@@ -1587,31 +1593,15 @@
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Read user billing and entitlement state",
-        "tags": [
-          "user"
         ]
       }
     },
     "/api/v1/user/comms": {
       "get": {
         "operationId": "user_comms",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "direction",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "schema": {
-              "type": "string"
-            }
-          }
+        "summary": "Read Captain-scoped Pod Comms inbox/outbox",
+        "tags": [
+          "user"
         ],
         "responses": {
           "200": {
@@ -1621,28 +1611,35 @@
             "description": "Unauthorized"
           }
         },
+        "parameters": [
+          {
+            "name": "direction",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Read Captain-scoped Pod Comms inbox/outbox",
-        "tags": [
-          "user"
         ]
       }
     },
     "/api/v1/user/credentials": {
       "get": {
         "operationId": "user_credentials",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "deployment_id",
-            "schema": {
-              "type": "string"
-            }
-          }
+        "summary": "Read pending credential handoff state",
+        "tags": [
+          "user"
         ],
         "responses": {
           "200": {
@@ -1652,37 +1649,29 @@
             "description": "Unauthorized"
           }
         },
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Read pending credential handoff state",
-        "tags": [
-          "user"
         ]
       }
     },
     "/api/v1/user/credentials/acknowledge": {
       "post": {
         "operationId": "user_credential_ack",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "handoff_id": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "handoff_id"
-                ],
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Acknowledge credential storage and remove future handoff visibility",
+        "tags": [
+          "user"
+        ],
         "responses": {
           "200": {
             "description": "Credential handoff removed"
@@ -1691,20 +1680,38 @@
             "description": "Unauthorized or missing CSRF"
           }
         },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "handoff_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "handoff_id"
+                ]
+              }
+            }
+          }
+        },
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Acknowledge credential storage and remove future handoff visibility",
-        "tags": [
-          "user"
         ]
       }
     },
     "/api/v1/user/crew-recipe": {
       "get": {
         "operationId": "user_crew_recipe",
+        "summary": "Read the active and prior Crew Recipe",
+        "tags": [
+          "user",
+          "crew-training"
+        ],
         "responses": {
           "200": {
             "description": "Crew Recipe state"
@@ -1717,63 +1724,17 @@
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Read the active and prior Crew Recipe",
-        "tags": [
-          "user",
-          "crew-training"
         ]
       }
     },
     "/api/v1/user/crew-recipe/apply": {
       "post": {
         "operationId": "user_crew_recipe_apply",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "capacity": {
-                    "enum": [
-                      "sales",
-                      "marketing",
-                      "development",
-                      "life coaching",
-                      "companionship"
-                    ],
-                    "type": "string"
-                  },
-                  "mission": {
-                    "type": "string"
-                  },
-                  "preset": {
-                    "enum": [
-                      "Frontier",
-                      "Concourse",
-                      "Salvage",
-                      "Vanguard"
-                    ],
-                    "type": "string"
-                  },
-                  "role": {
-                    "type": "string"
-                  },
-                  "treatment": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "role",
-                  "mission",
-                  "treatment",
-                  "preset",
-                  "capacity"
-                ],
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Confirm Crew Training and apply the additive SOUL overlay",
+        "tags": [
+          "user",
+          "crew-training"
+        ],
         "responses": {
           "200": {
             "description": "Crew Recipe applied"
@@ -1782,53 +1743,39 @@
             "description": "Unauthorized or missing CSRF"
           }
         },
-        "security": [
-          {
-            "sessionAuth": []
-          }
-        ],
-        "summary": "Confirm Crew Training and apply the additive SOUL overlay",
-        "tags": [
-          "user",
-          "crew-training"
-        ]
-      }
-    },
-    "/api/v1/user/crew-recipe/preview": {
-      "post": {
-        "operationId": "user_crew_recipe_preview",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
+                "type": "object",
                 "properties": {
+                  "role": {
+                    "type": "string"
+                  },
+                  "mission": {
+                    "type": "string"
+                  },
+                  "treatment": {
+                    "type": "string"
+                  },
+                  "preset": {
+                    "type": "string",
+                    "enum": [
+                      "Frontier",
+                      "Concourse",
+                      "Salvage",
+                      "Vanguard"
+                    ]
+                  },
                   "capacity": {
+                    "type": "string",
                     "enum": [
                       "sales",
                       "marketing",
                       "development",
                       "life coaching",
                       "companionship"
-                    ],
-                    "type": "string"
-                  },
-                  "mission": {
-                    "type": "string"
-                  },
-                  "preset": {
-                    "enum": [
-                      "Frontier",
-                      "Concourse",
-                      "Salvage",
-                      "Vanguard"
-                    ],
-                    "type": "string"
-                  },
-                  "role": {
-                    "type": "string"
-                  },
-                  "treatment": {
-                    "type": "string"
+                    ]
                   }
                 },
                 "required": [
@@ -1837,12 +1784,26 @@
                   "treatment",
                   "preset",
                   "capacity"
-                ],
-                "type": "object"
+                ]
               }
             }
           }
         },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/user/crew-recipe/preview": {
+      "post": {
+        "operationId": "user_crew_recipe_preview",
+        "summary": "Preview or regenerate a Crew Recipe without applying it",
+        "tags": [
+          "user",
+          "crew-training"
+        ],
         "responses": {
           "200": {
             "description": "Crew Recipe preview"
@@ -1851,29 +1812,65 @@
             "description": "Unauthorized or missing CSRF"
           }
         },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "role": {
+                    "type": "string"
+                  },
+                  "mission": {
+                    "type": "string"
+                  },
+                  "treatment": {
+                    "type": "string"
+                  },
+                  "preset": {
+                    "type": "string",
+                    "enum": [
+                      "Frontier",
+                      "Concourse",
+                      "Salvage",
+                      "Vanguard"
+                    ]
+                  },
+                  "capacity": {
+                    "type": "string",
+                    "enum": [
+                      "sales",
+                      "marketing",
+                      "development",
+                      "life coaching",
+                      "companionship"
+                    ]
+                  }
+                },
+                "required": [
+                  "role",
+                  "mission",
+                  "treatment",
+                  "preset",
+                  "capacity"
+                ]
+              }
+            }
+          }
+        },
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Preview or regenerate a Crew Recipe without applying it",
-        "tags": [
-          "user",
-          "crew-training"
         ]
       }
     },
     "/api/v1/user/dashboard": {
       "get": {
         "operationId": "user_dashboard",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "user_id",
-            "schema": {
-              "type": "string"
-            }
-          }
+        "summary": "Read user dashboard",
+        "tags": [
+          "user"
         ],
         "responses": {
           "200": {
@@ -1883,28 +1880,28 @@
             "description": "Unauthorized"
           }
         },
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Read user dashboard",
-        "tags": [
-          "user"
         ]
       }
     },
     "/api/v1/user/linked-resources": {
       "get": {
         "operationId": "user_linked_resources",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "user_id",
-            "schema": {
-              "type": "string"
-            }
-          }
+        "summary": "Read accepted linked resources for the authenticated user",
+        "tags": [
+          "user"
         ],
         "responses": {
           "200": {
@@ -1914,35 +1911,29 @@
             "description": "Unauthorized"
           }
         },
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Read accepted linked resources for the authenticated user",
-        "tags": [
-          "user"
         ]
       }
     },
     "/api/v1/user/portal": {
       "post": {
         "operationId": "user_portal_link",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "return_url": {
-                    "format": "uri",
-                    "type": "string"
-                  }
-                },
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Generate Stripe billing portal link",
+        "tags": [
+          "user"
+        ],
         "responses": {
           "200": {
             "description": "Portal URL returned"
@@ -1951,20 +1942,35 @@
             "description": "Unauthorized or missing CSRF"
           }
         },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "return_url": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                }
+              }
+            }
+          }
+        },
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Generate Stripe billing portal link",
-        "tags": [
-          "user"
         ]
       }
     },
     "/api/v1/user/provider-state": {
       "get": {
         "operationId": "user_provider_state",
+        "summary": "Read provider/model state plus sanitized Chutes budget, credential-lifecycle, and threshold policy boundary (user)",
+        "tags": [
+          "user"
+        ],
         "responses": {
           "200": {
             "description": "Provider state"
@@ -1977,24 +1983,15 @@
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Read provider/model state plus sanitized Chutes budget, credential-lifecycle, and threshold policy boundary (user)",
-        "tags": [
-          "user"
         ]
       }
     },
     "/api/v1/user/provisioning": {
       "get": {
         "operationId": "user_provisioning_status",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "deployment_id",
-            "schema": {
-              "type": "string"
-            }
-          }
+        "summary": "Read user provisioning and deployment status",
+        "tags": [
+          "user"
         ],
         "responses": {
           "200": {
@@ -2004,49 +2001,30 @@
             "description": "Unauthorized"
           }
         },
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Read user provisioning and deployment status",
-        "tags": [
-          "user"
         ]
       }
     },
     "/api/v1/user/refuel-checkout": {
       "post": {
         "operationId": "user_refuel_checkout",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "amount_cents": {
-                    "minimum": 100,
-                    "type": "integer"
-                  },
-                  "cancel_url": {
-                    "format": "uri",
-                    "type": "string"
-                  },
-                  "deployment_id": {
-                    "type": "string"
-                  },
-                  "success_url": {
-                    "format": "uri",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "amount_cents"
-                ],
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Generate Stripe Checkout link for ArcPod Refueling",
+        "tags": [
+          "user",
+          "billing"
+        ],
         "responses": {
           "200": {
             "description": "Payment-mode Checkout URL and quote returned"
@@ -2061,29 +2039,48 @@
             "description": "Deployment not found"
           }
         },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "deployment_id": {
+                    "type": "string"
+                  },
+                  "amount_cents": {
+                    "type": "integer",
+                    "minimum": 100
+                  },
+                  "success_url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "cancel_url": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                "required": [
+                  "amount_cents"
+                ]
+              }
+            }
+          }
+        },
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Generate Stripe Checkout link for ArcPod Refueling",
-        "tags": [
-          "user",
-          "billing"
         ]
       }
     },
     "/api/v1/user/share-grants": {
       "get": {
         "operationId": "user_share_grants",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "user_id",
-            "schema": {
-              "type": "string"
-            }
-          }
+        "summary": "Read share approvals and recipient acceptance waits for the authenticated user",
+        "tags": [
+          "user"
         ],
         "responses": {
           "200": {
@@ -2093,70 +2090,27 @@
             "description": "Unauthorized"
           }
         },
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Read share approvals and recipient acceptance waits for the authenticated user",
-        "tags": [
-          "user"
         ]
       },
       "post": {
         "operationId": "user_share_grant_create",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "access_mode": {
-                    "enum": [
-                      "read",
-                      "read_write"
-                    ],
-                    "type": "string"
-                  },
-                  "display_name": {
-                    "type": "string"
-                  },
-                  "owner_deployment_id": {
-                    "type": "string"
-                  },
-                  "recipient_deployment_id": {
-                    "type": "string"
-                  },
-                  "recipient_user_id": {
-                    "type": "string"
-                  },
-                  "resource_kind": {
-                    "enum": [
-                      "drive",
-                      "code"
-                    ],
-                    "type": "string"
-                  },
-                  "resource_path": {
-                    "type": "string"
-                  },
-                  "resource_root": {
-                    "enum": [
-                      "vault",
-                      "workspace"
-                    ],
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "resource_kind",
-                  "resource_root",
-                  "resource_path"
-                ],
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Request a Drive/Code share grant",
+        "tags": [
+          "user"
+        ],
         "responses": {
           "201": {
             "description": "Share grant requested"
@@ -2165,37 +2119,72 @@
             "description": "Unauthorized or missing CSRF"
           }
         },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "recipient_user_id": {
+                    "type": "string"
+                  },
+                  "owner_deployment_id": {
+                    "type": "string"
+                  },
+                  "recipient_deployment_id": {
+                    "type": "string"
+                  },
+                  "resource_kind": {
+                    "type": "string",
+                    "enum": [
+                      "drive",
+                      "code"
+                    ]
+                  },
+                  "resource_root": {
+                    "type": "string",
+                    "enum": [
+                      "vault",
+                      "workspace"
+                    ]
+                  },
+                  "resource_path": {
+                    "type": "string"
+                  },
+                  "display_name": {
+                    "type": "string"
+                  },
+                  "access_mode": {
+                    "type": "string",
+                    "enum": [
+                      "read",
+                      "read_write"
+                    ]
+                  }
+                },
+                "required": [
+                  "resource_kind",
+                  "resource_root",
+                  "resource_path"
+                ]
+              }
+            }
+          }
+        },
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Request a Drive/Code share grant",
-        "tags": [
-          "user"
         ]
       }
     },
     "/api/v1/user/share-grants/accept": {
       "post": {
         "operationId": "user_share_grant_accept",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "grant_id": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "grant_id"
-                ],
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Accept an approved linked resource share",
+        "tags": [
+          "user"
+        ],
         "responses": {
           "200": {
             "description": "Share accepted"
@@ -2204,24 +2193,11 @@
             "description": "Unauthorized or missing CSRF"
           }
         },
-        "security": [
-          {
-            "sessionAuth": []
-          }
-        ],
-        "summary": "Accept an approved linked resource share",
-        "tags": [
-          "user"
-        ]
-      }
-    },
-    "/api/v1/user/share-grants/approve": {
-      "post": {
-        "operationId": "user_share_grant_approve",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
+                "type": "object",
                 "properties": {
                   "grant_id": {
                     "type": "string"
@@ -2229,12 +2205,25 @@
                 },
                 "required": [
                   "grant_id"
-                ],
-                "type": "object"
+                ]
               }
             }
           }
         },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/user/share-grants/approve": {
+      "post": {
+        "operationId": "user_share_grant_approve",
+        "summary": "Owner-approve a pending share grant",
+        "tags": [
+          "user"
+        ],
         "responses": {
           "200": {
             "description": "Share grant approved"
@@ -2243,40 +2232,64 @@
             "description": "Unauthorized or missing CSRF"
           }
         },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "grant_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "grant_id"
+                ]
+              }
+            }
+          }
+        },
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Owner-approve a pending share grant",
-        "tags": [
-          "user"
         ]
       }
     },
     "/api/v1/user/share-grants/broker": {
       "post": {
         "operationId": "user_share_grant_broker_create",
+        "summary": "Request a Drive/Code share grant from a deployment-scoped broker",
+        "tags": [
+          "user",
+          "workspace"
+        ],
+        "responses": {
+          "201": {
+            "description": "Share grant requested"
+          },
+          "401": {
+            "description": "Missing or invalid broker token"
+          }
+        },
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
+                "type": "object",
                 "properties": {
                   "contract": {
+                    "type": "string",
                     "enum": [
                       "arclink-share-grants"
-                    ],
-                    "type": "string"
+                    ]
                   },
-                  "display_name": {
-                    "type": "string"
-                  },
-                  "item_kind": {
+                  "source_plugin": {
+                    "type": "string",
                     "enum": [
-                      "file",
-                      "directory"
-                    ],
-                    "type": "string"
+                      "drive",
+                      "code"
+                    ]
                   },
                   "owner_deployment_id": {
                     "type": "string"
@@ -2284,52 +2297,55 @@
                   "recipient": {
                     "type": "string"
                   },
-                  "recipient_deployment_id": {
-                    "type": "string"
-                  },
                   "recipient_user_id": {
                     "type": "string"
                   },
-                  "requested_access": {
-                    "enum": [
-                      "read",
-                      "read_write"
-                    ],
+                  "recipient_deployment_id": {
                     "type": "string"
                   },
-                  "reshare_allowed": {
-                    "type": "boolean"
-                  },
                   "resource_kind": {
+                    "type": "string",
                     "enum": [
                       "drive",
                       "code"
-                    ],
-                    "type": "string"
+                    ]
+                  },
+                  "item_kind": {
+                    "type": "string",
+                    "enum": [
+                      "file",
+                      "directory"
+                    ]
+                  },
+                  "resource_root": {
+                    "type": "string",
+                    "enum": [
+                      "vault",
+                      "workspace"
+                    ]
                   },
                   "resource_path": {
                     "type": "string"
                   },
-                  "resource_root": {
-                    "enum": [
-                      "vault",
-                      "workspace"
-                    ],
+                  "display_name": {
                     "type": "string"
                   },
+                  "requested_access": {
+                    "type": "string",
+                    "enum": [
+                      "read",
+                      "read_write"
+                    ]
+                  },
                   "share_mode": {
+                    "type": "string",
                     "enum": [
                       "owner_approval",
                       "claim_nonce"
-                    ],
-                    "type": "string"
+                    ]
                   },
-                  "source_plugin": {
-                    "enum": [
-                      "drive",
-                      "code"
-                    ],
-                    "type": "string"
+                  "reshare_allowed": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -2339,52 +2355,25 @@
                   "resource_kind",
                   "resource_root",
                   "resource_path"
-                ],
-                "type": "object"
+                ]
               }
             }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Share grant requested"
-          },
-          "401": {
-            "description": "Missing or invalid broker token"
           }
         },
         "security": [
           {
             "shareRequestBrokerAuth": []
           }
-        ],
-        "summary": "Request a Drive/Code share grant from a deployment-scoped broker",
-        "tags": [
-          "user",
-          "workspace"
         ]
       }
     },
     "/api/v1/user/share-grants/claim": {
       "post": {
         "operationId": "user_share_grant_claim",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "nonce": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "nonce"
-                ],
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Claim a share by its ephemeral nonce (/arclink_share_accept)",
+        "tags": [
+          "user"
+        ],
         "responses": {
           "200": {
             "description": "Share claimed and materialized as a Linked resource"
@@ -2393,37 +2382,37 @@
             "description": "Unauthorized or missing CSRF"
           }
         },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "nonce": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "nonce"
+                ]
+              }
+            }
+          }
+        },
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Claim a share by its ephemeral nonce (/arclink_share_accept)",
-        "tags": [
-          "user"
         ]
       }
     },
     "/api/v1/user/share-grants/deny": {
       "post": {
         "operationId": "user_share_grant_deny",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "grant_id": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "grant_id"
-                ],
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Owner-deny a pending share grant",
+        "tags": [
+          "user"
+        ],
         "responses": {
           "200": {
             "description": "Share grant denied"
@@ -2432,37 +2421,37 @@
             "description": "Unauthorized or missing CSRF"
           }
         },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "grant_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "grant_id"
+                ]
+              }
+            }
+          }
+        },
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Owner-deny a pending share grant",
-        "tags": [
-          "user"
         ]
       }
     },
     "/api/v1/user/share-grants/nonce/revoke": {
       "post": {
         "operationId": "user_share_nonce_revoke",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "nonce_id": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "nonce_id"
-                ],
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Owner-revoke a minted-but-unclaimed ephemeral share nonce",
+        "tags": [
+          "user"
+        ],
         "responses": {
           "200": {
             "description": "Nonce revoked (or already revoked); it can no longer be claimed"
@@ -2471,45 +2460,37 @@
             "description": "Unauthorized or missing CSRF"
           }
         },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "nonce_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "nonce_id"
+                ]
+              }
+            }
+          }
+        },
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Owner-revoke a minted-but-unclaimed ephemeral share nonce",
-        "tags": [
-          "user"
         ]
       }
     },
     "/api/v1/user/share-grants/retry-notification": {
       "post": {
         "operationId": "user_share_grant_retry_notification",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "grant_id": {
-                    "type": "string"
-                  },
-                  "target": {
-                    "enum": [
-                      "auto",
-                      "owner",
-                      "recipient"
-                    ],
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "grant_id"
-                ],
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Retry queueing the current Raven share notification",
+        "tags": [
+          "user"
+        ],
         "responses": {
           "200": {
             "description": "Share notification retry evaluated"
@@ -2518,37 +2499,45 @@
             "description": "Unauthorized or missing CSRF"
           }
         },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "grant_id": {
+                    "type": "string"
+                  },
+                  "target": {
+                    "type": "string",
+                    "enum": [
+                      "auto",
+                      "owner",
+                      "recipient"
+                    ]
+                  }
+                },
+                "required": [
+                  "grant_id"
+                ]
+              }
+            }
+          }
+        },
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Retry queueing the current Raven share notification",
-        "tags": [
-          "user"
         ]
       }
     },
     "/api/v1/user/share-grants/revoke": {
       "post": {
         "operationId": "user_share_grant_revoke",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "grant_id": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "grant_id"
-                ],
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Owner-revoke a share grant",
+        "tags": [
+          "user"
+        ],
         "responses": {
           "200": {
             "description": "Share revoked"
@@ -2557,28 +2546,37 @@
             "description": "Unauthorized or missing CSRF"
           }
         },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "grant_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "grant_id"
+                ]
+              }
+            }
+          }
+        },
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Owner-revoke a share grant",
-        "tags": [
-          "user"
         ]
       }
     },
     "/api/v1/user/wrapped": {
       "get": {
         "operationId": "user_wrapped",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "limit",
-            "schema": {
-              "type": "string"
-            }
-          }
+        "summary": "Read Captain ArcLink Wrapped history",
+        "tags": [
+          "user",
+          "wrapped"
         ],
         "responses": {
           "200": {
@@ -2588,43 +2586,30 @@
             "description": "Unauthorized"
           }
         },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Read Captain ArcLink Wrapped history",
-        "tags": [
-          "user",
-          "wrapped"
         ]
       }
     },
     "/api/v1/user/wrapped-frequency": {
       "post": {
         "operationId": "user_wrapped_frequency",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "frequency": {
-                    "enum": [
-                      "daily",
-                      "weekly",
-                      "monthly"
-                    ],
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "frequency"
-                ],
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Update Captain ArcLink Wrapped cadence",
+        "tags": [
+          "user",
+          "wrapped"
+        ],
         "responses": {
           "200": {
             "description": "Wrapped cadence updated"
@@ -2636,31 +2621,42 @@
             "description": "Unauthorized or missing CSRF"
           }
         },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "frequency": {
+                    "type": "string",
+                    "enum": [
+                      "daily",
+                      "weekly",
+                      "monthly"
+                    ]
+                  }
+                },
+                "required": [
+                  "frequency"
+                ]
+              }
+            }
+          }
+        },
         "security": [
           {
             "sessionAuth": []
           }
-        ],
-        "summary": "Update Captain ArcLink Wrapped cadence",
-        "tags": [
-          "user",
-          "wrapped"
         ]
       }
     },
     "/api/v1/webhooks/discord": {
       "post": {
         "operationId": "discord_webhook",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {},
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Discord interaction webhook receiver",
+        "tags": [
+          "webhooks"
+        ],
         "responses": {
           "200": {
             "description": "Interaction handled"
@@ -2669,25 +2665,25 @@
             "description": "Invalid signature"
           }
         },
-        "summary": "Discord interaction webhook receiver",
-        "tags": [
-          "webhooks"
-        ]
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/webhooks/stripe": {
       "post": {
         "operationId": "stripe_webhook",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {},
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Stripe webhook receiver",
+        "tags": [
+          "webhooks"
+        ],
         "responses": {
           "200": {
             "description": "Webhook processed"
@@ -2696,66 +2692,106 @@
             "description": "Invalid signature"
           }
         },
-        "summary": "Stripe webhook receiver",
-        "tags": [
-          "webhooks"
-        ]
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/webhooks/telegram": {
       "post": {
         "operationId": "telegram_webhook",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {},
-                "type": "object"
-              }
-            }
-          }
-        },
+        "summary": "Telegram Bot API webhook receiver",
+        "tags": [
+          "webhooks"
+        ],
         "responses": {
           "200": {
             "description": "Update processed"
           }
         },
-        "summary": "Telegram Bot API webhook receiver",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "operationId": "llm_router_models",
+        "summary": "List OpenAI-compatible models allowed for the ArcPod router key",
         "tags": [
-          "webhooks"
-        ]
+          "llm-router"
+        ],
+        "security": [
+          {
+            "routerBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Model list"
+          },
+          "401": {
+            "description": "Missing, invalid, revoked, or suspended router key"
+          },
+          "503": {
+            "description": "Router database or upstream credential is unavailable"
+          }
+        }
       }
     },
     "/v1/chat/completions": {
       "post": {
         "operationId": "llm_router_chat_completions",
+        "summary": "Relay OpenAI-compatible chat completions through the ArcLink LLM Router",
+        "tags": [
+          "llm-router"
+        ],
+        "security": [
+          {
+            "routerBearerAuth": []
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
+                "type": "object",
                 "properties": {
-                  "max_tokens": {
-                    "type": "integer"
-                  },
-                  "messages": {
-                    "items": {
-                      "type": "object"
-                    },
-                    "type": "array"
-                  },
                   "model": {
                     "type": "string"
                   },
+                  "messages": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  },
                   "stream": {
                     "type": "boolean"
+                  },
+                  "max_tokens": {
+                    "type": "integer"
                   }
                 },
                 "required": [
                   "model",
                   "messages"
                 ],
-                "type": "object"
+                "additionalProperties": true
               }
             }
           }
@@ -2779,48 +2815,29 @@
           "503": {
             "description": "Router database or central Chutes credential is unavailable"
           }
-        },
-        "security": [
-          {
-            "routerBearerAuth": []
-          }
-        ],
-        "summary": "Relay OpenAI-compatible chat completions through the ArcLink LLM Router",
-        "tags": [
-          "llm-router"
-        ]
-      }
-    },
-    "/v1/models": {
-      "get": {
-        "operationId": "llm_router_models",
-        "responses": {
-          "200": {
-            "description": "Model list"
-          },
-          "401": {
-            "description": "Missing, invalid, revoked, or suspended router key"
-          },
-          "503": {
-            "description": "Router database or upstream credential is unavailable"
-          }
-        },
-        "security": [
-          {
-            "routerBearerAuth": []
-          }
-        ],
-        "summary": "List OpenAI-compatible models allowed for the ArcPod router key",
-        "tags": [
-          "llm-router"
-        ]
+        }
       }
     }
   },
-  "servers": [
-    {
-      "description": "Relative to deployment host",
-      "url": "/"
+  "components": {
+    "securitySchemes": {
+      "sessionAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-ArcLink-Session-Id",
+        "description": "Session-based auth via cookies or headers."
+      },
+      "routerBearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Per-deployment ArcLink LLM router key. Raw keys are materialized only into ArcPods and are never returned by provider-state APIs."
+      },
+      "shareRequestBrokerAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-ArcLink-Share-Request-Broker-Token",
+        "description": "Deployment-scoped Drive/Code share-request broker token. Token material is stored only in ArcPod runtime secrets; the hosted API stores and verifies only a hash."
+      }
     }
-  ]
+  }
 }

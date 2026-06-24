@@ -77,6 +77,7 @@ const api = {
   userAcademy: () => request("/user/academy", {}, "user"),
   academyModeStatus: (traineeId) => request(`/user/academy/mode-status?trainee_id=${encodeURIComponent(traineeId)}`, {}, "user"),
   enrollAcademyTrainee: (body) => request("/user/academy/enroll", { method: "POST", body: JSON.stringify(body) }, "user"),
+  addAcademySources: (body) => request("/user/academy/add-sources", { method: "POST", body: JSON.stringify(body) }, "user"),
   openAcademyMode: (body) => request("/user/academy/mode-open", { method: "POST", body: JSON.stringify(body) }, "user"),
   endAcademyMode: (body) => request("/user/academy/mode-end", { method: "POST", body: JSON.stringify(body) }, "user"),
   adoptAcademyGraduate: (body) => request("/user/academy/adopt", { method: "POST", body: JSON.stringify(body) }, "user"),
@@ -229,9 +230,27 @@ describe("API client route construction", () => {
     assert.ok(lastFetchUrl.endsWith("/user/academy"));
     await api.academyModeStatus("atrn_1");
     assert.ok(lastFetchUrl.endsWith("/user/academy/mode-status?trainee_id=atrn_1"));
-    await api.enrollAcademyTrainee({ program_id: "systems_practice_engineer", name: "Ada" });
+    await api.enrollAcademyTrainee({
+      program_id: "systems_practice_engineer",
+      name: "Ada",
+      charter: {
+        subject_scope: "Reliability engineering",
+        acceptance_scenarios: [{ prompt: "Diagnose a failing deploy from logs" }],
+        boundaries: ["never run destructive ops without approval"],
+      },
+    });
     assert.ok(lastFetchUrl.endsWith("/user/academy/enroll"));
     assert.equal(lastFetchOpts.method, "POST");
+    const enrollBody = JSON.parse(lastFetchOpts.body);
+    assert.ok(enrollBody.charter, "enroll body must carry the Training Charter end-to-end (D-D parity)");
+    assert.equal(enrollBody.charter.acceptance_scenarios.length, 1, "exam scenarios ride in the charter");
+    assert.ok(!("share" in enrollBody.charter) && !("share_policy" in enrollBody.charter), "no share control at intake (D-E)");
+    assert.equal(lastFetchOpts.headers["X-ArcLink-CSRF-Token"], FAKE_USER_CSRF);
+    await api.addAcademySources({ trainee_id: "atrn_1", sources: [{ url: "https://github.com/acme/x", summary: "notes" }] });
+    assert.ok(lastFetchUrl.endsWith("/user/academy/add-sources"));
+    assert.equal(lastFetchOpts.method, "POST");
+    const addBody = JSON.parse(lastFetchOpts.body);
+    assert.ok(Array.isArray(addBody.sources) && addBody.sources[0].url === "https://github.com/acme/x", "add-sources carries the source entries");
     assert.equal(lastFetchOpts.headers["X-ArcLink-CSRF-Token"], FAKE_USER_CSRF);
     await api.openAcademyMode({ trainee_id: "atrn_1" });
     assert.ok(lastFetchUrl.endsWith("/user/academy/mode-open"));

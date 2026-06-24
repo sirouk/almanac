@@ -895,6 +895,8 @@ def build_academy_corpus(
     registry: Mapping[str, SourceLanePolicy] | None = None,
     created_at: str | None = None,
     min_source_score: int = 70,
+    authored_notes: Mapping[str, str] | None = None,
+    authored_for_manifest_id: str = "",
 ) -> CorpusManifest:
     lane_registry = dict(registry or default_source_lane_registry())
     violations = validate_academy_sources(sources, registry=lane_registry)
@@ -915,17 +917,6 @@ def build_academy_corpus(
         for source in sources
     }
     citation_map = {source.source_id: _citation_entries(source) for source in sources}
-    lesson_cards = tuple(_lesson_card(source, source_records[source.source_id]) for source in sources)
-    gate = academy_evaluation_gate(quality_records=quality_records, min_source_score=min_source_score)
-    curriculum = _build_curriculum(
-        role_id=clean_role_id,
-        role_title=clean_role_title,
-        topic=clean_topic,
-        sources=sources,
-        source_records=source_records,
-        lesson_cards=lesson_cards,
-        status=gate.status if gate.status != "live_proof_pending" else "ready_for_review",
-    )
     manifest_seed = {
         "role_id": clean_role_id,
         "role_title": clean_role_title,
@@ -939,8 +930,28 @@ def build_academy_corpus(
             for source in sources
         ],
     }
+    manifest_id = f"academy-{_sha256(_stable_json(manifest_seed))[:16]}"
+    # 4d freshness gate: apply authored notes ONLY when they were authored FOR THIS exact
+    # manifest (so an in-place source edit -- same source_id, changed content/signature ->
+    # different manifest_id -- can't bleed a STALE authored note into the curriculum card).
+    # An empty authored_for_manifest_id keeps the unconditional (legacy/test) behavior.
+    _authored = dict(authored_notes or {}) if (not authored_for_manifest_id or authored_for_manifest_id == manifest_id) else {}
+    lesson_cards = tuple(
+        _lesson_card(source, source_records[source.source_id], authored_note=str(_authored.get(source.source_id, "")))
+        for source in sources
+    )
+    gate = academy_evaluation_gate(quality_records=quality_records, min_source_score=min_source_score)
+    curriculum = _build_curriculum(
+        role_id=clean_role_id,
+        role_title=clean_role_title,
+        topic=clean_topic,
+        sources=sources,
+        source_records=source_records,
+        lesson_cards=lesson_cards,
+        status=gate.status if gate.status != "live_proof_pending" else "ready_for_review",
+    )
     return CorpusManifest(
-        manifest_id=f"academy-{_sha256(_stable_json(manifest_seed))[:16]}",
+        manifest_id=manifest_id,
         role_id=clean_role_id,
         role_title=clean_role_title,
         topic=clean_topic,
@@ -2095,8 +2106,11 @@ def _citation_entries(source: AcademySource) -> list[dict[str, Any]]:
     ]
 
 
-def _lesson_card(source: AcademySource, source_record: Mapping[str, Any]) -> dict[str, Any]:
-    summary = _clean_space(source.content, limit=260)
+def _lesson_card(source: AcademySource, source_record: Mapping[str, Any], *, authored_note: str = "") -> dict[str, Any]:
+    # 4d: when a fresh live-authored synthesis provides a note for THIS source, the lesson
+    # card reflects the AUTHORED note instead of the deterministic content[:260] mail-merge.
+    # Keyed per source_id, so a stale artifact's notes simply don't match the current sources.
+    summary = _clean_space(authored_note, limit=600) or _clean_space(source.content, limit=260)
     if not summary:
         summary = f"Metadata-only source for {source.title}; retrieve approved details before relying on it."
     return {

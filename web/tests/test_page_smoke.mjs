@@ -188,10 +188,14 @@ describe("Page content smoke checks", () => {
     assert.ok(content.includes('"academy"'), "missing Academy tab");
     assert.ok(content.includes("ArcLink Academy"), "missing ArcLink Academy panel");
     assert.ok(content.includes("Enter Academy Mode"), "missing Academy Mode entry control");
-    assert.ok(content.includes("Graduate (close mode)"), "missing Captain-ends-mode control");
+    assert.ok(content.includes("stage for review"), "missing Captain-ends-mode control (honest pre-exam label)");
+    assert.ok(!content.includes("Graduate (close mode)"), "pre-exam 'Graduate' copy must be relabeled to staged-for-review (D-H)");
     assert.ok(content.includes("Public Academy Specialists"), "missing public Academy specialist gallery");
-    assert.ok(content.includes("Academy Graduates"), "missing Academy graduates gallery");
+    assert.ok(content.includes("Staged Specialists"), "missing staged-specialist adoption gallery");
+    assert.ok(!content.includes("Academy Graduates") && !content.includes("Adopt graduate"), "pre-exam adoption gallery must not claim 'Graduates' (D-H)");
     assert.ok(content.includes("api.enrollAcademyTrainee"), "missing Academy enroll API call");
+    assert.ok(content.includes("api.addAcademySources"), "missing Academy add-source API call (inc2 dashboard source intake)");
+    assert.ok(content.includes("Add a source"), "missing Academy add-source UI");
     assert.ok(content.includes("api.endAcademyMode"), "missing Academy mode-end API call");
     assert.ok(content.includes("api.adoptAcademyGraduate"), "missing Academy adopt API call");
     assert.ok(content.includes("api.adoptAcademySpecialist"), "missing Academy central specialist adopt API call");

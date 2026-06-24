@@ -13,7 +13,7 @@ import secrets
 import shutil
 import sqlite3
 import tempfile
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from arclink_control import (
     ARCLINK_CREDENTIAL_HANDOFF_STATUSES,
@@ -71,12 +71,17 @@ from arclink_academy_programs import (
     adopt_central_specialist,
     adopt_academy_graduate,
     browse_academy_graduates,
+    build_charter,
     end_academy_mode,
     enroll_academy_trainee,
+    get_academy_program,
     get_academy_trainee,
     get_open_academy_mode,
+    materialize_operator_academy_sources,
+    resolve_academy_reuse_plan,
     list_central_specialists,
     list_academy_trainees,
+    academy_trainee_graduation_state,
     open_academy_mode,
     seed_default_academy_programs,
 )
@@ -1468,6 +1473,16 @@ def _require_owned_trainee(conn: sqlite3.Connection, trainee_id: str, user_id: s
     return trainee
 
 
+def _safe_graduation_state(conn: sqlite3.Connection, trainee_id: str) -> dict[str, Any]:
+    """Guard the per-trainee graduation-state re-derivation: one malformed trainee (bad
+    charter/artifact) must degrade to an honest 'unknown' badge, never crash the whole
+    academy dashboard load for the user."""
+    try:
+        return academy_trainee_graduation_state(conn, trainee_id)
+    except Exception:  # noqa: BLE001 - a single bad trainee degrades gracefully
+        return {"state": "unknown", "exam_passed": False, "badge": "unknown"}
+
+
 def read_user_academy_api(
     conn: sqlite3.Connection,
     *,
@@ -1490,7 +1505,13 @@ def read_user_academy_api(
         payload={
             "majors": gallery.get("programs", []),
             "graduates": [academy_graduate_card(g) for g in gallery.get("graduates", [])],
-            "trainees": list_academy_trainees(conn, user_id=user_id),
+            # M2: surface the HONEST, evidence-re-derived graduation state per trainee so the
+            # dashboard greens "Graduated" only for a genuinely exam-passed graduate (else an
+            # honest staged/needs-exam badge). Same predicate as the apply write-gate.
+            "trainees": [
+                {**trainee, "graduation_state": _safe_graduation_state(conn, str(trainee.get("trainee_id") or ""))}
+                for trainee in list_academy_trainees(conn, user_id=user_id)
+            ],
             "central_specialists": list_central_specialists(conn),
         },
     )
@@ -1505,6 +1526,7 @@ def enroll_user_academy_trainee_api(
     program_id: str,
     name: str = "",
     depth: str = "",
+    charter: Mapping[str, Any] | None = None,
 ) -> ArcLinkApiResponse:
     user_id = _csrf_user_id(conn, session_id=session_id, session_token=session_token, csrf_token=csrf_token)
     deployment_id = _primary_deployment_id(conn, user_id)
@@ -1514,6 +1536,25 @@ def enroll_user_academy_trainee_api(
             payload={"error": "no_arcpod", "detail": "Deploy an ArcPod before enrolling an Academy Trainee."},
         )
     seed_default_academy_programs(conn)
+    program = get_academy_program(conn, str(program_id or "").strip())
+    # Dashboard parity (D-D): a structured charter submit builds the SAME charter
+    # via build_charter() that the bot's multi-turn interview produces -- identical
+    # answers => byte-identical decoded charter on both surfaces. Persisted whole as
+    # captain_steer_json["charter_json"]; share defaults to private (D-E).
+    captain_steer: dict[str, Any] | None = None
+    charter_obj: dict[str, Any] | None = None
+    if charter is not None:
+        charter_obj = build_charter(charter if isinstance(charter, Mapping) else {}, program=program or {})
+        slots = charter_obj.get("slots") if isinstance(charter_obj.get("slots"), Mapping) else {}
+        share = "redacted_public" if str(slots.get("share_policy") or "") == "redacted_public" else "private"
+        captain_steer = {
+            "focus": str(slots.get("subject_scope") or ""),
+            "allowed_source_lanes": list(slots.get("authorized_source_lanes") or (program or {}).get("source_lanes") or []),
+            "share": share,
+            "weekly_review": True,
+            "weekly_review_cadence": str((slots.get("freshness") or {}).get("cadence") or "weekly"),
+            "charter_json": json.dumps(charter_obj),
+        }
     trainee = enroll_academy_trainee(
         conn,
         program_id=str(program_id or "").strip(),
@@ -1521,8 +1562,20 @@ def enroll_user_academy_trainee_api(
         deployment_id=deployment_id,
         name=str(name or "").strip(),
         depth=str(depth or "").strip() or None,
+        captain_steer=captain_steer,
     )
-    return ArcLinkApiResponse(status=200, payload={"trainee": trainee})
+    payload: dict[str, Any] = {"trainee": trainee}
+    if charter_obj is not None:
+        payload["charter"] = charter_obj
+    # Inc2 reuse-FIRST: subscribe to the Major's shared specialist (inherit the vetted
+    # body) + persist the coarse gap-map snapshot, so training is a gap-diff not a
+    # re-scrape. Non-fatal: enrollment still succeeds if reuse resolution hiccups.
+    try:
+        reuse = resolve_academy_reuse_plan(conn, trainee_id=str(trainee.get("trainee_id") or ""))
+        payload["reuse"] = reuse.get("gap_map")
+    except ArcLinkAcademyProgramError:
+        pass
+    return ArcLinkApiResponse(status=200, payload=payload)
 
 
 def open_user_academy_mode_api(
@@ -1581,6 +1634,36 @@ def end_user_academy_mode_api(
         actor=user_id,
         graduate=bool(graduate),
     )
+    return ArcLinkApiResponse(status=200, payload=result)
+
+
+def materialize_user_academy_sources_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+    trainee_id: str,
+    sources: Sequence[Any] | None = None,
+) -> ArcLinkApiResponse:
+    """Inc2 dashboard add-source: materialize operator-supplied sources into governed
+    proposals (NO egress). The optional pasted summary is the PRIMARY path (a real
+    derived source); a bare URL is an honest where-to-look pointer. Private material
+    routes to organization_private. Requires an open Academy Mode for the trainee.
+    """
+    user_id = _csrf_user_id(conn, session_id=session_id, session_token=session_token, csrf_token=csrf_token)
+    trainee = _require_owned_trainee(conn, str(trainee_id or "").strip(), user_id)
+    deployment_id = str(trainee.get("deployment_id") or "")
+    try:
+        result = materialize_operator_academy_sources(
+            conn,
+            deployment_id=deployment_id,
+            trainee_id=str(trainee.get("trainee_id") or ""),  # target the AUTHORIZED trainee, not deployment+newest
+            entries=[entry for entry in (sources or []) if isinstance(entry, (Mapping, str))][:50],
+            proposed_by="captain-dashboard",
+        )
+    except ArcLinkAcademyProgramError as exc:
+        return ArcLinkApiResponse(status=400, payload={"error": "academy_source_intake_failed", "detail": str(exc)})
     return ArcLinkApiResponse(status=200, payload=result)
 
 

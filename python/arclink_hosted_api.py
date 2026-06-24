@@ -66,6 +66,7 @@ from arclink_api_auth import (
     apply_user_crew_recipe_api,
     enroll_user_academy_trainee_api,
     end_user_academy_mode_api,
+    materialize_user_academy_sources_api,
     open_user_academy_mode_api,
     read_user_academy_api,
     read_user_academy_mode_status_api,
@@ -1738,6 +1739,9 @@ def _handle_user_academy_enroll(
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
     creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
     csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    # D-D parity: forward the structured Training Charter from the browser so the
+    # dashboard builds the SAME charter (via build_charter) the bot interview does.
+    charter = body.get("charter")
     result = enroll_user_academy_trainee_api(
         conn,
         session_id=creds["session_id"],
@@ -1746,6 +1750,29 @@ def _handle_user_academy_enroll(
         program_id=str(body.get("program_id") or ""),
         name=str(body.get("name") or ""),
         depth=str(body.get("depth") or ""),
+        charter=charter if isinstance(charter, Mapping) else None,
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_user_academy_add_sources(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
+    csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    raw_sources = body.get("sources")
+    sources = raw_sources if isinstance(raw_sources, list) else []
+    result = materialize_user_academy_sources_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        csrf_token=csrf,
+        trainee_id=str(body.get("trainee_id") or ""),
+        sources=sources,
     )
     return _json_response(result.status, result.payload, request_id=request_id)
 
@@ -4008,6 +4035,7 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/user/academy"): "user_academy",
     ("GET", "/user/academy/mode-status"): "user_academy_mode_status",
     ("POST", "/user/academy/enroll"): "user_academy_enroll",
+    ("POST", "/user/academy/add-sources"): "user_academy_add_sources",
     ("POST", "/user/academy/mode-open"): "user_academy_mode_open",
     ("POST", "/user/academy/mode-end"): "user_academy_mode_end",
     ("POST", "/user/academy/adopt"): "user_academy_adopt",
@@ -4116,6 +4144,7 @@ _JSON_OBJECT_ROUTES = frozenset({
     "user_crew_recipe_preview",
     "user_crew_recipe_apply",
     "user_academy_enroll",
+    "user_academy_add_sources",
     "user_academy_mode_open",
     "user_academy_mode_end",
     "user_academy_adopt",
@@ -4326,6 +4355,8 @@ def route_arclink_hosted_api(
             result = _handle_user_academy_mode_status(conn, headers, clean_query, request_id, cfg)
         elif route_key == "user_academy_enroll":
             result = _handle_user_academy_enroll(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "user_academy_add_sources":
+            result = _handle_user_academy_add_sources(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "user_academy_mode_open":
             result = _handle_user_academy_mode_open(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "user_academy_mode_end":

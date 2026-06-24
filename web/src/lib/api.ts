@@ -6,6 +6,37 @@ export interface ApiResult<T = Record<string, unknown>> {
   data: T;
 }
 
+// The Training Charter input contract (the parity surface): identical slots ->
+// identical build_charter() output on both the bot and the dashboard. The client
+// sends RAW slots only and never builds a charter; build_charter (Python) is the
+// single authority (e.g. target_outcomes is derived from subject_scope server-side).
+export interface AcademyCharterInput {
+  subject_scope?: string;
+  target_outcomes?: string[];
+  acceptance_scenarios?: (string | { prompt: string; pass_criteria?: string[] })[];
+  authorized_source_lanes?: string[];
+  boundaries?: string[];
+  exclusions?: string[];
+  private_context?: string[];
+}
+
+export interface EnrollAcademyTraineeBody {
+  program_id: string;
+  name?: string;
+  depth?: string;
+  charter?: AcademyCharterInput;
+}
+
+// A single operator-supplied source. A pasted `summary` makes it a real derived
+// source (the primary, zero-egress path); a bare `url` is an honest where-to-look
+// pointer. `private` routes it to the tenant-only organization_private lane.
+export interface AcademySourceEntry {
+  url?: string;
+  summary?: string;
+  private?: boolean;
+  lane?: string;
+}
+
 export function safeNavigationHref(value: unknown): string {
   if (typeof value !== "string") return "";
   const href = value.trim();
@@ -117,8 +148,11 @@ export const api = {
   academyModeStatus: (traineeId: string) =>
     request(`/user/academy/mode-status?trainee_id=${encodeURIComponent(traineeId)}`, {}, "user"),
 
-  enrollAcademyTrainee: (body: Record<string, string>) =>
+  enrollAcademyTrainee: (body: EnrollAcademyTraineeBody) =>
     request("/user/academy/enroll", { method: "POST", body: JSON.stringify(body) }, "user"),
+
+  addAcademySources: (body: { trainee_id: string; sources: AcademySourceEntry[] }) =>
+    request("/user/academy/add-sources", { method: "POST", body: JSON.stringify(body) }, "user"),
 
   openAcademyMode: (body: Record<string, string>) =>
     request("/user/academy/mode-open", { method: "POST", body: JSON.stringify(body) }, "user"),

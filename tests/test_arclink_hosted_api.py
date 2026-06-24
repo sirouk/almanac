@@ -786,7 +786,21 @@ def test_user_academy_routes_browse_enroll_sticky_mode_and_graduate() -> None:
     expect(status == 200 and len(payload["majors"]) >= 5, f"academy overview expected catalog got {status}: {payload}")
     expect(payload["trainees"] == [], f"no trainees yet got {payload['trainees']}")
 
-    enroll_body = json.dumps({"program_id": "systems_practice_engineer", "name": "Grace"})
+    # D-D parity: the real browser route must carry the structured Training Charter
+    # end-to-end (not just the api_auth unit), building the SAME charter the bot does.
+    enroll_body = json.dumps({
+        "program_id": "systems_practice_engineer",
+        "name": "Grace",
+        "charter": {
+            "subject_scope": "Systems-practice reliability engineering",
+            "target_outcomes": ["ship incident runbooks"],
+            "acceptance_scenarios": [
+                {"prompt": "Diagnose a failing deploy from logs"},
+                {"prompt": "Write a bounded rollback plan"},
+            ],
+            "boundaries": ["never run destructive ops without approval"],
+        },
+    })
 
     # CSRF required.
     status, payload, _ = hosted.route_arclink_hosted_api(
@@ -803,6 +817,11 @@ def test_user_academy_routes_browse_enroll_sticky_mode_and_graduate() -> None:
     trainee_id = payload["trainee"]["trainee_id"]
     expect(payload["trainee"]["deployment_id"] == prepared["deployment_id"], str(payload["trainee"]))
     expect(payload["trainee"]["status"] == "enrolled", str(payload["trainee"]))
+    # The charter rode through the hosted route and was built by the shared builder.
+    hosted_charter = payload.get("charter") or {}
+    expect(len(hosted_charter.get("slots", {}).get("acceptance_scenarios") or []) == 2, f"hosted route forwarded the charter: {hosted_charter}")
+    expect(hosted_charter.get("slots", {}).get("share_policy") == "private", "D-E: hosted charter share defaults private")
+    expect(hosted_charter.get("authored") is False, "v1 hosted charter is unauthored draft")
 
     # Enter sticky Academy Mode.
     status, payload, _ = hosted.route_arclink_hosted_api(
@@ -860,6 +879,47 @@ def test_user_academy_routes_browse_enroll_sticky_mode_and_graduate() -> None:
     )
     expect(status == 400, f"cross-account trainee read must not succeed got {status}: {payload}")
     print("PASS test_user_academy_routes_browse_enroll_sticky_mode_and_graduate")
+
+
+def test_user_academy_add_sources_route_materializes_no_egress_and_csrf_gated() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_addsrc_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_addsrc_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_addsrc_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_addsrc_test")
+    programs = load_module("arclink_academy_programs.py", "arclink_academy_programs_hosted_addsrc_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    prepared = seed_paid_deployment(control, onboarding, conn, session_id="onb_addsrc", email="addsrc@example.test", prefix="addsrc-1a2b")
+    session = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_addsrc")
+    enroll = api.enroll_user_academy_trainee_api(
+        conn, session_id=session["session_id"], session_token=session["session_token"], csrf_token=session["csrf_token"],
+        program_id="systems_practice_engineer",
+    )
+    trainee_id = enroll.payload["trainee"]["trainee_id"]
+    api.open_user_academy_mode_api(
+        conn, session_id=session["session_id"], session_token=session["session_token"], csrf_token=session["csrf_token"], trainee_id=trainee_id,
+    )
+    # CSRF required for the write path.
+    status, _, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/user/academy/add-sources",
+        headers=browser_auth_headers(session), body=json.dumps({"trainee_id": trainee_id, "sources": []}), config=config,
+    )
+    expect(status == 401, "add-sources without CSRF must 401")
+    # Materialize: a pasted summary (derived, PRIMARY path) + a bare url (where-to-look).
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/user/academy/add-sources",
+        headers=browser_auth_headers(session, csrf=True),
+        body=json.dumps({"trainee_id": trainee_id, "sources": [
+            {"url": "https://github.com/acme/lib", "summary": "Derived notes on the lib API."},
+            {"url": "https://docs.example.org/guide"},
+        ]}), config=config,
+    )
+    expect(status == 200, f"add-sources got {status}: {payload}")
+    expect(payload.get("no_egress") is True, str(payload))
+    expect(payload.get("derived_count") == 1 and payload.get("where_to_look_count") == 1, f"derived vs pointer split: {payload}")
+    trainee = programs.get_academy_trainee(conn, trainee_id)
+    expect(programs._trainee_has_real_training_sources(conn, trainee) is True, "dashboard-supplied sources make the Agent graduatable")
+    print("PASS test_user_academy_add_sources_route_materializes_no_egress_and_csrf_gated")
 
 
 def test_user_academy_gallery_is_owner_scoped_redacted_and_adopt_blocks_cross_tenant() -> None:
@@ -927,7 +987,7 @@ def test_user_academy_public_specialist_adoption_is_redacted_and_csrf_protected(
         user_id=a["user_id"],
         deployment_id=a["deployment_id"],
         name="A public specialist",
-        captain_steer={"focus": "A-private-planning-context"},
+        captain_steer={"focus": "A-private-planning-context", "share": "redacted_public"},  # D-E: explicit public opt-in
     )
     sa = programs.open_academy_mode(conn, trainee_id=ta["trainee_id"], opened_by=a["user_id"])
     programs.record_academy_resource_proposal(
@@ -6470,6 +6530,7 @@ def main() -> int:
     test_wrapped_routes_are_scoped_csrf_gated_and_admin_aggregate_only()
     test_user_crew_recipe_routes_require_csrf_and_apply_recipe()
     test_user_academy_routes_browse_enroll_sticky_mode_and_graduate()
+    test_user_academy_add_sources_route_materializes_no_egress_and_csrf_gated()
     test_user_academy_gallery_is_owner_scoped_redacted_and_adopt_blocks_cross_tenant()
     test_user_academy_public_specialist_adoption_is_redacted_and_csrf_protected()
     test_user_academy_enroll_without_arcpod_returns_clean_no_arcpod()

@@ -1,7 +1,7 @@
 "use client";
 
 import { type FormEvent, useEffect, useState } from "react";
-import { api, safeNavigationHref } from "@/lib/api";
+import { api, safeNavigationHref, type AcademyCharterInput } from "@/lib/api";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { StatusBadge, ErrorAlert, LoadingSpinner } from "@/components/ui";
@@ -424,6 +424,7 @@ interface AcademyTrainee {
   adopted_from_trainee_id?: string;
   program_label?: string;
   source_lanes?: string[];
+  graduation_state?: { state?: string; exam_passed?: boolean; badge?: string };
 }
 
 interface AcademySpecialist {
@@ -560,6 +561,12 @@ export default function DashboardPage() {
   const [academyBusy, setAcademyBusy] = useState("");
   const [academyProgramId, setAcademyProgramId] = useState("");
   const [academyTraineeName, setAcademyTraineeName] = useState("");
+  // Training Charter fields (raw slots only; build_charter is the single authority).
+  const [academySubject, setAcademySubject] = useState("");
+  const [academyScenarios, setAcademyScenarios] = useState("");
+  const [academyBoundaries, setAcademyBoundaries] = useState("");
+  const [academySourceUrl, setAcademySourceUrl] = useState("");
+  const [academySourceSummary, setAcademySourceSummary] = useState("");
   const [credentialAckLoading, setCredentialAckLoading] = useState("");
   const [backupActionLoading, setBackupActionLoading] = useState("");
   const [shareActionLoading, setShareActionLoading] = useState("");
@@ -809,16 +816,87 @@ export default function DashboardPage() {
     }
     setAcademyBusy("enroll");
     try {
-      const result = await api.enrollAcademyTrainee({ program_id: academyProgramId, name: academyTraineeName });
+      // Collect RAW slots only — never build the charter client-side. No share
+      // control here (sharing is private by omission; public opt-in is later, at
+      // the synthesis preview). No target_outcomes echo (build_charter derives it).
+      const scenarios = academyScenarios
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .slice(0, 3)
+        .map((prompt) => ({ prompt }));
+      const boundaries = academyBoundaries
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+      const charter: AcademyCharterInput = {
+        subject_scope: academySubject.trim(),
+        acceptance_scenarios: scenarios,
+        boundaries,
+      };
+      const result = await api.enrollAcademyTrainee({ program_id: academyProgramId, name: academyTraineeName, charter });
       if (result.status !== 200) {
         setAcademyError("Could not enroll a trainee. Make sure you have an active ArcPod.");
         return;
       }
+      // Render the authoritative charter the server built (the parity surface) and
+      // the reuse-first result (inherit the existing body, then fill only the gap).
+      const data = result.data as {
+        charter?: { slots?: { acceptance_scenarios?: unknown[] } };
+        reuse?: { status?: string; inherited_source_count?: number };
+      };
+      const examCount = data?.charter?.slots?.acceptance_scenarios?.length ?? scenarios.length;
+      const inherited = data?.reuse?.inherited_source_count ?? 0;
+      const reusePhrase =
+        data?.reuse?.status === "inherited" && inherited > 0
+          ? ` Reuse-first: inherited ${inherited} vetted source${inherited === 1 ? "" : "s"} from the shared Academy — add only what's missing.`
+          : " You're pioneering this specialist — add governed sources to begin the shared body.";
       setAcademyTraineeName("");
-      setAcademyNotice("Trainee enrolled. Open Academy Mode to begin curated training.");
+      setAcademySubject("");
+      setAcademyScenarios("");
+      setAcademyBoundaries("");
+      setAcademyNotice(
+        `Trainee enrolled with a Training Charter (${examCount} exam scenario${examCount === 1 ? "" : "s"}, sharing private).${reusePhrase} Nothing is graduated until the Agent passes your scenarios.`,
+      );
       await refreshAcademy();
     } catch {
       setAcademyError("Could not enroll a trainee.");
+    } finally {
+      setAcademyBusy("");
+    }
+  }
+
+  async function handleAcademyAddSource(traineeId: string) {
+    setAcademyError("");
+    setAcademyNotice("");
+    if (!academySourceUrl.trim() && !academySourceSummary.trim()) {
+      setAcademyError("Add a URL, or paste derived notes to make it learnable.");
+      return;
+    }
+    setAcademyBusy(`addsrc:${traineeId}`);
+    try {
+      // Raw entry only — the server (materialize_operator_academy_sources) classifies
+      // the lane, normalizes, secret-screens, and labels derived-vs-pointer. No egress.
+      const result = await api.addAcademySources({
+        trainee_id: traineeId,
+        sources: [{ url: academySourceUrl.trim(), summary: academySourceSummary.trim() }],
+      });
+      if (result.status !== 200) {
+        setAcademyError("Could not add the source. Make sure Academy Mode is open.");
+        return;
+      }
+      const r = result.data as { derived_count?: number; where_to_look_count?: number };
+      const derived = (r.derived_count ?? 0) > 0;
+      setAcademySourceUrl("");
+      setAcademySourceSummary("");
+      setAcademyNotice(
+        derived
+          ? "Added as a derived source — the Agent can learn from your notes."
+          : "Added as a where-to-look pointer. Paste a short summary to turn it into learnable derived notes.",
+      );
+      await refreshAcademy();
+    } catch {
+      setAcademyError("Could not add the source.");
     } finally {
       setAcademyBusy("");
     }
@@ -855,7 +933,7 @@ export default function DashboardPage() {
       }
       setAcademyNotice(
         graduate
-          ? "Graduated. The specialist corpus is staged; the live SOUL apply stays PG-HERMES gated."
+          ? "Academy Mode closed. The source map is staged for Trainer review — synthesis and the scenario exam are still pending. Nothing is graduated until the Agent passes your scenarios."
           : "Academy Mode cancelled; the trainee returned to enrolled.",
       );
       await refreshAcademy();
@@ -873,13 +951,13 @@ export default function DashboardPage() {
     try {
       const result = await api.adoptAcademyGraduate({ source_trainee_id: sourceTraineeId });
       if (result.status !== 200) {
-        setAcademyError("Could not adopt this graduate. Make sure you have an active ArcPod.");
+        setAcademyError("Could not adopt this staged specialist. Make sure you have an active ArcPod.");
         return;
       }
-      setAcademyNotice("Adopted graduate into a new specialist Trainee for your Crew.");
+      setAcademyNotice("Adopted the staged specialist into a new Trainee for your Crew.");
       await refreshAcademy();
     } catch {
-      setAcademyError("Could not adopt this graduate.");
+      setAcademyError("Could not adopt this staged specialist.");
     } finally {
       setAcademyBusy("");
     }
@@ -1370,7 +1448,7 @@ export default function DashboardPage() {
               <SectionHeader
                 title="ArcLink Academy"
                 eyebrow="Specialist training"
-                detail="Browse Academy graduates, enroll a Trainee in a Major, and run curated training. Academy Mode stays open until you close it as Captain — graduating stages the specialist corpus; the live SOUL apply stays PG-HERMES gated."
+                detail="Browse staged trainees & public Academy specialists, enroll a Trainee in a Major, and run curated training. Academy Mode stays open until you close it as Captain — closing stages the specialist corpus for Trainer review; synthesis and the scenario exam are still pending, and the live SOUL apply stays PG-HERMES gated."
               />
               {academyError && <ErrorAlert message={academyError} />}
               {academyNotice && (
@@ -1402,6 +1480,50 @@ export default function DashboardPage() {
                       placeholder="e.g. Ada"
                     />
                   </label>
+                  <label className="block text-sm">
+                    <span className="text-xs uppercase tracking-[0.18em] text-soft-white/40">What must this Agent be able to do?</span>
+                    <textarea
+                      value={academySubject}
+                      onChange={(event) => setAcademySubject(event.target.value)}
+                      rows={3}
+                      maxLength={1200}
+                      className="mt-1 w-full rounded border border-border bg-carbon px-3 py-2 text-sm text-soft-white outline-none transition focus:border-signal-orange"
+                      placeholder="Subject, the outcomes you want, and the work it should produce."
+                    />
+                  </label>
+                  <label className="block text-sm">
+                    <span className="text-xs uppercase tracking-[0.18em] text-soft-white/40">Graduation exam — 2-3 things an expert must nail</span>
+                    <textarea
+                      value={academyScenarios}
+                      onChange={(event) => setAcademyScenarios(event.target.value)}
+                      rows={3}
+                      maxLength={1600}
+                      className="mt-1 w-full rounded border border-border bg-carbon px-3 py-2 text-sm text-soft-white outline-none transition focus:border-signal-orange"
+                      placeholder="One per line. The Agent is tested on these to graduate."
+                    />
+                  </label>
+                  <label className="block text-sm">
+                    <span className="text-xs uppercase tracking-[0.18em] text-soft-white/40">Boundaries (optional)</span>
+                    <textarea
+                      value={academyBoundaries}
+                      onChange={(event) => setAcademyBoundaries(event.target.value)}
+                      rows={2}
+                      maxLength={1200}
+                      className="mt-1 w-full rounded border border-border bg-carbon px-3 py-2 text-sm text-soft-white outline-none transition focus:border-signal-orange"
+                      placeholder="What must it always or never do? One per line."
+                    />
+                  </label>
+                  {(() => {
+                    const examCount = academyScenarios.split("\n").map((line) => line.trim()).filter(Boolean).length;
+                    return (
+                      <div className="space-y-1 border border-border/60 bg-carbon/50 p-3 text-xs leading-5 text-soft-white/55">
+                        <p className="uppercase tracking-[0.18em] text-soft-white/40">Training charter preview</p>
+                        <p>Subject: {academySubject.trim() || "(describe what it must do)"}</p>
+                        <p>Graduation exam: {examCount} scenario{examCount === 1 ? "" : "s"}{examCount === 0 ? " — needed to graduate" : ""}</p>
+                        <p className="text-soft-white/35">Inferred: depth working · audience your Crew · weekly refresh · sharing PRIVATE. You&rsquo;ll get an explicit opt-in to contribute public-safe notes after the Trainer drafts the curriculum. Nothing is &ldquo;graduated&rdquo; until the Agent passes your exam.</p>
+                      </div>
+                    );
+                  })()}
                   {(() => {
                     const selected = (academy?.majors || []).find((major) => major.program_id === academyProgramId);
                     return selected ? (
@@ -1412,7 +1534,7 @@ export default function DashboardPage() {
                     ) : null;
                   })()}
                   <button type="submit" disabled={academyBusy === "enroll"} className="rounded border border-signal-orange/60 px-4 py-2 text-sm font-semibold text-signal-orange transition hover:bg-signal-orange hover:text-jet disabled:opacity-50">
-                    {academyBusy === "enroll" ? "Enrolling..." : "Enroll Trainee"}
+                    {academyBusy === "enroll" ? "Enrolling..." : "Enroll with Training Charter"}
                   </button>
                 </form>
 
@@ -1425,7 +1547,9 @@ export default function DashboardPage() {
                     <div key={trainee.trainee_id} className="space-y-2 border-t border-border/60 pt-3 first:border-t-0 first:pt-0">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <span className="text-sm font-semibold text-soft-white">{trainee.name || "Trainee"}</span>
-                        <StatusBadge status={trainee.status || "enrolled"} />
+                        {/* M2: the honest, evidence-re-derived state -- green "graduated" only when the
+                            exam passed; a graduated-but-unproven row reads as staged/needs-exam (not green). */}
+                        <StatusBadge status={trainee.graduation_state?.state || (trainee.status === "graduated" ? "staged_for_review" : (trainee.status || "enrolled"))} />
                       </div>
                       <p className="text-xs text-soft-white/40">{trainee.program_id}{trainee.depth ? ` · ${trainee.depth}` : ""}</p>
                       <div className="flex flex-wrap gap-2">
@@ -1437,7 +1561,7 @@ export default function DashboardPage() {
                         {trainee.status === "in_academy" && (
                           <>
                             <button type="button" disabled={!!academyBusy} onClick={() => handleAcademyEndMode(trainee.trainee_id || "", true)} className="rounded border border-neon-green/50 px-3 py-1.5 text-xs font-semibold text-neon-green transition hover:bg-neon-green hover:text-jet disabled:opacity-50">
-                              Graduate (close mode)
+                              Close &amp; stage for review
                             </button>
                             <button type="button" disabled={!!academyBusy} onClick={() => handleAcademyEndMode(trainee.trainee_id || "", false)} className="rounded border border-border px-3 py-1.5 text-xs font-semibold text-soft-white/60 transition hover:border-soft-white/40 disabled:opacity-50">
                               Cancel
@@ -1448,9 +1572,36 @@ export default function DashboardPage() {
                           <span className="self-center text-xs text-soft-white/35">Mode stays open until you close it.</span>
                         )}
                         {trainee.status === "graduated" && (
-                          <span className="self-center text-xs text-neon-green/70">Graduated{trainee.forward_maintained ? " · forward-maintained" : ""}</span>
+                          trainee.graduation_state?.state === "graduated" ? (
+                            <span className="self-center text-xs text-neon-green/80">Graduated — passed the acceptance exam{trainee.forward_maintained ? " · CE armed" : ""}</span>
+                          ) : (
+                            <span className="self-center text-xs text-yellow-300/80">Staged for Trainer review — not canon yet (acceptance exam not passed){trainee.forward_maintained ? " · CE pending" : ""}</span>
+                          )
                         )}
                       </div>
+                      {trainee.status === "in_academy" && (
+                        <div className="space-y-2 border-t border-border/40 pt-2">
+                          <p className="text-[11px] uppercase tracking-[0.18em] text-soft-white/40">Add a source — inherit the body first, then fill the gap</p>
+                          <input
+                            value={academySourceUrl}
+                            onChange={(event) => setAcademySourceUrl(event.target.value)}
+                            maxLength={1000}
+                            className="w-full rounded border border-border bg-carbon px-3 py-1.5 text-xs text-soft-white outline-none transition focus:border-signal-orange"
+                            placeholder="URL or repo, e.g. https://github.com/org/repo"
+                          />
+                          <textarea
+                            value={academySourceSummary}
+                            onChange={(event) => setAcademySourceSummary(event.target.value)}
+                            rows={2}
+                            maxLength={4000}
+                            className="w-full rounded border border-border bg-carbon px-3 py-1.5 text-xs text-soft-white outline-none transition focus:border-signal-orange"
+                            placeholder="Paste derived notes (recommended) to make it learnable — a bare URL stays a where-to-look pointer."
+                          />
+                          <button type="button" disabled={!!academyBusy} onClick={() => handleAcademyAddSource(trainee.trainee_id || "")} className="rounded border border-signal-orange/50 px-3 py-1.5 text-xs font-semibold text-signal-orange transition hover:bg-signal-orange hover:text-jet disabled:opacity-50">
+                            {academyBusy === `addsrc:${trainee.trainee_id}` ? "Adding..." : "Add source"}
+                          </button>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1492,21 +1643,21 @@ export default function DashboardPage() {
               </div>
 
               <div className="border border-border bg-surface/80 p-4">
-                <p className="text-xs uppercase tracking-[0.18em] text-soft-white/40">Academy Graduates</p>
-                <p className="mt-1 text-xs text-soft-white/40">Adopt a graduate to clone its specialist Major + staged corpus into a new Trainee for your Crew.</p>
+                <p className="text-xs uppercase tracking-[0.18em] text-soft-white/40">Staged Specialists</p>
+                <p className="mt-1 text-xs text-soft-white/40">Adopt a staged specialist to clone its Major + staged corpus into a new Trainee for your Crew. (None are exam-graduated yet — that arrives with the Trainer synthesis + scenario exam.)</p>
                 <div className="mt-3 grid gap-3 md:grid-cols-2">
                   {(academy?.graduates || []).length === 0 && (
-                    <p className="text-sm text-soft-white/45">No Academy graduates yet.</p>
+                    <p className="text-sm text-soft-white/45">No staged trainees yet.</p>
                   )}
                   {(academy?.graduates || []).map((grad) => (
                     <div key={grad.trainee_id} className="space-y-2 border border-border/60 bg-carbon/40 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="text-sm font-semibold text-soft-white">{grad.name || "Graduate"}</span>
+                        <span className="text-sm font-semibold text-soft-white">{grad.name || "Trainee"}</span>
                         <span className="text-xs text-soft-white/40">{grad.program_label || grad.program_id}</span>
                       </div>
                       {grad.source_lanes?.length ? <p className="text-xs text-soft-white/35">Lanes: {grad.source_lanes.join(", ")}</p> : null}
                       <button type="button" disabled={!!academyBusy} onClick={() => handleAcademyAdopt(grad.trainee_id || "")} className="rounded border border-signal-orange/50 px-3 py-1.5 text-xs font-semibold text-signal-orange transition hover:bg-signal-orange hover:text-jet disabled:opacity-50">
-                        {academyBusy === `adopt:${grad.trainee_id}` ? "Adopting..." : "Adopt graduate"}
+                        {academyBusy === `adopt:${grad.trainee_id}` ? "Adopting..." : "Adopt"}
                       </button>
                     </div>
                   ))}

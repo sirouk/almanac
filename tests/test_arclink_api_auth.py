@@ -1482,6 +1482,65 @@ def test_explicit_read_only_share_projection_stays_read_only() -> None:
     print("PASS test_explicit_read_only_share_projection_stays_read_only")
 
 
+def test_user_academy_enroll_charter_parity_with_bot_builder() -> None:
+    control = load_module("arclink_control.py", "arclink_control_api_auth_academy_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_academy_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_academy_test")
+    programs = load_module("arclink_academy_programs.py", "arclink_academy_programs_api_auth_test")
+    conn = memory_db(control)
+    prepared = seed_paid_deployment(control, onboarding, conn)
+    programs.seed_default_academy_programs(conn)
+    session = api.create_arclink_user_session(
+        conn, user_id=prepared["user_id"], metadata={"surface": "browser"}, session_id="usess_academy"
+    )
+    # Same answers a dashboard form would collect; D-D requires they build the SAME
+    # charter the bot's multi-turn interview would, via the single build_charter().
+    slots = {
+        "subject_scope": "Example Standard 2026 migration risk",
+        "target_outcomes": ["ship weekly gap reports"],
+        "acceptance_scenarios": [
+            {"prompt": "Summarize a new standard revision with citations"},
+            {"prompt": "Identify the compliance impact of a repo change"},
+        ],
+        "boundaries": ["never reveal private strategy"],
+    }
+    result = api.enroll_user_academy_trainee_api(
+        conn,
+        session_id=session["session_id"],
+        session_token=session["session_token"],
+        csrf_token=session["csrf_token"],
+        program_id="research_analyst",
+        charter=slots,
+    )
+    expect(result.status == 200, str(result))
+    program = programs.get_academy_program(conn, "research_analyst")
+    expected = programs.build_charter(slots, program=program)
+    expect(result.payload["charter"] == expected, "dashboard charter == shared build_charter() output (parity)")
+    trainee_id = result.payload["trainee"]["trainee_id"]
+    persisted = programs.get_trainee_charter(conn, trainee_id)
+    expect(persisted == expected, "dashboard-submitted charter persisted intact as charter_json")
+    expect(persisted["slots"]["share_policy"] == "private", "skip share -> private (D-E) on the dashboard path too")
+    expect(len(persisted["slots"]["acceptance_scenarios"]) == 2, "exam scenarios captured on the dashboard path")
+    # Add-source is owner-scoped: a trainee not owned by this account is rejected.
+    try:
+        api.materialize_user_academy_sources_api(
+            conn, session_id=session["session_id"], session_token=session["session_token"], csrf_token=session["csrf_token"],
+            trainee_id="atrn_not_mine", sources=[{"url": "https://github.com/x/y"}],
+        )
+    except api.ArcLinkAcademyProgramError as exc:
+        expect("not found for this account" in str(exc), str(exc))
+    else:
+        raise AssertionError("add-source to an unowned trainee must be rejected (owner-scoping)")
+    # M2/C3: the dashboard payload carries the HONEST graduation_state per trainee. A freshly
+    # enrolled trainee (no exam) must NOT read as green "graduated".
+    overview = api.read_user_academy_api(conn, session_id=session["session_id"], session_token=session["session_token"])
+    mine = next((t for t in overview.payload["trainees"] if t["trainee_id"] == trainee_id), None)
+    expect(mine is not None and isinstance(mine.get("graduation_state"), dict), "trainee carries graduation_state")
+    expect(mine["graduation_state"].get("exam_passed") is False and mine["graduation_state"].get("badge") != "graduated",
+           f"enrolled trainee is not green-graduated: {mine['graduation_state']}")
+    print("PASS test_user_academy_enroll_charter_parity_with_bot_builder")
+
+
 def main() -> int:
     test_sessions_store_hashes_and_user_api_is_scoped_to_principal()
     test_user_agent_identity_update_requires_session_and_csrf()
@@ -1516,7 +1575,8 @@ def main() -> int:
     test_default_drive_share_grant_is_read_write()
     test_read_write_share_projection_is_writable_not_chmod_read_only()
     test_explicit_read_only_share_projection_stays_read_only()
-    print("PASS all 33 ArcLink API/auth tests")
+    test_user_academy_enroll_charter_parity_with_bot_builder()
+    print("PASS all 34 ArcLink API/auth tests")
     return 0
 
 

@@ -777,6 +777,110 @@ def test_router_cancelled_stream_releases_without_full_estimate_charge() -> None
     print("PASS test_router_cancelled_stream_releases_without_full_estimate_charge")
 
 
+def test_router_stream_generator_close_records_client_cancelled() -> None:
+    import asyncio
+
+    router = load_module("arclink_llm_router.py", "arclink_llm_router_cancelled_generator_test")
+    control = load_module("arclink_control.py", "arclink_control_llm_router_cancelled_generator_test")
+    tmp, db_path = temp_router_db()
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            control.ensure_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO arclink_llm_budget_reservations (
+                  reservation_id, request_id, deployment_id, user_id, reserved_cents,
+                  status, metadata_json, created_at, heartbeat_at
+                ) VALUES (
+                  'llmres_gen_cancel', 'llmreq_gen_cancel', 'dep_cancel', 'user_cancel', 99,
+                  'reserved', '{}', '2026-05-16T00:00:00+00:00', '2026-05-16T00:00:00+00:00'
+                )
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        config = router.load_router_config(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS": "1000",
+            }
+        )
+        marks: list[str] = []
+        transport = fake_stream_transport(
+            [b'data: {"id":"c1","choices":[{"delta":{"content":"partial answer"}}]}\n\n'],
+            marks,
+        )
+
+        class _App:
+            state = type("_State", (), {"router_upstream_transport": transport, "router_upstream_clients": {}})()
+
+        class _Request:
+            app = _App()
+
+        reservation = {
+            "reservation_id": "llmres_gen_cancel",
+            "request_id": "llmreq_gen_cancel",
+            "deployment_id": "dep_cancel",
+            "user_id": "user_cancel",
+            "reserved_cents": 99,
+            "requested_model": "model-a",
+            "upstream_model": "model-a",
+            "input_token_estimate": 10,
+            "output_token_estimate": 1000,
+            "effective_completions": 1,
+            "fallback_candidates": ["model-a"],
+        }
+
+        async def exercise_generator_close() -> None:
+            stream = router._stream_upstream_response(
+                _Request(),
+                config,
+                auth_record={"deployment_id": "dep_cancel", "user_id": "user_cancel", "key_id": "llmk_cancel"},
+                reservation=reservation,
+                payload={"model": "model-a", "stream": True, "messages": [{"role": "user", "content": "hello"}]},
+            )
+            first = await stream.__anext__()
+            expect(first.startswith(b"data:"), first.decode("utf-8", errors="replace"))
+            await stream.aclose()
+            await router._close_upstream_clients(_Request.app.state)
+
+        asyncio.run(exercise_generator_close())
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            open_reservations = conn.execute(
+                "SELECT COUNT(*) AS count FROM arclink_llm_budget_reservations WHERE status = 'reserved'"
+            ).fetchone()["count"]
+            reservation_row = conn.execute(
+                "SELECT status, settled_cents FROM arclink_llm_budget_reservations WHERE reservation_id = 'llmres_gen_cancel'"
+            ).fetchone()
+            usage = conn.execute(
+                """
+                SELECT status, actual_cents, source_kind, output_tokens
+                FROM arclink_llm_usage_events
+                WHERE request_id = 'llmreq_gen_cancel'
+                """
+            ).fetchone()
+        finally:
+            conn.close()
+        expect(marks == ["yield:0"], str(marks))
+        expect(open_reservations == 0, f"cancelled generator leaked a reserved row: {open_reservations}")
+        expect(reservation_row["status"] == "failed", dict(reservation_row))
+        expect(usage["status"] == "cancelled", dict(usage))
+        expect(usage["source_kind"] == "client_cancelled", dict(usage))
+        expect(int(usage["actual_cents"]) < 99, dict(usage))
+        expect(int(reservation_row["settled_cents"]) == int(usage["actual_cents"]), dict(reservation_row))
+    finally:
+        tmp.cleanup()
+    print("PASS test_router_stream_generator_close_records_client_cancelled")
+
+
 def test_chat_usage_queues_raven_low_fuel_notice_once() -> None:
     tmp, db_path = temp_router_db()
     try:
@@ -3689,6 +3793,7 @@ def main() -> int:
     test_chat_non_streaming_forwards_to_fake_upstream_and_records_usage()
     test_router_usage_settlement_error_releases_reserved_row()
     test_router_cancelled_stream_releases_without_full_estimate_charge()
+    test_router_stream_generator_close_records_client_cancelled()
     test_chat_usage_queues_raven_low_fuel_notice_once()
     test_low_fuel_notice_without_channel_does_not_poison_dedupe()
     test_chat_uses_catalog_pricing_and_promotes_deprecated_models()
@@ -3731,7 +3836,7 @@ def main() -> int:
     test_streaming_n_gt_1_no_usage_fallback_scales_settlement_by_completions()
     test_disallowed_fallback_is_skipped_not_fatal_when_primary_is_allowed()
     test_resolved_primary_disallowed_and_unavailable_primary_still_rejected()
-    print("PASS all 50 ArcLink LLM router tests")
+    print("PASS all 51 ArcLink LLM router tests")
     return 0
 
 
